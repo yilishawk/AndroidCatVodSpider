@@ -25,7 +25,7 @@ import java.util.Map;
 /**
  * @author FongMi
  */
-public class Dm84 extends Spider {
+public class Dm88 extends Spider {
 
     private static final String siteUrl = "https://dm84.tv";
 
