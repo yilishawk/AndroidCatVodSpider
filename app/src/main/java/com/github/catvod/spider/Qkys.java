@@ -140,7 +140,7 @@ public class Qkys extends Spider {
 StringBuilder vodPlayFrom = new StringBuilder();
 StringBuilder vodPlayUrl = new StringBuilder();
 
-Elements playSourceHeads = doc.select(".stui-vodlist__head");
+Elements playSourceHeads = doc.select(".stui-pannel__bd .stui-vodlist__head");
 for (int i = 0; i < playSourceHeads.size(); i++) {
     Element head = playSourceHeads.get(i);
     String sourceName = head.select("h3.title").text().trim();  // 加 trim() 去掉前后空格
