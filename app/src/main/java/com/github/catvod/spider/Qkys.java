@@ -149,7 +149,7 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
     }
 
     Element playlist = head.nextElementSibling();
-    if (playlist == null || !playlist.hasClass("stui-content__playlist")) {
+        if (playlist == null || !playlist.tagName().equalsIgnoreCase("ul")) {
         continue;
     }
 
