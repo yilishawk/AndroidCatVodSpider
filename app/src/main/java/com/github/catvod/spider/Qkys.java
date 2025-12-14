@@ -139,7 +139,7 @@ public class Qkys extends Spider {
 StringBuilder vodPlayFrom = new StringBuilder();
 StringBuilder vodPlayUrl = new StringBuilder();
 
-// 关键修复：去掉错误的 "pannel"，直接匹配所有线路头
+// 推荐选择器（已证明有效）
 Elements playSourceHeads = doc.select("div.stui-vodlist__head");
 
 for (int i = 0; i < playSourceHeads.size(); i++) {
@@ -159,13 +159,11 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
         continue;
     }
 
-    // 线路名称拼接
     if (vodPlayFrom.length() > 0) {
         vodPlayFrom.append(" \]$");
     }
     vodPlayFrom.append(sourceName);
 
-    // 集数链接拼接
     StringBuilder episodeStr = new StringBuilder();
     for (Element episode : episodes) {
         String epName = episode.text().trim();
@@ -179,14 +177,13 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
         episodeStr.append(epName).append("$").append(epUrl);
     }
 
-    // 只有这个源有集数才加入
     if (episodeStr.length() > 0) {
         if (vodPlayUrl.length() > 0) {
             vodPlayUrl.append("$$$");
         }
         vodPlayUrl.append(episodeStr.toString());
     }
-}
+}       
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
         vod.setVodName(title);
