@@ -1,11 +1,13 @@
 package com.github.catvod.spider;
 
 import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Notify;
+
 import org.apache.commons.lang3.StringUtils;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
@@ -19,6 +21,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Qkys extends Spider {
     private final String siteUrl = "https://m.87kkt.com";
@@ -52,7 +56,7 @@ public class Qkys extends Spider {
     public String homeContent(boolean filter) throws Exception {
         List<Vod> list = new ArrayList<>();
         List<Class> classes = new ArrayList<>();
-        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();  // 即使不用也保留，避免报错
         Document doc = Jsoup.parse(OkHttp.string(siteUrl));
         for (Element div : doc.select(".stui-header__menu > li ")) {
             classes.add(new Class(div.select(" a").attr("href"), div.select(" a").text()));
@@ -284,7 +288,8 @@ public class Qkys extends Spider {
         postParams.put("key", key);
         postParams.put("vkey", vkey);
 
-        String postResponse = OkHttp.post(postApi, postHeader, postParams);
+        // 关键修复：OkHttp.post 返回 OkResult，需要 .string()
+        String postResponse = OkHttp.post(postApi, postHeader, postParams).string();
 
         if (StringUtils.isEmpty(postResponse)) {
             Notify.show("解析失败：POST请求无响应");
