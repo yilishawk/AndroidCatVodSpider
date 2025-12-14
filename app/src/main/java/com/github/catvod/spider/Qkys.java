@@ -137,49 +137,55 @@ public class Qkys extends Spider {
         String briefContent = doc.select(".detail-content").text();
         String vodContent = StringUtils.isEmpty(briefContent) ? briefSketch : (briefSketch + briefContent);
 
-        StringBuilder vodPlayFrom = new StringBuilder();
-        StringBuilder vodPlayUrl = new StringBuilder();
+StringBuilder vodPlayFrom = new StringBuilder();
+StringBuilder vodPlayUrl = new StringBuilder();
 
-        Elements playSourceHeads = doc.select(".stui-vodlist__head");
-        for (int i = 0; i < playSourceHeads.size(); i++) {
-            Element head = playSourceHeads.get(i);
-            String sourceName = head.select("h3.title").text();
-            if (StringUtils.isEmpty(sourceName)) {
-                continue;
-            }
-            Element playlist = head.nextElementSibling();
-            if (playlist == null || !playlist.hasClass("stui-content__playlist")) {
-                continue;
-            }
-            Elements episodes = playlist.select("li > a");
-            if (episodes.isEmpty()) {
-                continue;
-            }
+Elements playSourceHeads = doc.select(".stui-vodlist__head");
+for (int i = 0; i < playSourceHeads.size(); i++) {
+    Element head = playSourceHeads.get(i);
+    String sourceName = head.select("h3.title").text().trim();  // 加 trim() 去掉前后空格
+    if (StringUtils.isEmpty(sourceName)) {
+        continue;
+    }
 
-            if (vodPlayFrom.length() > 0) {
-                vodPlayFrom.append("$$$");
-            }
-            vodPlayFrom.append(sourceName);
+    Element playlist = head.nextElementSibling();
+    if (playlist == null || !playlist.hasClass("stui-content__playlist")) {
+        continue;
+    }
 
-            StringBuilder episodeStr = new StringBuilder();
-            for (Element episode : episodes) {
-                String epName = episode.text();
-                String epUrl = episode.attr("href");
-                if (StringUtils.isEmpty(epUrl)) {
-                    continue;
-                }
-                if (episodeStr.length() > 0) {
-                    episodeStr.append("#");
-                }
-                episodeStr.append(epName).append("$").append(epUrl);
-            }
+    Elements episodes = playlist.select("li > a");
+    if (episodes.isEmpty()) {
+        continue;
+    }
 
-            if (vodPlayUrl.length() > 0) {
-                vodPlayUrl.append("$$$");
-            }
-            vodPlayUrl.append(episodeStr);
+    // 线路名称拼接
+    if (vodPlayFrom.length() > 0) {
+        vodPlayFrom.append("$$$");
+    }
+    vodPlayFrom.append(sourceName);
+
+    // 集数链接拼接
+    StringBuilder episodeStr = new StringBuilder();
+    for (Element episode : episodes) {
+        String epName = episode.text().trim();  // 加 trim() 避免集数名称有空格
+        String epUrl = episode.attr("href");
+        if (StringUtils.isEmpty(epUrl)) {
+            continue;
         }
+        if (episodeStr.length() > 0) {
+            episodeStr.append("#");
+        }
+        episodeStr.append(epName).append("$").append(epUrl);
+    }
 
+    // 只有这个源有集数才加入（防止空线路）
+    if (episodeStr.length() > 0) {
+        if (vodPlayUrl.length() > 0) {
+            vodPlayUrl.append("$$$");
+        }
+        vodPlayUrl.append(episodeStr.toString());
+    }
+}
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
         vod.setVodName(title);
