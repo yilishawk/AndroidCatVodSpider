@@ -33,13 +33,13 @@ import java.util.regex.Pattern;
 
 public class Zxzj extends Spider {
 
-    private final String siteUrl = "http://zxzj.shop";
+    private final String siteUrl = "http://www.zxzjhd.com";
 
     private Map<String, String> getHeader() {
         Map<String, String> header = new HashMap<>();
         header.put("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/100.0.4896.77 Mobile/15E148 Safari/604.1");
         header.put("Connection", "keep-alive");
-        header.put("Referer", "http://zxzj.shop/");
+        header.put("Referer", "http://www.zxzjhd.com/");
         header.put("sec-fetch-dest", "iframe");
         header.put("sec-fetch-mode", "navigate");
         header.put("sec-fetch-site", "cross-site");
