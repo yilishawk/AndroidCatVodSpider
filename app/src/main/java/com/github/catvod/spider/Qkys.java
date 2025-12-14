@@ -160,7 +160,7 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
     }
 
     if (vodPlayFrom.length() > 0) {
-        vodPlayFrom.append(" \]$");
+        vodPlayFrom.append("$$$");
     }
     vodPlayFrom.append(sourceName);
 
