@@ -136,20 +136,21 @@ public class Qkys extends Spider {
         String briefSketch = doc.select(".detail-sketch").text();
         String briefContent = doc.select(".detail-content").text();
         String vodContent = StringUtils.isEmpty(briefContent) ? briefSketch : (briefSketch + briefContent);
-
 StringBuilder vodPlayFrom = new StringBuilder();
 StringBuilder vodPlayUrl = new StringBuilder();
 
-Elements playSourceHeads = doc.select(".stui-pannel__bd .stui-vodlist__head");
+// 关键修复：去掉错误的 "pannel"，直接匹配所有线路头
+Elements playSourceHeads = doc.select("div.stui-vodlist__head");
+
 for (int i = 0; i < playSourceHeads.size(); i++) {
     Element head = playSourceHeads.get(i);
-    String sourceName = head.select("h3.title").text().trim();  // 加 trim() 去掉前后空格
+    String sourceName = head.select("h3.title").text().trim();
     if (StringUtils.isEmpty(sourceName)) {
         continue;
     }
 
     Element playlist = head.nextElementSibling();
-        if (playlist == null || !playlist.tagName().equalsIgnoreCase("ul")) {
+    if (playlist == null || !playlist.hasClass("stui-content__playlist")) {
         continue;
     }
 
@@ -160,14 +161,14 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
 
     // 线路名称拼接
     if (vodPlayFrom.length() > 0) {
-        vodPlayFrom.append("$$$");
+        vodPlayFrom.append(" \]$");
     }
     vodPlayFrom.append(sourceName);
 
     // 集数链接拼接
     StringBuilder episodeStr = new StringBuilder();
     for (Element episode : episodes) {
-        String epName = episode.text().trim();  // 加 trim() 避免集数名称有空格
+        String epName = episode.text().trim();
         String epUrl = episode.attr("href");
         if (StringUtils.isEmpty(epUrl)) {
             continue;
@@ -178,7 +179,7 @@ for (int i = 0; i < playSourceHeads.size(); i++) {
         episodeStr.append(epName).append("$").append(epUrl);
     }
 
-    // 只有这个源有集数才加入（防止空线路）
+    // 只有这个源有集数才加入
     if (episodeStr.length() > 0) {
         if (vodPlayUrl.length() > 0) {
             vodPlayUrl.append("$$$");
