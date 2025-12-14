@@ -6,6 +6,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 import com.github.catvod.utils.Notify;
 
 import org.apache.commons.lang3.StringUtils;
@@ -56,7 +57,7 @@ public class Qkys extends Spider {
     public String homeContent(boolean filter) throws Exception {
         List<Vod> list = new ArrayList<>();
         List<Class> classes = new ArrayList<>();
-        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();  // 即使不用也保留，避免报错
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         Document doc = Jsoup.parse(OkHttp.string(siteUrl));
         for (Element div : doc.select(".stui-header__menu > li ")) {
             classes.add(new Class(div.select(" a").attr("href"), div.select(" a").text()));
@@ -288,8 +289,9 @@ public class Qkys extends Spider {
         postParams.put("key", key);
         postParams.put("vkey", vkey);
 
-        // 关键修复：OkHttp.post 返回 OkResult，需要 .string()
-        String postResponse = OkHttp.post(postApi, postHeader, postParams);
+        // 关键修复：参数顺序为 params 先，header 后；返回 OkResult，用 .getBody() 取字符串
+        OkResult postResult = OkHttp.post(postApi, postParams, postHeader);
+        String postResponse = postResult != null ? postResult.getBody() : "";
 
         if (StringUtils.isEmpty(postResponse)) {
             Notify.show("解析失败：POST请求无响应");
