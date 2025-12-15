@@ -162,7 +162,7 @@ public class NM extends Spider {
 
             for (int i = 0; i < sources.size(); i++) {
                 int b = i + 1;
-                vod_play_from.append("源").append(b).append("\[ $");
+                vod_play_from.append("源").append(b).append("\\[ $");
 
                 Elements aElements = sources.get(i).select("a");
                 for (int j = aElements.size() - 1; j >= 0; j--) {
@@ -170,7 +170,7 @@ public class NM extends Spider {
                     String playUrl = siteUrl + a.attr("href");
                     String playTitle = a.text();
                     vod_play_url.append(playTitle).append("$").append(playUrl);
-                    vod_play_url.append(j == 0 ? " \]$" : "#");
+                    vod_play_url.append(j == 0 ? " \\]$" : "#");
                 }
             }
 
