@@ -7,6 +7,7 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
+import org.apache.commons.codec.binary.Base64;
 import com.github.catvod.utils.Notify;
 
 import org.apache.commons.lang3.StringUtils;
