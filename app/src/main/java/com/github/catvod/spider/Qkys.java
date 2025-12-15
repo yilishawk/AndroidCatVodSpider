@@ -139,51 +139,76 @@ public class Qkys extends Spider {
 StringBuilder vodPlayFrom = new StringBuilder();
 StringBuilder vodPlayUrl = new StringBuilder();
 
-// 推荐选择器（已证明有效）
-Elements playSourceHeads = doc.select("div.stui-vodlist__head");
+// 1. 选择所有的线路标题（Element Head）
+// CSS选择器：匹配所有 class="stui-vodlist__head" 的 div 元素
+Elements heads = doc.select("div.stui-vodlist__head"); 
 
-for (int i = 0; i < playSourceHeads.size(); i++) {
-    Element head = playSourceHeads.get(i);
+// 2. 选择所有的播放列表 (Element List)
+// CSS选择器：匹配所有 class="stui-content__playlist" 的 ul 元素
+Elements playlists = doc.select("ul.stui-content__playlist");
+
+// 确保线路标题和播放列表的数量一致或播放列表不少于标题
+// 如果数量不一致，可能意味着定位失败，或者网站结构不规范
+if (heads.size() != playlists.size()) {
+    // 我们可以继续，但可能出错。先假设它们数量是一致的。
+    System.out.println("警告：线路标题数量与播放列表数量不匹配！");
+}
+
+// 3. 通过索引同步遍历
+// 遍历线路标题集合
+for (int i = 0; i < heads.size(); i++) {
+    Element head = heads.get(i);
+    // 检查索引是否越界，安全起见
+    if (i >= playlists.size()) {
+        break; 
+    }
+    
+    // 获取当前线路标题
     String sourceName = head.select("h3.title").text().trim();
     if (StringUtils.isEmpty(sourceName)) {
         continue;
     }
 
-    Element playlist = head.nextElementSibling();
-    if (playlist == null || !playlist.hasClass("stui-content__playlist")) {
-        continue;
-    }
-
+    // 获取与当前线路标题i对应的播放列表 i
+    Element playlist = playlists.get(i);
+    
+    // 从列表中选择所有剧集链接
     Elements episodes = playlist.select("li > a");
     if (episodes.isEmpty()) {
         continue;
     }
 
+    // --- 线路名称拼接 (使用 CatVod 标准 $$$ 分隔) ---
     if (vodPlayFrom.length() > 0) {
         vodPlayFrom.append("$$$");
     }
     vodPlayFrom.append(sourceName);
 
+    // --- 集数链接拼接 ---
     StringBuilder episodeStr = new StringBuilder();
     for (Element episode : episodes) {
         String epName = episode.text().trim();
-        String epUrl = episode.attr("href");
+        String epUrl = episode.attr("href"); // 播放链接
+        
         if (StringUtils.isEmpty(epUrl)) {
             continue;
         }
+        
         if (episodeStr.length() > 0) {
-            episodeStr.append("#");
+            episodeStr.append("#"); // 剧集间分隔符
         }
+        // 格式：集名$链接
         episodeStr.append(epName).append("$").append(epUrl);
     }
 
+    // --- 播放链接拼接 (使用 CatVod 标准 $$$ 分隔) ---
     if (episodeStr.length() > 0) {
         if (vodPlayUrl.length() > 0) {
             vodPlayUrl.append("$$$");
         }
         vodPlayUrl.append(episodeStr.toString());
     }
-}       
+}
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
         vod.setVodName(title);
