@@ -32,7 +32,7 @@ public class Qkys extends Spider {
         Map<String, String> header = new HashMap<>();
         header.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-        header.put("Referer", siteUrl + "/");
+        //header.put("Referer", siteUrl + "/");
         return header;
     }
 
@@ -245,7 +245,10 @@ for (int i = 0; i < heads.size(); i++) {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playPageUrl = siteUrl + id;
+    String playPageUrl = siteUrl + id;
+        playHeader.put("Upgrade-Insecure-Requests", "1");
+        Map<String, String> playHeader = getHeader();
+        playHeader.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36");
         String playPageHtml = OkHttp.string(playPageUrl, getHeader());
 
         Matcher playerMatcher = Pattern.compile("var player_aaaa=(\\{.*?\\});").matcher(playPageHtml);
