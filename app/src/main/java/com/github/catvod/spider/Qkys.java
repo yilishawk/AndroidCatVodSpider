@@ -243,104 +243,107 @@ for (int i = 0; i < heads.size(); i++) {
         return Result.string(list);
     }
 
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+@Override
+public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
     String playPageUrl = siteUrl + id;
-        playHeader.put("Upgrade-Insecure-Requests", "1");
-        Map<String, String> playHeader = getHeader();
-        playHeader.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36");
-        String playPageHtml = OkHttp.string(playPageUrl, getHeader());
+    
+    // 【修正：使用 htmlHeader 变量名请求 HTML】
+    Map<String, String> htmlHeader = getHeader(); 
+    
+    // 动态设置 Referer 和其他导航头部，用于绕过重定向反爬
+    htmlHeader.put("Referer", siteUrl + id); 
+    htmlHeader.put("Upgrade-Insecure-Requests", "1"); 
+    
+    String playPageHtml = OkHttp.string(playPageUrl, htmlHeader);
 
-        Matcher playerMatcher = Pattern.compile("var player_aaaa=(\\{.*?\\});").matcher(playPageHtml);
-        if (!playerMatcher.find()) {
-            Notify.show("解析失败：未找到播放配置");
-            return Result.error("未找到播放配置");
-        }
-        JSONObject playerJson = new JSONObject(playerMatcher.group(1));
-
-        String encryptUrl = playerJson.optString("url", "");
-        String type = playerJson.optString("from", "");
-        String playData = playerJson.optString("play_data", "");
-        String next = playPageUrl;
-
-        if (StringUtils.isEmpty(encryptUrl) || StringUtils.isEmpty(type) || StringUtils.isEmpty(playData)) {
-            Notify.show("解析失败：播放核心参数缺失");
-            return Result.error("播放核心参数缺失");
-        }
-
-        String cdnDomain = "https://cdn-omtcqq-com-oss-cn-hangzhou-shanghai-yys-valipl-vip-cp13.87kkt.com";
-        String cdnPlayUrl = String.format(
-            "%s/index.php?url=%s&type=%s&next=%s&data=%s",
-            cdnDomain,
-            encryptUrl,
-            type,
-            URLEncoder.encode(next, "UTF-8"),
-            playData
-        );
-
-        Map<String, String> cdnHeader = getVideoHeader();
-        cdnHeader.put("Referer", siteUrl);
-
-        String cdnHtml = OkHttp.string(cdnPlayUrl, cdnHeader);
-
-        Matcher configMatcher = Pattern.compile("var config = (\\{.*?\\});").matcher(cdnHtml);
-        if (!configMatcher.find()) {
-            Notify.show("解析失败：未找到CDN播放配置");
-            return Result.error("未找到CDN播放配置");
-        }
-        JSONObject configJson = new JSONObject(configMatcher.group(1));
-
-        String postUrlParam = configJson.optString("url", "");
-        String time = configJson.optString("time", "");
-        String vkey = configJson.optString("vkey", "");
-        String key = configJson.optString("key", "");
-
-        if (StringUtils.isEmpty(postUrlParam) || StringUtils.isEmpty(time) || StringUtils.isEmpty(vkey)) {
-            Notify.show("解析失败：POST请求参数缺失");
-            return Result.error("POST请求参数缺失");
-        }
-
-        String postApi = cdnDomain + "/admin/mizhi_json.php";
-
-        Map<String, String> postHeader = new HashMap<>();
-        postHeader.put("x-requested-with", "XMLHttpRequest");
-        postHeader.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
-        postHeader.put("Accept", "application/json, text/javascript, */*; q=0.01");
-        postHeader.put("sec-ch-ua", "\"Google Chrome\";v=\"143\", \"Chromium\";v=\"143\", \"Not A(Brand\";v=\"24\"");
-        postHeader.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        postHeader.put("sec-ch-ua-mobile", "?0");
-        postHeader.put("Origin", cdnDomain);
-        postHeader.put("Referer", cdnPlayUrl);
-
-        Map<String, String> postParams = new HashMap<>();
-        postParams.put("url", postUrlParam);
-        postParams.put("time", time);
-        postParams.put("key", key);
-        postParams.put("vkey", vkey);
-
-        // 关键修复：参数顺序为 params 先，header 后；返回 OkResult，用 .getBody() 取字符串
-        OkResult postResult = OkHttp.post(postApi, postParams, postHeader);
-        String postResponse = postResult != null ? postResult.getBody() : "";
-
-        if (StringUtils.isEmpty(postResponse)) {
-            Notify.show("解析失败：POST请求无响应");
-            return Result.error("POST请求无响应");
-        }
-
-        JSONObject responseJson = new JSONObject(postResponse);
-        String realPlayUrl = responseJson.optString("json_url", "");
-
-        if (StringUtils.isEmpty(realPlayUrl)) {
-            Notify.show("解析失败：未获取到真实播放地址");
-            return Result.error("未获取到真实播放地址");
-        }
-
-        Map<String, String> playHeader = getVideoHeader();
-        playHeader.put("Referer", cdnDomain);
-
-        return Result.get()
-            .url(realPlayUrl)
-            .header(playHeader)
-            .string();
+    Matcher playerMatcher = Pattern.compile("var player_aaaa=(\\{.*?\\});").matcher(playPageHtml);
+    if (!playerMatcher.find()) {
+        Notify.show("解析失败：未找到播放配置");
+        return Result.error("未找到播放配置");
     }
+    JSONObject playerJson = new JSONObject(playerMatcher.group(1));
+
+    String encryptUrl = playerJson.optString("url", "");
+    String type = playerJson.optString("from", "");
+    String playData = playerJson.optString("play_data", "");
+    String next = playPageUrl;
+
+    if (StringUtils.isEmpty(encryptUrl) || StringUtils.isEmpty(type) || StringUtils.isEmpty(playData)) {
+        Notify.show("解析失败：播放核心参数缺失");
+        return Result.error("播放核心参数缺失");
+    }
+
+    String cdnDomain = "https://cdn-omtcqq-com-oss-cn-hangzhou-shanghai-yys-valipl-vip-cp13.87kkt.com";
+    String cdnPlayUrl = String.format(
+        "%s/index.php?url=%s&type=%s&next=%s&data=%s",
+        cdnDomain,
+        encryptUrl,
+        type,
+        URLEncoder.encode(next, "UTF-8"),
+        playData
+    );
+
+    Map<String, String> cdnHeader = getHeader(); 
+    cdnHeader.put("Referer", siteUrl);
+
+    String cdnHtml = OkHttp.string(cdnPlayUrl, cdnHeader);
+
+    Matcher configMatcher = Pattern.compile("var config = (\\{.*?\\});").matcher(cdnHtml);
+    if (!configMatcher.find()) {
+        Notify.show("解析失败：未找到CDN播放配置");
+        return Result.error("未找到CDN播放配置");
+    }
+    JSONObject configJson = new JSONObject(configMatcher.group(1));
+
+    String postUrlParam = configJson.optString("url", "");
+    String time = configJson.optString("time", "");
+    String vkey = configJson.optString("vkey", "");
+    String key = configJson.optString("key", "");
+
+    if (StringUtils.isEmpty(postUrlParam) || StringUtils.isEmpty(time) || StringUtils.isEmpty(vkey)) {
+        Notify.show("解析失败：POST请求参数缺失");
+        return Result.error("POST请求参数缺失");
+    }
+
+    String postApi = cdnDomain + "/admin/mizhi_json.php";
+
+    Map<String, String> postHeader = new HashMap<>();
+    postHeader.put("x-requested-with", "XMLHttpRequest");
+    postHeader.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
+    postHeader.put("Accept", "application/json, text/javascript, */*; q=0.01");
+    postHeader.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+    postHeader.put("Origin", cdnDomain);
+    postHeader.put("Referer", cdnPlayUrl);
+
+    Map<String, String> postParams = new HashMap<>();
+    postParams.put("url", postUrlParam);
+    postParams.put("time", time);
+    postParams.put("key", key);
+    postParams.put("vkey", vkey);
+
+    OkResult postResult = OkHttp.post(postApi, postParams, postHeader);
+    String postResponse = postResult != null ? postResult.getBody() : "";
+
+    if (StringUtils.isEmpty(postResponse)) {
+        Notify.show("解析失败：POST请求无响应");
+        return Result.error("POST请求无响应");
+    }
+
+    JSONObject responseJson = new JSONObject(postResponse);
+    String realPlayUrl = responseJson.optString("json_url", "");
+
+    if (StringUtils.isEmpty(realPlayUrl)) {
+        Notify.show("解析失败：未获取到真实播放地址");
+        return Result.error("未获取到真实播放地址");
+    }
+    
+    // 【修正：使用唯一的变量名 playHeaderFinal】
+    Map<String, String> playHeaderFinal = getVideoHeader();
+    playHeaderFinal.put("Referer", cdnDomain);
+
+    return Result.get()
+        .url(realPlayUrl)
+        .header(playHeaderFinal)
+        .string();
+}
 }
