@@ -30,12 +30,9 @@ public class Qkys extends Spider {
 
     private Map<String, String> getHeader() {
         Map<String, String> header = new HashMap<>();
-        header.put("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/100.0.4896.77 Mobile/15E148 Safari/604.1");
-        header.put("Connection", "keep-alive");
-        header.put("Referer", "https://m.87kkt.com/");
-        header.put("sec-fetch-dest", "iframe");
-        header.put("sec-fetch-mode", "navigate");
-        header.put("sec-fetch-site", "cross-site");
+        header.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
+        header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        header.put("Referer", siteUrl + "/");
         return header;
     }
 
