@@ -110,9 +110,9 @@ public class NM extends Spider {
             String area = ext.getOrDefault("area", "");
             String year = ext.getOrDefault("year", "");
             String by = ext.getOrDefault("by", "");
-            String classType = ext.getOrDefault("class", tid);
-
-            String cateUrl = siteUrl + String.format("/vod-list-id-%s-pg-%s-order--by-%s-class-0-year-%s-letter--area-%s-lang-.html", classType, pg, by, year, area);
+            String classType = ext.getOrDefault("cateId", tid);
+            String classType = "0";
+            String cateUrl = siteUrl + String.format("/vod-list-id-%s-pg-%s-order--by-%s-class-0-year-%s-letter--area-%s-lang-.html", typeIdToUse, pg, by,classType, year, area);
             String content = fetch(cateUrl);
             Document doc = Jsoup.parse(content);
             Elements listElements = doc.select(".globalPicList li");
@@ -157,22 +157,47 @@ public class NM extends Spider {
             Document detailPage = Jsoup.parse(content);
             Elements sources = detailPage.select(".numList");
 
-            StringBuilder vod_play_url = new StringBuilder();
-            StringBuilder vod_play_from = new StringBuilder();
+StringBuilder vod_play_url = new StringBuilder();
+        StringBuilder vod_play_from = new StringBuilder();
 
-            for (int i = 0; i < sources.size(); i++) {
-                int b = i + 1;
-                vod_play_from.append("源").append(b).append("\\[ $");
-
-                Elements aElements = sources.get(i).select("a");
-                for (int j = aElements.size() - 1; j >= 0; j--) {
-                    Element a = aElements.get(j);
-                    String playUrl = siteUrl + a.attr("href");
-                    String playTitle = a.text();
-                    vod_play_url.append(playTitle).append("$").append(playUrl);
-                    vod_play_url.append(j == 0 ? " \\]$" : "#");
+        for (int i = 0; i < sources.size(); i++) {
+            int b = i + 1;
+            
+            // --- 1. 播放源名称 (vod_play_from) ---
+            // 只需要名称，不需要额外的符号
+            vod_play_from.append("源").append(b);
+            
+            // --- 2. 播放列表 (vod_play_url) ---
+            Elements aElements = sources.get(i).select("a");
+            
+            // 用于存储当前源的所有剧集
+            StringBuilder currentSourceUrls = new StringBuilder();
+            
+            // 从后往前遍历，构建剧集链接
+            for (int j = aElements.size() - 1; j >= 0; j--) {
+                Element a = aElements.get(j);
+                String playUrl = siteUrl + a.attr("href");
+                String playTitle = a.text();
+                
+                // 格式: 标题$链接
+                currentSourceUrls.append(playTitle).append("$").append(playUrl);
+                
+                // 如果不是最后一集，添加分隔符 "#"
+                if (j > 0) {
+                    currentSourceUrls.append("#");
                 }
             }
+            
+            // 将当前源的剧集列表加入总列表
+            vod_play_url.append(currentSourceUrls.toString());
+            
+            // --- 3. 添加 $$$ 分隔符 ---
+            // 如果这不是最后一个源，使用 $$$ 分隔
+            if (i < sources.size() - 1) {
+                vod_play_from.append("$$$");
+                vod_play_url.append("$$$");
+            }
+        }
 
             String title = detailPage.selectFirst(".page-hd a").attr("title");
             String pic = detailPage.selectFirst(".page-hd img").attr("src");
