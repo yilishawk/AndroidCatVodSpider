@@ -65,34 +65,65 @@ public class Wuik extends Spider {
     }
 
     private List<Vod> fetchCategoryList(String tid, String pg, String subcat) {
-        List<Vod> list = new ArrayList<>();
-        String url;
-        if ("0".equals(subcat) || subcat.isEmpty()) {
-            url = API_BASE + "/api/list/getconditionfilterdata?titleid=" + tid + "&page=" + pg + "&size=24";
-        } else {
-            url = API_BASE + "/api/list/getconditionfilterdata?titleid=" + tid + "&classifyId=" + subcat + "&page=" + pg + "&size=24";
-        }
+    List<Vod> list = new ArrayList<>();
+    String url;
+    if ("0".equals(subcat) || subcat.isEmpty()) {
+        url = API_BASE + "/api/list/getconditionfilterdata?titleid=" + tid + "&page=" + pg + "&size=24";
+    } else {
+        url = API_BASE + "/api/list/getconditionfilterdata?titleid=" + tid + "&classifyId=" + subcat + "&page=" + pg + "&size=24";
+    }
 
+    try {
         String json = OkHttp.string(url, getHeaders());
+        
+        // 1. 处理空响应
+        if (json == null || json.isEmpty()) return list; 
+
         JsonObject resp = JsonParser.parseString(json).getAsJsonObject();
 
         if (resp.has("ret") && resp.get("ret").getAsInt() == 200 && resp.has("data")) {
-            JsonArray array = resp.getAsJsonObject("data").getAsJsonArray("list");
-            if (array != null) {
-                for (JsonElement elem : array) {
-                    JsonObject v = elem.getAsJsonObject();
-                    Vod vod = new Vod();
-                    vod.setVodId(v.get("mediaKey").getAsString());
-                    vod.setVodName(v.get("title").getAsString());
-                    vod.setVodPic(v.get("coverImgUrl").getAsString());
-                    vod.setVodRemarks(v.get("updateStatus") != null && !v.get("updateStatus").isJsonNull()
-                            ? v.get("updateStatus").getAsString()
-                            : (v.has("updateMsg") ? v.get("updateMsg").getAsString() : ""));
-                    list.add(vod);
+            JsonObject dataObj = resp.getAsJsonObject("data");
+            
+            // 2. 检查 list 键是否存在且是数组
+            if (dataObj.has("list") && dataObj.get("list").isJsonArray()) {
+                JsonArray array = dataObj.getAsJsonArray("list");
+                
+                if (array != null) {
+                    for (JsonElement elem : array) {
+                        JsonObject v = elem.getAsJsonObject();
+                        Vod vod = new Vod();
+                        
+                        // 3. 必须存在 mediaKey
+                        if (!v.has("mediaKey") || v.get("mediaKey").isJsonNull()) continue; 
+                        
+                        vod.setVodId(v.get("mediaKey").getAsString());
+                        
+                        // 4. 容错处理：title
+                        vod.setVodName(v.has("title") && !v.get("title").isJsonNull() ? v.get("title").getAsString() : "未知标题");
+                        
+                        // 5. 容错处理：coverImgUrl
+                        vod.setVodPic(v.has("coverImgUrl") && !v.get("coverImgUrl").isJsonNull() ? v.get("coverImgUrl").getAsString() : "");
+                        
+                        // 6. 备注信息
+                        String remarks = "";
+                        if (v.has("updateStatus") && !v.get("updateStatus").isJsonNull()) {
+                            remarks = v.get("updateStatus").getAsString();
+                        } else if (v.has("updateMsg") && !v.get("updateMsg").isJsonNull()) {
+                            remarks = v.get("updateMsg").getAsString();
+                        }
+                        vod.setVodRemarks(remarks);
+                        
+                        list.add(vod);
+                    }
                 }
             }
         }
-        return list;
+    } catch (Exception e) {
+        // 捕获并打印异常，用于调试
+        System.out.println("Wuik fetchCategoryList Error: " + e.getMessage());
+        e.printStackTrace();
+    }
+    return list;
     }
 
     // ==================== 详情页 ====================
