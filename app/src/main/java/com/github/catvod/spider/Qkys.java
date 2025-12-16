@@ -229,26 +229,34 @@ public class Qkys extends Spider {
     @Override
 public String playerContent(String flag, String id, List<String> vipFlags) {
     try {
+        // 1. 将相对 ID 转换为完整的播放页 URL
+        // 示例: /87k411903-2-1.html  -->  https://m.87kkt.com/87k411903-2-1.html
+        String playPageUrl = siteUrl + id;
+        
+        // 2. 构造符合 CatVod 框架规范的 JSON 结果
         JSONObject result = new JSONObject();
 
-        // 修正 1: 将 getHeaders() 替换为 getVideoHeader() 或 getHeader()
-        // 这里使用 getVideoHeader()
-        Map<String, String> headerMap = getVideoHeader(); 
+        // 这里的 headerMap 使用您提供的安卓环境的 headers 可能会提高嗅探成功率
+        Map<String, String> headerMap = getHeader(); 
         
-        result.put("parse", 1); // 1 表示交给播放器去嗅探/内置解析（默认）
+        // **最关键的修改：** // parse: 1 表示交给播放器去加载 playPageUrl 并嗅探最终的视频地址
+        result.put("parse", 1); 
         
-        // 修正 2: 将 Map 包装成 JSONObject，符合 CatVod 框架要求
+        // 使用一个更符合安卓环境的 User-Agent 
+        headerMap.put("User-Agent", "Mozilla/5.0 (Linux; Android 15; 23054RA19C) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/142.0.7444.171 Mobile Safari/537.36");
+        
         result.put("header", new JSONObject(headerMap)); 
-        
         result.put("playUrl", "");
-        result.put("url", id); // 播放地址就是传入的 id（详情页解析出的 URL）
+        
+        // **核心修正：** 传递完整的绝对播放页 URL
+        result.put("url", playPageUrl); 
         
         return result.toString();
 
     } catch (Exception e) {
-        // 确保 SpiderDebug 已导入
         SpiderDebug.log(e);
         return Result.error("播放解析异常: " + e.getMessage());
     }
 }
+
 } // <--- 闭合 Qkys 类
