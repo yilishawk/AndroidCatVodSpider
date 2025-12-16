@@ -96,55 +96,71 @@ public class NM extends Spider {
         return "";
     }
 
-    @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        try {
-            JSONObject result = new JSONObject();
-            JSONArray jSONArray = new JSONArray();
+   @Override
+public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
+    try {
+        JSONObject result = new JSONObject();
+        JSONArray jSONArray = new JSONArray();
 
-            HashMap<String, String> ext = new HashMap<>();
-            if (extend != null && extend.size() > 0) {
-                ext.putAll(extend);
-            }
-
-            String area = ext.getOrDefault("area", "");
-            String year = ext.getOrDefault("year", "");
-            String by = ext.getOrDefault("by", "");
-            String classType = ext.getOrDefault("cateId", tid);
-            String classType = "0";
-            String cateUrl = siteUrl + String.format("/vod-list-id-%s-pg-%s-order--by-%s-class-0-year-%s-letter--area-%s-lang-.html", typeIdToUse, pg, by,classType, year, area);
-            String content = fetch(cateUrl);
-            Document doc = Jsoup.parse(content);
-            Elements listElements = doc.select(".globalPicList li");
-
-            for (Element element : listElements) {
-                JSONObject vod = new JSONObject();
-                Element item = element.selectFirst("a");
-                String vod_id = siteUrl + item.attr("href");
-                String vod_name = item.attr("title");
-                String vod_pic = item.selectFirst("img").attr("src");
-                String vod_remarks = element.selectFirst(".sBottom span").textNodes().isEmpty() ? "" : element.selectFirst(".sBottom span").textNodes().get(0).text();
-
-                vod.put("vod_id", vod_id);
-                vod.put("vod_name", vod_name);
-                vod.put("vod_pic", vod_pic);
-                vod.put("vod_remarks", vod_remarks);
-                jSONArray.put(vod);
-            }
-
-            result.put("page", Integer.parseInt(pg));
-            result.put("pagecount", Integer.MAX_VALUE);
-            result.put("limit", listElements.size());
-            result.put("total", Integer.MAX_VALUE);
-            result.put("list", jSONArray);
-            return result.toString();
-
-        } catch (Exception e) {
-            SpiderDebug.log(e);
+        HashMap<String, String> ext = new HashMap<>();
+        if (extend != null && extend.size() > 0) {
+            ext.putAll(extend);
         }
-        return "";
-    }
 
+        String area = ext.getOrDefault("area", "");
+        String year = ext.getOrDefault("year", "");
+        String by = ext.getOrDefault("by", "");
+
+        // 【修正点 A】: 确定 URL 中 id-%s 的值 (vod-list-id-%s)。
+        // 根据网站特性，优先使用二级类型 ID (cateId)，否则使用主分类 ID (tid)。
+        String typeIdToUse = ext.getOrDefault("cateId", tid);
+        
+        // 【修正点 B】: 网站 URL 中的 class 参数固定为 '0'。
+        String classTypeParam = "0"; 
+
+        // 【URL 拼接】: 确保变量名和占位符顺序匹配。
+        // 结构: /vod-list-id-%s-pg-%s-order--by-%s-class-%s-year-%s-letter--area-%s-lang-.html
+        // 注意：这里的 %s 数量是 6 个。
+        String cateUrl = siteUrl + String.format("/vod-list-id-%s-pg-%s-order--by-%s-class-%s-year-%s-letter--area-%s-lang-.html", 
+                                                    typeIdToUse,  // 对应 id-%s
+                                                    pg,           // 对应 pg-%s
+                                                    by,           // 对应 by-%s
+                                                    classTypeParam, // 对应 class-%s
+                                                    year,         // 对应 year-%s
+                                                    area);        // 对应 area-%s
+        
+        // --- HTML 解析逻辑 ---
+        String content = fetch(cateUrl);
+        Document doc = Jsoup.parse(content);
+        Elements listElements = doc.select(".globalPicList li");
+
+        for (Element element : listElements) {
+            JSONObject vod = new JSONObject();
+            Element item = element.selectFirst("a");
+            String vod_id = siteUrl + item.attr("href");
+            String vod_name = item.attr("title");
+            String vod_pic = item.selectFirst("img").attr("src");
+            String vod_remarks = element.selectFirst(".sBottom span").textNodes().isEmpty() ? "" : element.selectFirst(".sBottom span").textNodes().get(0).text();
+
+            vod.put("vod_id", vod_id);
+            vod.put("vod_name", vod_name);
+            vod.put("vod_pic", vod_pic);
+            vod.put("vod_remarks", vod_remarks);
+            jSONArray.put(vod);
+        }
+
+        result.put("page", Integer.parseInt(pg));
+        result.put("pagecount", Integer.MAX_VALUE);
+        result.put("limit", listElements.size());
+        result.put("total", Integer.MAX_VALUE);
+        result.put("list", jSONArray);
+        return result.toString();
+
+    } catch (Exception e) {
+        SpiderDebug.log(e);
+    }
+    return "";
+}
     @Override
     public String detailContent(List<String> ids) {
         try {
