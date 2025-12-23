@@ -226,36 +226,37 @@ public class Qkys extends Spider {
         return Result.string(vod);
     }
 
-    @Override
+   @Override
 public String playerContent(String flag, String id, List<String> vipFlags) {
     try {
-        // 1. 将相对 ID 转换为完整的播放页 URL
-        // 示例: /87k411903-2-1.html  -->  https://m.87kkt.com/87k411903-2-1.html
-        String playPageUrl = siteUrl + id;
-        
-        // 2. 构造符合 CatVod 框架规范的 JSON 结果
+        String playPageUrl = siteUrl + id;  // e.g. https://m.87kkt.com/87k411945-4-1.html
+
         JSONObject result = new JSONObject();
 
-        // 这里的 headerMap 使用您提供的安卓环境的 headers 可能会提高嗅探成功率
-        Map<String, String> headerMap = getHeader(); 
-        
-        // **最关键的修改：** // parse: 1 表示交给播放器去加载 playPageUrl 并嗅探最终的视频地址
-        result.put("parse", 1); 
-        
-        // 使用一个更符合安卓环境的 User-Agent 
+        Map<String, String> headerMap = new HashMap<>();
+        // 手机 UA（已证明有效）
         headerMap.put("User-Agent", "Mozilla/5.0 (Linux; Android 15; 23054RA19C) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/142.0.7444.171 Mobile Safari/537.36");
-        
-        result.put("header", new JSONObject(headerMap)); 
-        result.put("playUrl", "");
-        
-        // **核心修正：** 传递完整的绝对播放页 URL
-        result.put("url", playPageUrl); 
-        
-        return result.toString();
+        headerMap.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        headerMap.put("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7");
+        headerMap.put("sec-ch-ua", "\"Android WebView\";v=\"143\", \"Chromium\";v=\"143\", \"Not A(Brand\";v=\"24\"");
+        headerMap.put("sec-ch-ua-mobile", "?1");
+        headerMap.put("sec-ch-ua-platform", "\"Android\"");
 
+        // *** 关键：添加 Referer 和相关 Sec-Fetch 头部，模拟从本站页面加载 ***
+        headerMap.put("Referer", playPageUrl);  // 指向播放页本身
+        headerMap.put("Sec-Fetch-Site", "same-origin");
+        headerMap.put("Sec-Fetch-Mode", "navigate");
+        headerMap.put("Sec-Fetch-Dest", "iframe");  // 或 "video"，根据实际嗅探类型试试
+
+        result.put("parse", 1);
+        result.put("playUrl", "");
+        result.put("url", playPageUrl);
+        result.put("header", new JSONObject(headerMap));
+
+        return result.toString();
     } catch (Exception e) {
         SpiderDebug.log(e);
-        return Result.error("播放解析异常: " + e.getMessage());
+        return "{\"parse\":0,\"url\":\"\"}";
     }
 }
 
