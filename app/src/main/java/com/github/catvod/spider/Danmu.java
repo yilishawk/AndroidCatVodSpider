@@ -1,36 +1,78 @@
 package com.github.catvod.spider;
-
+import android.app.Application;
+import android.content.SharedPreferences;
+import android.os.Environment;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.TypedValue;
+import android.widget.Toast;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-
-
-
-
-
+import com.github.catvod.debug.MainActivity;
+import com.github.catvod.js.C0000;
+import com.github.catvod.spider.C0056;
+import com.github.catvod.spider.Config;
+import com.github.catvod.spider.Init;
+import com.google.gson.Gson;
+import com.google.gson.annotations.SerializedName;
+import com.google.gson.reflect.TypeToken;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.lang.reflect.Method;
+import java.math.BigInteger;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLSession;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
+import np.protect.C0058;
+import np.protect.C0060;
+import np.protect.C0062;
+import np.protect.C0064;
+import np.protect.C0065;
+import np.protect.C0066;
+import np.protect.C0068;
+import np.protect.C0069;
+import np.protect.C0070;
+import np.protect.C0072;
+import np.protect.C0074;
+import np.protect.C0076;
+import np.protect.C0077;
+import np.protect.C0078;
+import okhttp3.Headers;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-
-public class Danmu extends Spider {
+static class Danmu extends Spider {
     public static Object[] AppDanmu(Map<String, String> map) {
         SpiderDebug.log("开始获取弹幕");
         Object[] objArr = {200, "application/xml", new ByteArrayInputStream("".getBytes())};
@@ -982,31 +1024,21 @@ public class Danmu extends Spider {
         }
     }
 
-    // --- 自动生成的依赖注入区 ---
+
+    // ↓↓↓ 依赖融合区 ↓↓↓
     static class k {
 
-        import com.github.catvod.crawler.Spider;
-        import java.util.List;
-        import java.util.Map;
-        import java.util.concurrent.TimeUnit;
-        import javax.net.ssl.HostnameVerifier;
-        import javax.net.ssl.SSLSession;
-        import okhttp3.Headers;
-        import okhttp3.OkHttpClient;
-        import okhttp3.Request;
-        import okhttp3.Response;
-        
         /* renamed from: com.github.catvod.spider.merge.k.b  reason: case insensitive filesystem */
         public final static class C0619b {
             private OkHttpClient a;
-        
+
             /* JADX INFO: Access modifiers changed from: private */
             /* renamed from: com.github.catvod.spider.merge.k.b$a */
             /* loaded from: classes.dex */
             public static static class a {
                 static volatile C0619b a = new C0619b();
             }
-        
+
             public static String a(String str, Map<String, String> map) {
                 String str2 = a().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute().headers().get("Location");
                 if (str2 == null) {
@@ -1014,7 +1046,7 @@ public class Danmu extends Spider {
                 }
                 return str2;
             }
-        
+
             public static OkHttpClient a() {
                 if (a.a.a != null) {
                     return a.a.a;
@@ -1031,7 +1063,7 @@ public class Danmu extends Spider {
                 c0619b.a = build;
                 return build;
             }
-        
+
             /* JADX WARN: Code restructure failed: missing block: B:9:0x003c, code lost:
                 if (r2.containsKey("Location") != false) goto L7;
              */
@@ -1046,45 +1078,45 @@ public class Danmu extends Spider {
                 }
                 return null;
             }
-        
+
             public static Response c(String str) {
                 return a().newCall(new Request.Builder().url(str).build()).execute();
             }
-        
+
             public static Response d(String str, Map<String, String> map) {
                 return a().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute();
             }
-        
+
             public static OkHttpClient e() {
                 return a().newBuilder().followRedirects(false).followSslRedirects(false).build();
             }
-        
+
             public static C0621d f(String str, String str2, Map<String, String> map) {
                 return new C0620c(str, str2, map).a(a());
             }
-        
+
             public static C0621d g(String str, Map<String, String> map, Map<String, String> map2) {
                 return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, str, map, map2).a(a());
             }
-        
+
             public static String h(String str, String str2) {
                 return f(str, str2, null).a();
             }
-        
+
             public static String i(Map map) {
                 return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, "https://passport.aliyundrive.com/newlogin/qrcode/query.do?appName=aliyun_drive&fromSite=52&_bx-v=2.2.3", map, (Map<String, String>) null).a(a()).a();
             }
-        
+
             public static C0621d j(OkHttpClient okHttpClient, String str, Map map, Map map2, Map map3) {
                 C0620c c0620c = new C0620c(str, map, map2, map3);
                 c0620c.b();
                 return c0620c.a(okHttpClient);
             }
-        
+
             public static String k(String str) {
                 return l(str, null);
             }
-        
+
             public static String l(String str, Map<String, String> map) {
                 return str.startsWith("http") ? new C0620c(com.github.catvod.spider.merge.AB.m.c.c, str, (Map<String, String>) null, map).a(a()).a() : "";
             }
@@ -1092,551 +1124,80 @@ public class Danmu extends Spider {
 
     }
 
-    static class AB {
-
-        static class o {
-
-            import android.text.TextUtils;
-            import com.github.catvod.crawler.SpiderDebug;
-            import java.net.URLEncoder;
-            import java.util.ArrayList;
-            import java.util.HashMap;
-            import java.util.List;
-            import org.json.JSONArray;
-            import org.json.JSONObject;
-            
-            public final static class K {
-                public static String a = "";
-            
-                private static String a(String str) {
-                    if (str == null || str.isEmpty()) {
-                        return null;
-                    }
-                    int indexOf = str.indexOf("{");
-                    int lastIndexOf = str.lastIndexOf("}");
-                    if (indexOf == -1 || lastIndexOf == -1 || indexOf >= lastIndexOf) {
-                        return null;
-                    }
-                    return str.substring(indexOf, lastIndexOf + 1);
-                }
-            
-                public static String b(String str, int i) {
-                    try {
-                        SpiderDebug.log("getDanmuUrl vodName: " + str);
-                        SpiderDebug.log("getDanmuUrl vodIndex: " + i);
-                        String b = G.b("danmukey");
-                        SpiderDebug.log("getDanmuUrl danmu: " + b);
-                        if (b.isEmpty()) {
-                            return "";
-                        }
-                        JSONObject jSONObject = new JSONObject(b);
-                        if (str.contains(jSONObject.getString("searchKey"))) {
-                            JSONArray jSONArray = jSONObject.getJSONArray("details");
-                            return jSONArray.length() == 0 ? "" : jSONArray.getString(i - 1).split("\\|")[1];
-                        }
-                        return "";
-                    } catch (Exception e) {
-                        SpiderDebug.log(e);
-                        return "";
-                    }
-                }
-            
-                public static List<String> bilibili(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("bilibili");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "哔哩|" + optString + "|" + optString2 + "@bilibili";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> hanjutv(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("hanjutv");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "韩剧|" + optString + "|" + optString2 + "@hanjutv";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> iqiyi(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("iqiyi");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "爱奇艺|" + optString + "|" + optString2 + "@iqiyi";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> juhe(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        String[] split = str.split("\\|");
-                        String str2 = split[1];
-                        String str3 = split[2];
-                        String str4 = str2.split(" - ")[0];
-                        String[] split2 = str3.split("@");
-                        JSONArray jSONArray = new JSONArray(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu?name=" + URLEncoder.encode(str4, "UTF-8") + "&epid=" + split2[0] + "&platform=" + split2[1], null).a());
-                        if (jSONArray == null) {
-                            return arrayList;
-                        }
-                        for (int i = 0; i < jSONArray.length(); i++) {
-                            JSONObject optJSONObject = jSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("name");
-                                String optString2 = optJSONObject.optString("url");
-                                String optString3 = optJSONObject.optString("platform");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    arrayList.add(optString + "\n|vodid://" + optString2 + "@" + optString3);
-                                }
-                            }
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static String[] l(JSONArray jSONArray) {
-                    if (jSONArray == null || jSONArray.length() == 0) {
-                        return new String[0];
-                    }
-                    int length = jSONArray.length();
-                    int i = (length + 29) / 30;
-                    String[] strArr = new String[i];
-                    for (int i2 = 0; i2 < i; i2++) {
-                        StringBuilder sb = new StringBuilder();
-                        int i3 = i2 * 30;
-                        int min = Math.min(i3 + 30, length);
-                        while (i3 < min) {
-                            sb.append(jSONArray.optString(i3));
-                            if (i3 < min - 1) {
-                                sb.append(",");
-                            }
-                            i3++;
-                        }
-                        strArr[i2] = sb.toString();
-                    }
-                    return strArr;
-                }
-            
-                public static List<String> leshi(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("leshi");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "乐视|" + optString + "|" + optString2 + "@leshi";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> maiduidui(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("maiduidui");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "埋堆堆|" + optString + "|" + optString2 + "@maiduidui";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> mango(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("mango");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "芒果|" + optString + "|" + optString2 + "@mango";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> renren(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("renren");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "人人|" + optString + "|" + optString2 + "@renren";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> tencent(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("tencent");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "腾讯|" + optString + "|" + optString2 + "@tencent";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> xigua(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("xigua");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "西瓜|" + optString + "|" + optString2 + "@xigua";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            
-                public static List<String> youku(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("youku");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "优酷|" + optString + "|" + optString2 + "@youku";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-            }
-
-        }
-
-    }
-
     static class m {
 
-        import android.app.Application;
-        import android.content.SharedPreferences;
-        import com.github.catvod.spider.Init;
-        
-        /* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
-        public final static class C0647l {
-            private static SharedPreferences a() {
-                Application context = Init.context();
-                return context.getSharedPreferences(Init.context().getPackageName() + "_preferences", 0);
-            }
-        
-            public static void a(String str, String str2) {
-                SharedPreferences.Editor edit = a().edit();
-                edit.putString(str, str2);
-                edit.apply();
-            }
-        
-            public static String b(String str) {
-                return a().getString(str, "");
-            }
-        
-            public static void c(String str, Object obj) {
-                SharedPreferences.Editor putLong;
-                if (obj == null) {
-                    return;
+        /* renamed from: com.github.catvod.spider.merge.m.k  reason: case insensitive filesystem */
+        public final static class C0646k {
+            public static String a(File file) {
+                String str = "";
+                try {
+                    FileInputStream fileInputStream = new FileInputStream(file);
+                    try {
+                        byte[] bArr = new byte[fileInputStream.available()];
+                        fileInputStream.read(bArr);
+                        fileInputStream.close();
+                        str = new String(bArr, "UTF-8");
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                } catch (Exception unused) {
                 }
-                if (obj instanceof String) {
-                    putLong = a().edit().putString(str, (String) obj);
-                } else if (obj instanceof Boolean) {
-                    putLong = a().edit().putBoolean(str, ((Boolean) obj).booleanValue());
-                } else if (obj instanceof Float) {
-                    putLong = a().edit().putFloat(str, ((Float) obj).floatValue());
-                } else if (obj instanceof Integer) {
-                    putLong = a().edit().putInt(str, ((Integer) obj).intValue());
-                } else if (!(obj instanceof Long)) {
-                    return;
-                } else {
-                    putLong = a().edit().putLong(str, ((Long) obj).longValue());
+                return str;
+            }
+
+            public static File b(String str) {
+                if (!str.startsWith(".")) {
+                    str = C0575c.a(".", str);
                 }
-                putLong.apply();
+                StringBuilder sb = new StringBuilder();
+                sb.append(Environment.getExternalStorageDirectory());
+                File file = new File(C0588h.b(sb, File.separator, "TVBox"));
+                if (!file.exists()) {
+                    file.mkdirs();
+                }
+                return new File(file, str);
+            }
+
+            public static File c(File file, String str) {
+                byte[] bytes = str.getBytes();
+                try {
+                    FileOutputStream fileOutputStream = new FileOutputStream(file);
+                    fileOutputStream.write(bytes);
+                    fileOutputStream.flush();
+                    fileOutputStream.close();
+                    try {
+                        Runtime runtime = Runtime.getRuntime();
+                        runtime.exec("chmod 777 " + file).waitFor();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                } catch (Exception e2) {
+                    e2.printStackTrace();
+                }
+                return file;
+            }
+
+            public static File c(String str) {
+                if (!str.startsWith(".")) {
+                    str = C0575c.a(".", str);
+                }
+                return new File(Init.context().getFilesDir(), str);
+            }
+
+            /* renamed from: c  reason: collision with other method in static class */
+            private static void m127c(File file, String str) {
+                try {
+                    FileOutputStream fileOutputStream = new FileOutputStream(file);
+                    OutputStreamWriter outputStreamWriter = new OutputStreamWriter(fileOutputStream, "UTF-8");
+                    outputStreamWriter.write(str);
+                    outputStreamWriter.close();
+                    fileOutputStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
 
-        import android.text.TextUtils;
-        import android.util.TypedValue;
-        import com.github.catvod.crawler.Spider;
-        import com.github.catvod.js.C0000;
-        import com.github.catvod.spider.C0056;
-        import com.github.catvod.spider.Init;
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        import java.lang.reflect.Method;
-        import java.math.BigInteger;
-        import java.security.MessageDigest;
-        import java.text.SimpleDateFormat;
-        import java.util.Date;
-        import java.util.HashMap;
-        import java.util.Iterator;
-        import java.util.List;
-        import java.util.Locale;
-        import java.util.Map;
-        import java.util.Random;
-        import java.util.regex.Matcher;
-        import java.util.regex.Pattern;
-        import np.protect.C0058;
-        import np.protect.C0060;
-        import np.protect.C0062;
-        import np.protect.C0064;
-        import np.protect.C0065;
-        import np.protect.C0066;
-        import np.protect.C0068;
-        import np.protect.C0069;
-        import np.protect.C0070;
-        import np.protect.C0072;
-        import np.protect.C0074;
-        import np.protect.C0076;
-        import np.protect.C0077;
-        import np.protect.C0078;
-        import org.json.JSONArray;
-        import org.json.JSONObject;
-        
         /* renamed from: com.github.catvod.spider.merge.m.I  reason: case insensitive filesystem */
         public final static class C0634I {
             public static final List<String> a;
@@ -1648,10 +1209,10 @@ public class Danmu extends Spider {
             public static final List<String> g;
             public static final List<String> h;
             private static final Random i;
-        
+
             /* renamed from: short  reason: not valid java name */
             private static final short[] f40short;
-        
+
             static {
                 String str;
                 String str2;
@@ -1736,7 +1297,7 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static String a(String str) {
                 try {
                     StringBuilder sb = new StringBuilder(new BigInteger(1, MessageDigest.getInstance("MD5").digest(str.getBytes("UTF-8"))).toString(16));
@@ -1748,7 +1309,7 @@ public class Danmu extends Spider {
                     return "";
                 }
             }
-        
+
             public static String b(String str) {
                 StringBuilder sb;
                 String str2;
@@ -1866,11 +1427,11 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static int c(int i2) {
                 return (int) TypedValue.applyDimension(1, i2, Init.context().getResources().getDisplayMetrics());
             }
-        
+
             public static String d() {
                 int i2;
                 int intValue;
@@ -1974,11 +1535,11 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static String e(double d2) {
                 return d2 <= 0.0d ? "" : d2 > 1.099511627776E12d ? String.format(Locale.getDefault(), "%.2f%s", Double.valueOf(d2 / 1.099511627776E12d), "TB") : d2 > 1.073741824E9d ? String.format(Locale.getDefault(), "%.2f%s", Double.valueOf(d2 / 1.073741824E9d), "GB") : d2 > 1048576.0d ? String.format(Locale.getDefault(), "%.2f%s", Double.valueOf(d2 / 1048576.0d), "MB") : String.format(Locale.getDefault(), "%.2f%s", Double.valueOf(d2 / 1024.0d), "KB");
             }
-        
+
             public static boolean f() {
                 for (Method method : Spider.static class.getDeclaredMethods()) {
                     if ("action".equals(method.getName())) {
@@ -1987,7 +1548,7 @@ public class Danmu extends Spider {
                 }
                 return false;
             }
-        
+
             /* JADX WARN: Removed duplicated region for block: B:15:0x0083  */
             /* JADX WARN: Removed duplicated region for block: B:17:0x008a  */
             /*
@@ -2056,7 +1617,7 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             /* JADX WARN: Removed duplicated region for block: B:12:0x003f  */
             /* JADX WARN: Removed duplicated region for block: B:14:0x004b  */
             /* JADX WARN: Removed duplicated region for block: B:34:0x0380  */
@@ -2136,7 +1697,7 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static void i(String str) {
                 if (str.equals(".aliyun")) {
                     str = "已清除阿里Token";
@@ -2160,12 +1721,12 @@ public class Danmu extends Spider {
                 }
                 Init.run(new RunnableC0587g(str, 4));
             }
-        
+
             /* renamed from: i  reason: collision with other method in static class */
             public static boolean m126i(String str) {
                 return a.contains(m(str));
             }
-        
+
             private static HashMap<String, String> j(String str) {
                 String[] split;
                 HashMap<String, String> hashMap = new HashMap<>();
@@ -2177,7 +1738,7 @@ public class Danmu extends Spider {
                 }
                 return hashMap;
             }
-        
+
             public static String k(String str) {
                 try {
                     byte[] digest = MessageDigest.getInstance("SHA-1").digest(str.getBytes());
@@ -2195,7 +1756,7 @@ public class Danmu extends Spider {
                     return "";
                 }
             }
-        
+
             /* JADX WARN: Removed duplicated region for block: B:28:0x0082  */
             /* JADX WARN: Removed duplicated region for block: B:29:0x008a  */
             /*
@@ -2321,11 +1882,11 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static String m(String str) {
                 return str.contains(".") ? str.substring(str.lastIndexOf(".") + 1) : str;
             }
-        
+
             public static String m(String str, String str2) {
                 int m99 = C0037.m99("ۨۧۢ");
                 while (true) {
@@ -2337,7 +1898,7 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static String n(String str, String str2, String str3) {
                 try {
                     JSONArray jSONArray = new JSONArray();
@@ -2353,7 +1914,7 @@ public class Danmu extends Spider {
                     return "";
                 }
             }
-        
+
             public static String o(String str, String str2, String str3, String str4) {
                 try {
                     JSONArray jSONArray = new JSONArray();
@@ -2371,7 +1932,7 @@ public class Danmu extends Spider {
                     return "";
                 }
             }
-        
+
             /* JADX WARN: Removed duplicated region for block: B:149:0x01e9 A[SYNTHETIC] */
             /* JADX WARN: Removed duplicated region for block: B:151:0x02f6 A[SYNTHETIC] */
             /* JADX WARN: Removed duplicated region for block: B:154:0x03d2 A[SYNTHETIC] */
@@ -2622,7 +2183,7 @@ public class Danmu extends Spider {
                     }
                 }
             }
-        
+
             public static String q(String str, String str2) {
                 try {
                     HashMap<String, String> r = r(str);
@@ -2641,7 +2202,7 @@ public class Danmu extends Spider {
                     return "";
                 }
             }
-        
+
             private static HashMap<String, String> r(String str) {
                 String[] split;
                 HashMap<String, String> hashMap = new HashMap<>();
@@ -2655,84 +2216,628 @@ public class Danmu extends Spider {
             }
         }
 
-        import android.os.Environment;
-        import com.github.catvod.spider.Init;
-        
-        
-        import java.io.File;
-        import java.io.FileInputStream;
-        import java.io.FileOutputStream;
-        import java.io.IOException;
-        import java.io.OutputStreamWriter;
-        
-        /* renamed from: com.github.catvod.spider.merge.m.k  reason: case insensitive filesystem */
-        public final static class C0646k {
-            public static String a(File file) {
-                String str = "";
-                try {
-                    FileInputStream fileInputStream = new FileInputStream(file);
-                    try {
-                        byte[] bArr = new byte[fileInputStream.available()];
-                        fileInputStream.read(bArr);
-                        fileInputStream.close();
-                        str = new String(bArr, "UTF-8");
-                    } catch (IOException e) {
-                        e.printStackTrace();
+        /* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
+        public final static class C0647l {
+            private static SharedPreferences a() {
+                Application context = Init.context();
+                return context.getSharedPreferences(Init.context().getPackageName() + "_preferences", 0);
+            }
+
+            public static void a(String str, String str2) {
+                SharedPreferences.Editor edit = a().edit();
+                edit.putString(str, str2);
+                edit.apply();
+            }
+
+            public static String b(String str) {
+                return a().getString(str, "");
+            }
+
+            public static void c(String str, Object obj) {
+                SharedPreferences.Editor putLong;
+                if (obj == null) {
+                    return;
+                }
+                if (obj instanceof String) {
+                    putLong = a().edit().putString(str, (String) obj);
+                } else if (obj instanceof Boolean) {
+                    putLong = a().edit().putBoolean(str, ((Boolean) obj).booleanValue());
+                } else if (obj instanceof Float) {
+                    putLong = a().edit().putFloat(str, ((Float) obj).floatValue());
+                } else if (obj instanceof Integer) {
+                    putLong = a().edit().putInt(str, ((Integer) obj).intValue());
+                } else if (!(obj instanceof Long)) {
+                    return;
+                } else {
+                    putLong = a().edit().putLong(str, ((Long) obj).longValue());
+                }
+                putLong.apply();
+            }
+        }
+
+    }
+
+    static class AB {
+
+        static class o {
+
+            public final static class K {
+                public static String a = "";
+
+                private static String a(String str) {
+                    if (str == null || str.isEmpty()) {
+                        return null;
                     }
-                } catch (Exception unused) {
+                    int indexOf = str.indexOf("{");
+                    int lastIndexOf = str.lastIndexOf("}");
+                    if (indexOf == -1 || lastIndexOf == -1 || indexOf >= lastIndexOf) {
+                        return null;
+                    }
+                    return str.substring(indexOf, lastIndexOf + 1);
                 }
-                return str;
-            }
-        
-            public static File b(String str) {
-                if (!str.startsWith(".")) {
-                    str = C0575c.a(".", str);
-                }
-                StringBuilder sb = new StringBuilder();
-                sb.append(Environment.getExternalStorageDirectory());
-                File file = new File(C0588h.b(sb, File.separator, "TVBox"));
-                if (!file.exists()) {
-                    file.mkdirs();
-                }
-                return new File(file, str);
-            }
-        
-            public static File c(File file, String str) {
-                byte[] bytes = str.getBytes();
-                try {
-                    FileOutputStream fileOutputStream = new FileOutputStream(file);
-                    fileOutputStream.write(bytes);
-                    fileOutputStream.flush();
-                    fileOutputStream.close();
+
+                public static String b(String str, int i) {
                     try {
-                        Runtime runtime = Runtime.getRuntime();
-                        runtime.exec("chmod 777 " + file).waitFor();
+                        SpiderDebug.log("getDanmuUrl vodName: " + str);
+                        SpiderDebug.log("getDanmuUrl vodIndex: " + i);
+                        String b = G.b("danmukey");
+                        SpiderDebug.log("getDanmuUrl danmu: " + b);
+                        if (b.isEmpty()) {
+                            return "";
+                        }
+                        JSONObject jSONObject = new JSONObject(b);
+                        if (str.contains(jSONObject.getString("searchKey"))) {
+                            JSONArray jSONArray = jSONObject.getJSONArray("details");
+                            return jSONArray.length() == 0 ? "" : jSONArray.getString(i - 1).split("\\|")[1];
+                        }
+                        return "";
+                    } catch (Exception e) {
+                        SpiderDebug.log(e);
+                        return "";
+                    }
+                }
+
+                public static List<String> bilibili(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("bilibili");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "哔哩|" + optString + "|" + optString2 + "@bilibili";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
                     } catch (Exception e) {
                         e.printStackTrace();
+                        return arrayList;
                     }
-                } catch (Exception e2) {
-                    e2.printStackTrace();
                 }
-                return file;
-            }
-        
-            public static File c(String str) {
-                if (!str.startsWith(".")) {
-                    str = C0575c.a(".", str);
+
+                public static List<String> hanjutv(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("hanjutv");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "韩剧|" + optString + "|" + optString2 + "@hanjutv";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
                 }
-                return new File(Init.context().getFilesDir(), str);
+
+                public static List<String> iqiyi(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("iqiyi");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "爱奇艺|" + optString + "|" + optString2 + "@iqiyi";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> juhe(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        String[] split = str.split("\\|");
+                        String str2 = split[1];
+                        String str3 = split[2];
+                        String str4 = str2.split(" - ")[0];
+                        String[] split2 = str3.split("@");
+                        JSONArray jSONArray = new JSONArray(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu?name=" + URLEncoder.encode(str4, "UTF-8") + "&epid=" + split2[0] + "&platform=" + split2[1], null).a());
+                        if (jSONArray == null) {
+                            return arrayList;
+                        }
+                        for (int i = 0; i < jSONArray.length(); i++) {
+                            JSONObject optJSONObject = jSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("name");
+                                String optString2 = optJSONObject.optString("url");
+                                String optString3 = optJSONObject.optString("platform");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    arrayList.add(optString + "\n|vodid://" + optString2 + "@" + optString3);
+                                }
+                            }
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static String[] l(JSONArray jSONArray) {
+                    if (jSONArray == null || jSONArray.length() == 0) {
+                        return new String[0];
+                    }
+                    int length = jSONArray.length();
+                    int i = (length + 29) / 30;
+                    String[] strArr = new String[i];
+                    for (int i2 = 0; i2 < i; i2++) {
+                        StringBuilder sb = new StringBuilder();
+                        int i3 = i2 * 30;
+                        int min = Math.min(i3 + 30, length);
+                        while (i3 < min) {
+                            sb.append(jSONArray.optString(i3));
+                            if (i3 < min - 1) {
+                                sb.append(",");
+                            }
+                            i3++;
+                        }
+                        strArr[i2] = sb.toString();
+                    }
+                    return strArr;
+                }
+
+                public static List<String> leshi(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("leshi");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "乐视|" + optString + "|" + optString2 + "@leshi";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> maiduidui(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("maiduidui");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "埋堆堆|" + optString + "|" + optString2 + "@maiduidui";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> mango(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("mango");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "芒果|" + optString + "|" + optString2 + "@mango";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> renren(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("renren");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "人人|" + optString + "|" + optString2 + "@renren";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> tencent(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("tencent");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "腾讯|" + optString + "|" + optString2 + "@tencent";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> xigua(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("xigua");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "西瓜|" + optString + "|" + optString2 + "@xigua";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> youku(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("youku");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "优酷|" + optString + "|" + optString2 + "@youku";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
             }
-        
-            /* renamed from: c  reason: collision with other method in static class */
-            private static void m127c(File file, String str) {
-                try {
-                    FileOutputStream fileOutputStream = new FileOutputStream(file);
-                    OutputStreamWriter outputStreamWriter = new OutputStreamWriter(fileOutputStream, "UTF-8");
-                    outputStreamWriter.write(str);
-                    outputStreamWriter.close();
-                    fileOutputStream.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
+
+        }
+
+    }
+
+    static class a {
+
+        /* renamed from: com.github.catvod.spider.merge.a.c  reason: case insensitive filesystem */
+        public final /* synthetic */ static class C0575c {
+            public static String a(String str, String str2) {
+                return str + str2;
+            }
+        }
+
+        /* renamed from: com.github.catvod.spider.merge.a.ۣۧۢۡ  reason: contains not printable characters */
+        static class C0033 {
+
+            /* renamed from: ۢۤ۟ۦ  reason: not valid java name and contains not printable characters */
+            public static int f24 = 785;
+
+            /* renamed from: ۟ۡۢۥۤ  reason: not valid java name and contains not printable characters */
+            public static String m84(short[] sArr, int i, int i2, int i3) {
+                char[] cArr = new char[i2];
+                for (int i4 = 0; i4 < i2; i4++) {
+                    cArr[i4] = (char) (sArr[i + i4] ^ i3);
+                }
+                return new String(cArr);
+            }
+
+            /* renamed from: ۣ۟ۢۡ۠  reason: not valid java name and contains not printable characters */
+            public static int m85(Object obj) {
+                return obj.hashCode();
+            }
+
+            /* renamed from: ۟ۥۣۦ۠  reason: not valid java name and contains not printable characters */
+            public static int m86() {
+                return 138 ^ C0030.f23;
+            }
+
+            /* renamed from: ۧۤۧۥ  reason: not valid java name and contains not printable characters */
+            public static String m87(String str) {
+                String str2 = "";
+                String str3 = "";
+                for (int i = 0; i < 15; i++) {
+                    str2 = new StringBuffer().append(str2).append(Integer.toHexString(i)).toString();
+                    str3 = new StringBuffer().append(str3).append(((int) (Math.random() * 10)) ^ i).toString();
+                }
+                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(str.length() / 2);
+                for (int i2 = 0; i2 < str.length(); i2 += 2) {
+                    byteArrayOutputStream.write((str2.indexOf(str.charAt(i2)) << 4) | str2.indexOf(str.charAt(i2 + 1)));
+                }
+                byte[] byteArray = byteArrayOutputStream.toByteArray();
+                int length = byteArray.length;
+                int length2 = str3.length();
+                while (length > 0) {
+                    byteArray[-1] = (byte) (byteArray[-1] ^ str3.charAt((-1) % length2));
+                }
+                for (int i3 = 0; i3 < byteArray.length; i3 = "".length() + 1) {
+                }
+                return new String(byteArray);
+            }
+        }
+
+    }
+
+    static class b {
+
+        /* renamed from: com.github.catvod.spider.merge.b.h  reason: case insensitive filesystem */
+        public final /* synthetic */ static class C0588h {
+            public static String a(String str, C0596c c0596c, int i, int i2, int i3, ArrayList arrayList) {
+                c0596c.i(Integer.valueOf(str).intValue(), i, i2, i3);
+                c0596c.w(arrayList);
+                return c0596c.toString();
+            }
+
+            public static String a(String str, String str2, String str3, String str4, String str5) {
+                return str + str2 + str3 + str4 + str5;
+            }
+
+            public static String b(StringBuilder sb, String str, String str2) {
+                sb.append(str);
+                sb.append(str2);
+                return sb.toString();
+            }
+
+            public static HashMap c(String str, String str2, String str3, String str4) {
+                HashMap hashMap = new HashMap();
+                hashMap.put(str, str2);
+                hashMap.put(str3, str4);
+                return hashMap;
+            }
+        }
+
+        /* renamed from: com.github.catvod.spider.merge.b.۟ۥۧ۟۟  reason: contains not printable characters */
+        static class C0034 {
+
+            /* renamed from: ۟ۦۣۢۢ  reason: not valid java name and contains not printable characters */
+            public static int f33 = -433;
+
+            /* renamed from: ۟ۤۤۤ۟  reason: not valid java name and contains not printable characters */
+            public static String m91(short[] sArr, int i, int i2, int i3) {
+                char[] cArr = new char[i2];
+                for (int i4 = 0; i4 < i2; i4++) {
+                    cArr[i4] = (char) (sArr[i + i4] ^ i3);
+                }
+                return new String(cArr);
+            }
+
+            /* renamed from: ۠ۦۧۡ  reason: not valid java name and contains not printable characters */
+            public static int m92() {
+                return 560 ^ C0023.f16;
+            }
+
+            /* renamed from: ۡ۠ۢۦ  reason: not valid java name and contains not printable characters */
+            public static int m93(Object obj) {
+                return obj.hashCode();
+            }
+
+            /* renamed from: ۦۥ۠ۤ  reason: contains not printable characters */
+            public static String m94(String str) {
+                String str2 = "";
+                String str3 = "";
+                for (int i = 0; i < 15; i++) {
+                    str2 = new StringBuffer().append(str2).append(Integer.toHexString(i)).toString();
+                    str3 = new StringBuffer().append(str3).append(((int) (Math.random() * 10)) ^ i).toString();
+                }
+                do {
+                } while (str2.length() > 0);
+                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(str.length() / 2);
+                for (int i2 = 0; i2 < str.length(); i2 += 2) {
+                    byteArrayOutputStream.write((str2.indexOf(str.charAt(i2)) << 4) | str2.indexOf(str.charAt(i2 + 1)));
+                }
+                byte[] byteArray = byteArrayOutputStream.toByteArray();
+                int length = byteArray.length;
+                int length2 = str3.length();
+                for (int i3 = 0; i3 < length; i3++) {
+                    byteArray[i3] = (byte) (byteArray[i3] ^ str3.charAt(i3 % length2));
+                }
+                return new String(byteArray);
+            }
+        }
+
+        /* renamed from: com.github.catvod.spider.merge.b.g  reason: case insensitive filesystem */
+        public final /* synthetic */ static class RunnableC0587g implements Runnable {
+            public final /* synthetic */ int a;
+            public final /* synthetic */ Object b;
+
+            public /* synthetic */ RunnableC0587g(Object obj, int i) {
+                this.a = i;
+                this.b = obj;
+            }
+
+            @Override // java.lang.Runnable
+            public final void run() {
+                switch (this.a) {
+                    case 0:
+                        C0589i.a((C0589i) this.b);
+                        return;
+                    case 1:
+                        ((MainActivity) this.b).m();
+                        return;
+                    case 2:
+                        Config.c((Config) this.b);
+                        return;
+                    default:
+                        List<String> list = C0634I.a;
+                        Toast.makeText(Init.context(), (String) this.b, 1).show();
+                        return;
                 }
             }
         }
@@ -2741,14 +2846,12 @@ public class Danmu extends Spider {
 
     static class C {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.C.ۣ۟ۦۧ  reason: contains not printable characters */
         static class C0007 {
-        
+
             /* renamed from: ۨ۟ۤ۟  reason: not valid java name and contains not printable characters */
             public static int f6 = -970;
-        
+
             /* renamed from: ۟ۤۥۤۨ  reason: not valid java name and contains not printable characters */
             public static String m10(String str) {
                 String str2 = "";
@@ -2771,7 +2874,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۦۣۡ۠  reason: not valid java name and contains not printable characters */
             public static String m11(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -2780,12 +2883,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۟ۧ۟ۧۧ  reason: not valid java name and contains not printable characters */
             public static int m12() {
                 return 37 ^ C0011.f10;
             }
-        
+
             /* renamed from: ۣ۠ۨۢ  reason: not valid java name and contains not printable characters */
             public static int m13(Object obj) {
                 return obj.hashCode();
@@ -2794,19 +2897,17 @@ public class Danmu extends Spider {
 
     }
 
-    import java.io.ByteArrayOutputStream;
-    
     /* renamed from: com.github.catvod.spider.merge.۟ۢۧۦ  reason: contains not printable characters */
     static class C0055 {
-    
+
         /* renamed from: ۟ۤۡ۠  reason: not valid java name and contains not printable characters */
         public static int f50 = -53;
-    
+
         /* renamed from: ۟۟ۥۥۨ  reason: not valid java name and contains not printable characters */
         public static int m164(Object obj) {
             return obj.hashCode();
         }
-    
+
         /* renamed from: ۣ۟ۢۦۥ  reason: not valid java name and contains not printable characters */
         public static String m165(String str) {
             String str2 = "";
@@ -2836,7 +2937,7 @@ public class Danmu extends Spider {
             }
             return new String(byteArray);
         }
-    
+
         /* renamed from: ۟ۥۨۨۥ  reason: not valid java name and contains not printable characters */
         public static String m166(short[] sArr, int i, int i2, int i3) {
             char[] cArr = new char[i2];
@@ -2845,7 +2946,7 @@ public class Danmu extends Spider {
             }
             return new String(cArr);
         }
-    
+
         /* renamed from: ۦۦۧۡ  reason: contains not printable characters */
         public static int m167() {
             return (-160) ^ C0050.f46;
@@ -2854,19 +2955,17 @@ public class Danmu extends Spider {
 
     static class D {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.D.۟۠ۦ۟ۥ  reason: contains not printable characters */
         static class C0008 {
-        
+
             /* renamed from: ۣ۟ۧۧ  reason: not valid java name and contains not printable characters */
             public static int f7 = -897;
-        
+
             /* renamed from: ۣ۟ۢۤ۠  reason: not valid java name and contains not printable characters */
             public static int m14(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣ۟ۨۢ۠  reason: not valid java name and contains not printable characters */
             public static String m15(String str) {
                 String str2 = "";
@@ -2887,12 +2986,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣۧ۟  reason: not valid java name and contains not printable characters */
             public static int m16() {
                 return (-427) ^ C0028.f21;
             }
-        
+
             /* renamed from: ۧۥۥۨ  reason: not valid java name and contains not printable characters */
             public static String m17(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -2903,19 +3002,17 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.D.۟ۡۥۡۥ  reason: contains not printable characters */
         static class C0009 {
-        
+
             /* renamed from: ۣ۟ۢۡ۠  reason: not valid java name and contains not printable characters */
             public static int f8 = 603;
-        
+
             /* renamed from: ۟۠ۥۧۡ  reason: not valid java name and contains not printable characters */
             public static int m18() {
                 return (-371) ^ C0020.f14;
             }
-        
+
             /* renamed from: ۟ۦۦ۟۟  reason: not valid java name and contains not printable characters */
             public static String m19(String str) {
                 String str2 = "";
@@ -2945,7 +3042,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣۣۢۢ  reason: not valid java name and contains not printable characters */
             public static String m20(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -2954,7 +3051,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣۤ۠ۨ  reason: not valid java name and contains not printable characters */
             public static int m21(Object obj) {
                 return obj.hashCode();
@@ -2965,19 +3062,17 @@ public class Danmu extends Spider {
 
     static class E {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.E.ۥۨۧۧ  reason: contains not printable characters */
         static class C0010 {
-        
+
             /* renamed from: ۣۢۡۧ  reason: not valid java name and contains not printable characters */
             public static int f9 = -158;
-        
+
             /* renamed from: ۟ۧۤۦۢ  reason: not valid java name and contains not printable characters */
             public static int m22(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۟ۨ۠ۤ  reason: not valid java name and contains not printable characters */
             public static String m23(String str) {
                 String str2 = "";
@@ -3000,12 +3095,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣ۠۟۟  reason: not valid java name and contains not printable characters */
             public static int m24() {
                 return 146 ^ C0051.f47;
             }
-        
+
             /* renamed from: ۨۨۥۢ  reason: not valid java name and contains not printable characters */
             public static String m25(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3020,14 +3115,12 @@ public class Danmu extends Spider {
 
     static class G {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.G.۟۠ۡۦۡ  reason: contains not printable characters */
         static class C0011 {
-        
+
             /* renamed from: ۣۧۨۨ  reason: not valid java name and contains not printable characters */
             public static int f10 = -834;
-        
+
             /* renamed from: ۟ۦۣۧۢ  reason: not valid java name and contains not printable characters */
             public static String m27(String str) {
                 String str2 = "";
@@ -3050,17 +3143,17 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۡۦۥۤ  reason: not valid java name and contains not printable characters */
             public static int m28(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۢۡۤۤ  reason: not valid java name and contains not printable characters */
             public static int m29() {
                 return 702 ^ C0033.f24;
             }
-        
+
             /* renamed from: ۣ۟ۧۨ  reason: not valid java name and contains not printable characters */
             public static String m30(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3071,24 +3164,22 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.G.ۥۧۡۢ  reason: contains not printable characters */
         static class C0012 {
-        
+
             /* renamed from: ۟ۦ۟ۢۥ  reason: not valid java name and contains not printable characters */
             public static int f11 = 381;
-        
+
             /* renamed from: ۣ۟۟ۡۦ  reason: not valid java name and contains not printable characters */
             public static int m31(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۥۦۡۦ  reason: contains not printable characters */
             public static int m32() {
                 return 888 ^ C0033.f24;
             }
-        
+
             /* renamed from: ۦ۟ۥ۠  reason: contains not printable characters */
             public static String m33(String str) {
                 String str2 = "";
@@ -3111,7 +3202,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۦۥۥۨ  reason: contains not printable characters */
             public static String m34(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3126,19 +3217,17 @@ public class Danmu extends Spider {
 
     static class H {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.H.۟ۧۥ۠ۡ  reason: contains not printable characters */
         static class C0015 {
-        
+
             /* renamed from: ۟ۥۤۧۤ  reason: not valid java name and contains not printable characters */
             public static int f12 = 846;
-        
+
             /* renamed from: ۡۢۡۡ  reason: not valid java name and contains not printable characters */
             public static int m35(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۤۦۦ  reason: not valid java name and contains not printable characters */
             public static String m36(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3147,7 +3236,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۤۦۦۦ  reason: not valid java name and contains not printable characters */
             public static String m37(String str) {
                 String str2 = "";
@@ -3177,7 +3266,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۥۡ۠۟  reason: contains not printable characters */
             public static int m38() {
                 return 464 ^ C0030.f23;
@@ -3188,14 +3277,12 @@ public class Danmu extends Spider {
 
     static class I {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.I.ۦۡ۟  reason: contains not printable characters */
         static class C0019 {
-        
+
             /* renamed from: ۣ۟ۥ۟ۥ  reason: not valid java name and contains not printable characters */
             public static int f13 = 827;
-        
+
             /* renamed from: ۣ۟ۡۢۢ  reason: not valid java name and contains not printable characters */
             public static String m39(String str) {
                 String str2 = "";
@@ -3225,12 +3312,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۤۨۢ۠  reason: not valid java name and contains not printable characters */
             public static int m40(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۨ۟۟ۢ  reason: not valid java name and contains not printable characters */
             public static String m41(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3239,7 +3326,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۨۥۣۡ  reason: not valid java name and contains not printable characters */
             public static int m42() {
                 return (-182) ^ C0009.f8;
@@ -3250,24 +3337,22 @@ public class Danmu extends Spider {
 
     static class J {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.J.۟ۡۥۥ۠  reason: contains not printable characters */
         static class C0020 {
-        
+
             /* renamed from: ۢۢۨۥ  reason: not valid java name and contains not printable characters */
             public static int f14 = -507;
-        
+
             /* renamed from: ۣ۟ۢۧۥ  reason: not valid java name and contains not printable characters */
             public static int m43() {
                 return (-399) ^ C0030.f23;
             }
-        
+
             /* renamed from: ۣ۟ۧۡۢ  reason: not valid java name and contains not printable characters */
             public static int m44(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۢۦۣۡ  reason: not valid java name and contains not printable characters */
             public static String m45(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3276,7 +3361,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۦۦۡۦ  reason: contains not printable characters */
             public static String m46(String str) {
                 String str2 = "";
@@ -3299,19 +3384,17 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.J.ۦۡۡۥ  reason: contains not printable characters */
         static class C0021 {
-        
+
             /* renamed from: ۟ۡ۟ۦۧ  reason: not valid java name and contains not printable characters */
             public static int f15 = -778;
-        
+
             /* renamed from: ۟ۦۥۧ  reason: not valid java name and contains not printable characters */
             public static int m47() {
                 return 672 ^ C0023.f16;
             }
-        
+
             /* renamed from: ۟ۦۨ۟ۦ  reason: not valid java name and contains not printable characters */
             public static String m48(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3320,12 +3403,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۢۤۨ۟  reason: not valid java name and contains not printable characters */
             public static int m49(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣ۠ۥ۟  reason: not valid java name and contains not printable characters */
             public static String m50(String str) {
                 String str2 = "";
@@ -3354,14 +3437,12 @@ public class Danmu extends Spider {
 
     static class M {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.M.۟۟ۤۧ۠  reason: contains not printable characters */
         static class C0023 {
-        
+
             /* renamed from: ۣۡۤۡ  reason: not valid java name and contains not printable characters */
             public static int f16 = -445;
-        
+
             /* renamed from: ۟ۥۥۥ  reason: not valid java name and contains not printable characters */
             public static String m51(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3370,12 +3451,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣ۟ۧۢۦ  reason: not valid java name and contains not printable characters */
             public static int m52() {
                 return 408 ^ C0041.f37;
             }
-        
+
             /* renamed from: ۡۢۤۤ  reason: not valid java name and contains not printable characters */
             public static String m53(String str) {
                 String str2 = "";
@@ -3398,7 +3479,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۨۤ  reason: not valid java name and contains not printable characters */
             public static int m54(Object obj) {
                 return obj.hashCode();
@@ -3409,14 +3490,12 @@ public class Danmu extends Spider {
 
     static class O {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.O.۟ۤۥۡ  reason: contains not printable characters */
         static class C0024 {
-        
+
             /* renamed from: ۟ۥۣۧۦ  reason: not valid java name and contains not printable characters */
             public static int f17 = -964;
-        
+
             /* renamed from: ۟ۢۢۥ  reason: not valid java name and contains not printable characters */
             public static String m55(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3425,7 +3504,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣ۟ۤ۟۟  reason: not valid java name and contains not printable characters */
             public static String m56(String str) {
                 String str2 = "";
@@ -3455,36 +3534,34 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۨ۠ۨ  reason: not valid java name and contains not printable characters */
             public static int m57() {
                 return (-573) ^ C0055.f50;
             }
-        
+
             /* renamed from: ۤۢۨۨ  reason: not valid java name and contains not printable characters */
             public static int m58(Object obj) {
                 return obj.hashCode();
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.O.۟ۦۨ۟ۢ  reason: contains not printable characters */
         static class C0025 {
-        
+
             /* renamed from: ۟ۥۣۡۧ  reason: not valid java name and contains not printable characters */
             public static int f18 = 128;
-        
+
             /* renamed from: ۡۤۦۣ  reason: not valid java name and contains not printable characters */
             public static int m59() {
                 return 614 ^ C0015.f12;
             }
-        
+
             /* renamed from: ۣۧۤۡ  reason: not valid java name and contains not printable characters */
             public static int m60(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۨ۟۟ۡ  reason: not valid java name and contains not printable characters */
             public static String m61(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3493,7 +3570,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣۨ۠ۡ  reason: not valid java name and contains not printable characters */
             public static String m62(String str) {
                 String str2 = "";
@@ -3522,19 +3599,17 @@ public class Danmu extends Spider {
 
     static class P {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.P.۟ۦۧۤۢ  reason: contains not printable characters */
         static class C0026 {
-        
+
             /* renamed from: ۟ۤۦۥ  reason: not valid java name and contains not printable characters */
             public static int f19 = 882;
-        
+
             /* renamed from: ۟۠ۤۦۢ  reason: not valid java name and contains not printable characters */
             public static int m63(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۟ۤۥۥۦ  reason: not valid java name and contains not printable characters */
             public static String m64(String str) {
                 String str2 = "";
@@ -3564,7 +3639,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣۥۧۤ  reason: not valid java name and contains not printable characters */
             public static String m65(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3573,7 +3648,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۨۦ  reason: not valid java name and contains not printable characters */
             public static int m66() {
                 return (-516) ^ C0049.f45;
@@ -3584,24 +3659,22 @@ public class Danmu extends Spider {
 
     static class Q {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.Q.۟ۢۤ۟  reason: contains not printable characters */
         static class C0027 {
-        
+
             /* renamed from: ۟ۧ۟۟۟  reason: not valid java name and contains not printable characters */
             public static int f20 = -903;
-        
+
             /* renamed from: ۟ۧۦۤ۠  reason: not valid java name and contains not printable characters */
             public static int m67(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۟ۨ۠ۢ  reason: not valid java name and contains not printable characters */
             public static int m68() {
                 return 768 ^ C0051.f47;
             }
-        
+
             /* renamed from: ۦ۟ۧۨ  reason: contains not printable characters */
             public static String m69(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3610,7 +3683,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۦ۟ۨۥ  reason: contains not printable characters */
             public static String m70(String str) {
                 String str2 = "";
@@ -3633,19 +3706,17 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.Q.ۦۨۥۤ  reason: contains not printable characters */
         static class C0028 {
-        
+
             /* renamed from: ۣ۠ۤۡ  reason: not valid java name and contains not printable characters */
             public static int f21 = 725;
-        
+
             /* renamed from: ۣ۟۟ۦۨ  reason: not valid java name and contains not printable characters */
             public static int m71(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۟ۤۥۧۡ  reason: not valid java name and contains not printable characters */
             public static String m72(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3654,7 +3725,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۟ۥۧۤۢ  reason: not valid java name and contains not printable characters */
             public static String m73(String str) {
                 String str2 = "";
@@ -3677,7 +3748,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۤۢ۠ۤ  reason: not valid java name and contains not printable characters */
             public static int m74() {
                 return (-72) ^ C0041.f37;
@@ -3688,14 +3759,12 @@ public class Danmu extends Spider {
 
     static class T {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.T.ۣۣۥۢ  reason: contains not printable characters */
         static class C0029 {
-        
+
             /* renamed from: ۤۥۣۣ  reason: not valid java name and contains not printable characters */
             public static int f22 = 559;
-        
+
             /* renamed from: ۣ۟۟ۤ۟  reason: not valid java name and contains not printable characters */
             public static String m75(String str) {
                 String str2 = "";
@@ -3718,7 +3787,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۧۢ۠ۥ  reason: not valid java name and contains not printable characters */
             public static String m76(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3727,12 +3796,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۠ۡۡۧ  reason: not valid java name and contains not printable characters */
             public static int m77(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۦۨ۟  reason: contains not printable characters */
             public static int m78() {
                 return (-916) ^ C0049.f45;
@@ -3743,14 +3812,12 @@ public class Danmu extends Spider {
 
     static class U {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.U.۟ۢۦۥۧ  reason: contains not printable characters */
         static class C0030 {
-        
+
             /* renamed from: ۟ۥ۠ۢۡ  reason: not valid java name and contains not printable characters */
             public static int f23 = -588;
-        
+
             /* renamed from: ۟ۢۦۨۥ  reason: not valid java name and contains not printable characters */
             public static String m79(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -3759,12 +3826,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۟ۥۦۤ۟  reason: not valid java name and contains not printable characters */
             public static int m80(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۢۡۤ  reason: not valid java name and contains not printable characters */
             public static String m81(String str) {
                 String str2 = "";
@@ -3787,7 +3854,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣۧۧۤ  reason: not valid java name and contains not printable characters */
             public static int m82() {
                 return (-30) ^ f23;
@@ -3796,199 +3863,14 @@ public class Danmu extends Spider {
 
     }
 
-    static class a {
-
-        import java.io.ByteArrayOutputStream;
-        
-        /* renamed from: com.github.catvod.spider.merge.a.ۣۧۢۡ  reason: contains not printable characters */
-        static class C0033 {
-        
-            /* renamed from: ۢۤ۟ۦ  reason: not valid java name and contains not printable characters */
-            public static int f24 = 785;
-        
-            /* renamed from: ۟ۡۢۥۤ  reason: not valid java name and contains not printable characters */
-            public static String m84(short[] sArr, int i, int i2, int i3) {
-                char[] cArr = new char[i2];
-                for (int i4 = 0; i4 < i2; i4++) {
-                    cArr[i4] = (char) (sArr[i + i4] ^ i3);
-                }
-                return new String(cArr);
-            }
-        
-            /* renamed from: ۣ۟ۢۡ۠  reason: not valid java name and contains not printable characters */
-            public static int m85(Object obj) {
-                return obj.hashCode();
-            }
-        
-            /* renamed from: ۟ۥۣۦ۠  reason: not valid java name and contains not printable characters */
-            public static int m86() {
-                return 138 ^ C0030.f23;
-            }
-        
-            /* renamed from: ۧۤۧۥ  reason: not valid java name and contains not printable characters */
-            public static String m87(String str) {
-                String str2 = "";
-                String str3 = "";
-                for (int i = 0; i < 15; i++) {
-                    str2 = new StringBuffer().append(str2).append(Integer.toHexString(i)).toString();
-                    str3 = new StringBuffer().append(str3).append(((int) (Math.random() * 10)) ^ i).toString();
-                }
-                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(str.length() / 2);
-                for (int i2 = 0; i2 < str.length(); i2 += 2) {
-                    byteArrayOutputStream.write((str2.indexOf(str.charAt(i2)) << 4) | str2.indexOf(str.charAt(i2 + 1)));
-                }
-                byte[] byteArray = byteArrayOutputStream.toByteArray();
-                int length = byteArray.length;
-                int length2 = str3.length();
-                while (length > 0) {
-                    byteArray[-1] = (byte) (byteArray[-1] ^ str3.charAt((-1) % length2));
-                }
-                for (int i3 = 0; i3 < byteArray.length; i3 = "".length() + 1) {
-                }
-                return new String(byteArray);
-            }
-        }
-
-        /* renamed from: com.github.catvod.spider.merge.a.c  reason: case insensitive filesystem */
-        public final /* synthetic */ static class C0575c {
-            public static String a(String str, String str2) {
-                return str + str2;
-            }
-        }
-
-    }
-
-    static class b {
-
-        import java.io.ByteArrayOutputStream;
-        
-        /* renamed from: com.github.catvod.spider.merge.b.۟ۥۧ۟۟  reason: contains not printable characters */
-        static class C0034 {
-        
-            /* renamed from: ۟ۦۣۢۢ  reason: not valid java name and contains not printable characters */
-            public static int f33 = -433;
-        
-            /* renamed from: ۟ۤۤۤ۟  reason: not valid java name and contains not printable characters */
-            public static String m91(short[] sArr, int i, int i2, int i3) {
-                char[] cArr = new char[i2];
-                for (int i4 = 0; i4 < i2; i4++) {
-                    cArr[i4] = (char) (sArr[i + i4] ^ i3);
-                }
-                return new String(cArr);
-            }
-        
-            /* renamed from: ۠ۦۧۡ  reason: not valid java name and contains not printable characters */
-            public static int m92() {
-                return 560 ^ C0023.f16;
-            }
-        
-            /* renamed from: ۡ۠ۢۦ  reason: not valid java name and contains not printable characters */
-            public static int m93(Object obj) {
-                return obj.hashCode();
-            }
-        
-            /* renamed from: ۦۥ۠ۤ  reason: contains not printable characters */
-            public static String m94(String str) {
-                String str2 = "";
-                String str3 = "";
-                for (int i = 0; i < 15; i++) {
-                    str2 = new StringBuffer().append(str2).append(Integer.toHexString(i)).toString();
-                    str3 = new StringBuffer().append(str3).append(((int) (Math.random() * 10)) ^ i).toString();
-                }
-                do {
-                } while (str2.length() > 0);
-                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(str.length() / 2);
-                for (int i2 = 0; i2 < str.length(); i2 += 2) {
-                    byteArrayOutputStream.write((str2.indexOf(str.charAt(i2)) << 4) | str2.indexOf(str.charAt(i2 + 1)));
-                }
-                byte[] byteArray = byteArrayOutputStream.toByteArray();
-                int length = byteArray.length;
-                int length2 = str3.length();
-                for (int i3 = 0; i3 < length; i3++) {
-                    byteArray[i3] = (byte) (byteArray[i3] ^ str3.charAt(i3 % length2));
-                }
-                return new String(byteArray);
-            }
-        }
-
-        import android.widget.Toast;
-        import com.github.catvod.debug.MainActivity;
-        import com.github.catvod.spider.Config;
-        import com.github.catvod.spider.Init;
-        
-        import java.util.List;
-        
-        /* renamed from: com.github.catvod.spider.merge.b.g  reason: case insensitive filesystem */
-        public final /* synthetic */ static class RunnableC0587g implements Runnable {
-            public final /* synthetic */ int a;
-            public final /* synthetic */ Object b;
-        
-            public /* synthetic */ RunnableC0587g(Object obj, int i) {
-                this.a = i;
-                this.b = obj;
-            }
-        
-            @Override // java.lang.Runnable
-            public final void run() {
-                switch (this.a) {
-                    case 0:
-                        C0589i.a((C0589i) this.b);
-                        return;
-                    case 1:
-                        ((MainActivity) this.b).m();
-                        return;
-                    case 2:
-                        Config.c((Config) this.b);
-                        return;
-                    default:
-                        List<String> list = C0634I.a;
-                        Toast.makeText(Init.context(), (String) this.b, 1).show();
-                        return;
-                }
-            }
-        }
-
-        import java.util.ArrayList;
-        import java.util.HashMap;
-        
-        /* renamed from: com.github.catvod.spider.merge.b.h  reason: case insensitive filesystem */
-        public final /* synthetic */ static class C0588h {
-            public static String a(String str, C0596c c0596c, int i, int i2, int i3, ArrayList arrayList) {
-                c0596c.i(Integer.valueOf(str).intValue(), i, i2, i3);
-                c0596c.w(arrayList);
-                return c0596c.toString();
-            }
-        
-            public static String a(String str, String str2, String str3, String str4, String str5) {
-                return str + str2 + str3 + str4 + str5;
-            }
-        
-            public static String b(StringBuilder sb, String str, String str2) {
-                sb.append(str);
-                sb.append(str2);
-                return sb.toString();
-            }
-        
-            public static HashMap c(String str, String str2, String str3, String str4) {
-                HashMap hashMap = new HashMap();
-                hashMap.put(str, str2);
-                hashMap.put(str3, str4);
-                return hashMap;
-            }
-        }
-
-    }
-
     static class f {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.f.ۨۥ۟۠  reason: contains not printable characters */
         static class C0037 {
-        
+
             /* renamed from: ۟۠ۧ۠ۧ  reason: not valid java name and contains not printable characters */
             public static int f34 = -121;
-        
+
             /* renamed from: ۟۠ۦۦۣ  reason: not valid java name and contains not printable characters */
             public static String m98(String str) {
                 String str2 = "";
@@ -4018,12 +3900,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۡۥۧ۠  reason: not valid java name and contains not printable characters */
             public static int m99(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۦۤۦۡ  reason: contains not printable characters */
             public static String m100(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4032,7 +3914,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۦۨ۟ۦ  reason: contains not printable characters */
             public static int m101() {
                 return (-386) ^ C0043.f39;
@@ -4043,24 +3925,22 @@ public class Danmu extends Spider {
 
     static class h {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.h.۟ۦ۠۠ۤ  reason: contains not printable characters */
         static class C0038 {
-        
+
             /* renamed from: ۦۤۤۦ  reason: contains not printable characters */
             public static int f35 = 711;
-        
+
             /* renamed from: ۣ۟ۢ۟۟  reason: not valid java name and contains not printable characters */
             public static int m102() {
                 return 1021 ^ C0020.f14;
             }
-        
+
             /* renamed from: ۣ۟ۢ  reason: not valid java name and contains not printable characters */
             public static int m103(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۣ۟ۤۡ  reason: not valid java name and contains not printable characters */
             public static String m104(String str) {
                 String str2 = "";
@@ -4083,7 +3963,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣ۟ۥ۠ۦ  reason: not valid java name and contains not printable characters */
             public static String m105(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4094,19 +3974,17 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.h.۟ۦۣۧ۟  reason: contains not printable characters */
         static class C0039 {
-        
+
             /* renamed from: ۥ۠ۦۦ  reason: contains not printable characters */
             public static int f36 = 842;
-        
+
             /* renamed from: ۟ۢۦۦ  reason: not valid java name and contains not printable characters */
             public static int m106(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣ۟۠ۥ۟  reason: not valid java name and contains not printable characters */
             public static String m107(String str) {
                 String str2 = "";
@@ -4129,7 +4007,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۣ۟ۤۡ۟  reason: not valid java name and contains not printable characters */
             public static String m108(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4138,7 +4016,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣ۠ۧۢ  reason: not valid java name and contains not printable characters */
             public static int m109() {
                 return (-659) ^ C0044.f41;
@@ -4149,14 +4027,12 @@ public class Danmu extends Spider {
 
     static class i {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.i.ۣۣ۟ۤ  reason: contains not printable characters */
         static class C0041 {
-        
+
             /* renamed from: ۟ۢۤۢ  reason: not valid java name and contains not printable characters */
             public static int f37 = -403;
-        
+
             /* renamed from: ۟ۡۤ۟ۧ  reason: not valid java name and contains not printable characters */
             public static String m110(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4165,17 +4041,17 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۟ۡۨ۠ۢ  reason: not valid java name and contains not printable characters */
             public static int m111() {
                 return 470 ^ C0038.f35;
             }
-        
+
             /* renamed from: ۣ۟ۤۨۦ  reason: not valid java name and contains not printable characters */
             public static int m112(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۨ۠  reason: not valid java name and contains not printable characters */
             public static String m113(String str) {
                 String str2 = "";
@@ -4204,24 +4080,22 @@ public class Danmu extends Spider {
 
     static class j {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.j.ۣ۟۟ۢۢ  reason: contains not printable characters */
         static class C0042 {
-        
+
             /* renamed from: ۦۥۤۧ  reason: contains not printable characters */
             public static int f38 = -376;
-        
+
             /* renamed from: ۟ۢۢۧۦ  reason: not valid java name and contains not printable characters */
             public static int m114() {
                 return (-717) ^ C0044.f41;
             }
-        
+
             /* renamed from: ۟ۤۤۧ  reason: not valid java name and contains not printable characters */
             public static int m115(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۢۧۥ۠  reason: not valid java name and contains not printable characters */
             public static String m116(String str) {
                 String str2 = "";
@@ -4251,7 +4125,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۨۦۢ۟  reason: not valid java name and contains not printable characters */
             public static String m117(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4266,14 +4140,12 @@ public class Danmu extends Spider {
 
     static class l {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.l.۟ۡۦۧۨ  reason: contains not printable characters */
         static class C0043 {
-        
+
             /* renamed from: ۟ۤۨۥ  reason: not valid java name and contains not printable characters */
             public static int f39 = 528;
-        
+
             /* renamed from: ۣ۟ۥۦۡ  reason: not valid java name and contains not printable characters */
             public static String m118(String str) {
                 String str2 = "";
@@ -4296,12 +4168,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۡۤۥۣ  reason: not valid java name and contains not printable characters */
             public static int m119(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۤۨ۠ۧ  reason: not valid java name and contains not printable characters */
             public static String m120(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4310,7 +4182,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۥۣۢ۟  reason: contains not printable characters */
             public static int m121() {
                 return 7 ^ C0023.f16;
@@ -4321,14 +4193,12 @@ public class Danmu extends Spider {
 
     static class q {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.q.۟ۥۥۢ۠  reason: contains not printable characters */
         static class C0044 {
-        
+
             /* renamed from: ۣۣ۟ۢۧ  reason: not valid java name and contains not printable characters */
             public static int f41 = -566;
-        
+
             /* renamed from: ۡۢ۠ۤ  reason: not valid java name and contains not printable characters */
             public static String m128(String str) {
                 String str2 = "";
@@ -4351,12 +4221,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۥۣ۟  reason: contains not printable characters */
             public static int m129(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۥۨۨ  reason: contains not printable characters */
             public static String m130(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4365,31 +4235,29 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۧ۠ۦۡ  reason: not valid java name and contains not printable characters */
             public static int m131() {
                 return (-968) ^ C0030.f23;
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.q.ۥۧۦ۠  reason: contains not printable characters */
         static class C0045 {
-        
+
             /* renamed from: ۣۧۢ۠  reason: not valid java name and contains not printable characters */
             public static int f42 = 116;
-        
+
             /* renamed from: ۣ۟ۡۡ۠  reason: not valid java name and contains not printable characters */
             public static int m132() {
                 return (-110) ^ C0023.f16;
             }
-        
+
             /* renamed from: ۟ۦۦ۟ۤ  reason: not valid java name and contains not printable characters */
             public static int m133(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۦۦۡ  reason: contains not printable characters */
             public static String m134(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4398,7 +4266,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۧۢ۠ۥ  reason: not valid java name and contains not printable characters */
             public static String m135(String str) {
                 String str2 = "";
@@ -4427,19 +4295,17 @@ public class Danmu extends Spider {
 
     static class t {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.t.ۣ۟ۤۤۤ  reason: contains not printable characters */
         static class C0046 {
-        
+
             /* renamed from: ۤ۟ۥۤ  reason: not valid java name and contains not printable characters */
             public static int f43 = 691;
-        
+
             /* renamed from: ۣ۟ۨۦۨ  reason: not valid java name and contains not printable characters */
             public static int m136(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣ۟ۧۡۤ  reason: not valid java name and contains not printable characters */
             public static String m137(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4448,7 +4314,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣۢۦۣ  reason: not valid java name and contains not printable characters */
             public static String m138(String str) {
                 String str2 = "";
@@ -4471,7 +4337,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۥۣ۟ۡ  reason: contains not printable characters */
             public static int m139() {
                 return 770 ^ C0023.f16;
@@ -4482,14 +4348,12 @@ public class Danmu extends Spider {
 
     static class u {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.u.ۣۣۣ۟ۧ  reason: contains not printable characters */
         static class C0048 {
-        
+
             /* renamed from: ۣ۟ۤۨۨ  reason: not valid java name and contains not printable characters */
             public static int f44 = 150;
-        
+
             /* renamed from: ۟ۧۡۤ۟  reason: not valid java name and contains not printable characters */
             public static String m140(String str) {
                 String str2 = "";
@@ -4512,12 +4376,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۡ۟ۡ۠  reason: not valid java name and contains not printable characters */
             public static int m141(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۢ۟ۤ  reason: not valid java name and contains not printable characters */
             public static String m142(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4526,7 +4390,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۧۧ۟  reason: not valid java name and contains not printable characters */
             public static int m143() {
                 return (-236) ^ C0028.f21;
@@ -4537,14 +4401,12 @@ public class Danmu extends Spider {
 
     static class w {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.w.۟ۢۥۤۢ  reason: contains not printable characters */
         static class C0049 {
-        
+
             /* renamed from: ۥۣۦ۟  reason: contains not printable characters */
             public static int f45 = -431;
-        
+
             /* renamed from: ۟۠ۡۧ۠  reason: not valid java name and contains not printable characters */
             public static String m144(String str) {
                 String str2 = "";
@@ -4574,7 +4436,7 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟۠ۥۦ۠  reason: not valid java name and contains not printable characters */
             public static String m145(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4583,12 +4445,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۣ۟ۡۡۦ  reason: not valid java name and contains not printable characters */
             public static int m146() {
                 return (-590) ^ C0015.f12;
             }
-        
+
             /* renamed from: ۣۡۡۢ  reason: not valid java name and contains not printable characters */
             public static int m147(Object obj) {
                 return obj.hashCode();
@@ -4599,19 +4461,17 @@ public class Danmu extends Spider {
 
     static class x {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.x.ۤۤ۟ۨ  reason: contains not printable characters */
         static class C0050 {
-        
+
             /* renamed from: ۟ۡۢۡ۠  reason: not valid java name and contains not printable characters */
             public static int f46 = -324;
-        
+
             /* renamed from: ۟۟۠ۢۧ  reason: not valid java name and contains not printable characters */
             public static int m148() {
                 return 592 ^ C0010.f9;
             }
-        
+
             /* renamed from: ۟ۧۦۦۧ  reason: not valid java name and contains not printable characters */
             public static String m149(String str) {
                 String str2 = "";
@@ -4634,12 +4494,12 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۠ۧۥۣ  reason: not valid java name and contains not printable characters */
             public static int m150(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۣۤۨ  reason: not valid java name and contains not printable characters */
             public static String m151(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4650,19 +4510,17 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.x.ۥۨۨۤ  reason: contains not printable characters */
         static class C0051 {
-        
+
             /* renamed from: ۣۣ۟ۧۧ  reason: not valid java name and contains not printable characters */
             public static int f47 = 724;
-        
+
             /* renamed from: ۟۟ۢۤ  reason: not valid java name and contains not printable characters */
             public static int m152(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۟ۤ۠ۨ  reason: not valid java name and contains not printable characters */
             public static String m153(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4671,12 +4529,12 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۟ۤۦۤۨ  reason: not valid java name and contains not printable characters */
             public static int m154() {
                 return 347 ^ C0038.f35;
             }
-        
+
             /* renamed from: ۟ۦۦۣۨ  reason: not valid java name and contains not printable characters */
             public static String m155(String str) {
                 String str2 = "";
@@ -4705,14 +4563,12 @@ public class Danmu extends Spider {
 
     static class z {
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.z.۟ۦۢۢۦ  reason: contains not printable characters */
         static class C0053 {
-        
+
             /* renamed from: ۟۟ۥۢۤ  reason: not valid java name and contains not printable characters */
             public static int f48 = 611;
-        
+
             /* renamed from: ۣ۟ۨۡۤ  reason: not valid java name and contains not printable characters */
             public static String m156(String str) {
                 String str2 = "";
@@ -4742,17 +4598,17 @@ public class Danmu extends Spider {
                 }
                 return new String(byteArray);
             }
-        
+
             /* renamed from: ۟ۤۤۧۦ  reason: not valid java name and contains not printable characters */
             public static int m157(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۢ۠ۤ  reason: not valid java name and contains not printable characters */
             public static int m158() {
                 return (-942) ^ C0042.f38;
             }
-        
+
             /* renamed from: ۦۢۨ  reason: contains not printable characters */
             public static String m159(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4763,24 +4619,22 @@ public class Danmu extends Spider {
             }
         }
 
-        import java.io.ByteArrayOutputStream;
-        
         /* renamed from: com.github.catvod.spider.merge.z.ۨۧۢ۟  reason: contains not printable characters */
         static class C0054 {
-        
+
             /* renamed from: ۣ۟ۧۥ  reason: not valid java name and contains not printable characters */
             public static int f49 = 627;
-        
+
             /* renamed from: ۣۣ۟ۧ۟  reason: not valid java name and contains not printable characters */
             public static int m160() {
                 return 538 ^ C0020.f14;
             }
-        
+
             /* renamed from: ۣۤۥۧ  reason: not valid java name and contains not printable characters */
             public static int m161(Object obj) {
                 return obj.hashCode();
             }
-        
+
             /* renamed from: ۣۧ۠ۤ  reason: not valid java name and contains not printable characters */
             public static String m162(short[] sArr, int i, int i2, int i3) {
                 char[] cArr = new char[i2];
@@ -4789,7 +4643,7 @@ public class Danmu extends Spider {
                 }
                 return new String(cArr);
             }
-        
+
             /* renamed from: ۦۦۦۧ  reason: contains not printable characters */
             public static String m163(String str) {
                 String str2 = "";
@@ -4818,17 +4672,6 @@ public class Danmu extends Spider {
 
     static class c {
 
-        import com.google.gson.Gson;
-        import com.google.gson.annotations.SerializedName;
-        import com.google.gson.reflect.TypeToken;
-        import java.util.ArrayList;
-        import java.util.Arrays;
-        import java.util.Collections;
-        import java.util.LinkedHashMap;
-        import java.util.List;
-        import java.util.Map;
-        import org.json.JSONObject;
-        
         /* renamed from: com.github.catvod.spider.merge.c.c  reason: case insensitive filesystem */
         public final static class C0596c {
             @SerializedName("static class")
@@ -4863,7 +4706,7 @@ public class Danmu extends Spider {
             private String o;
             @SerializedName("errMsg")
             private String p;
-        
+
             /* JADX INFO: Access modifiers changed from: package-private */
             /* renamed from: com.github.catvod.spider.merge.c.c$a */
             /* loaded from: classes.dex */
@@ -4871,18 +4714,18 @@ public class Danmu extends Spider {
                 a() {
                 }
             }
-        
+
             public static String c(String str) {
                 C0596c c0596c = new C0596c();
                 c0596c.b = Collections.emptyList();
                 c0596c.o = str;
                 return c0596c.toString();
             }
-        
+
             public static C0596c e() {
                 return new C0596c();
             }
-        
+
             public static String l(String str) {
                 C0596c c0596c = new C0596c();
                 c0596c.i = 0;
@@ -4891,20 +4734,20 @@ public class Danmu extends Spider {
                 c0596c.p = str;
                 return c0596c.toString();
             }
-        
+
             public static String m(C0598e c0598e) {
                 C0596c c0596c = new C0596c();
                 c0596c.b = Arrays.asList(c0598e);
                 return c0596c.toString();
             }
-        
+
             public static String m(Integer num, Integer num2, Integer num3, Integer num4, List list) {
                 C0596c c0596c = new C0596c();
                 c0596c.m96i(num.intValue(), num2.intValue(), num3.intValue(), num4.intValue());
                 c0596c.b = list;
                 return c0596c.toString();
             }
-        
+
             public static String n(String str) {
                 try {
                     JSONObject jSONObject = new JSONObject();
@@ -4917,27 +4760,27 @@ public class Danmu extends Spider {
                     return str;
                 }
             }
-        
+
             public static String n(List<C0598e> list) {
                 C0596c c0596c = new C0596c();
                 c0596c.b = list;
                 return c0596c.toString();
             }
-        
+
             public static String o(List<C0594a> list, LinkedHashMap<String, List<C0595b>> linkedHashMap) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = list;
                 c0596c.c = linkedHashMap;
                 return c0596c.toString();
             }
-        
+
             public static String p(List<C0594a> list, List<C0598e> list2) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = list;
                 c0596c.b = list2;
                 return c0596c.toString();
             }
-        
+
             public static String q(ArrayList arrayList, List list, LinkedHashMap linkedHashMap) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = arrayList;
@@ -4945,7 +4788,7 @@ public class Danmu extends Spider {
                 c0596c.c = linkedHashMap;
                 return c0596c.toString();
             }
-        
+
             public static String q(List<C0594a> list, List<C0598e> list2, LinkedHashMap<String, List<C0595b>> linkedHashMap) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = list;
@@ -4953,7 +4796,7 @@ public class Danmu extends Spider {
                 c0596c.c = linkedHashMap;
                 return c0596c.toString();
             }
-        
+
             public static String r(List<C0594a> list, List<C0598e> list2, JSONObject jSONObject) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = list;
@@ -4961,24 +4804,24 @@ public class Danmu extends Spider {
                 c0596c.d(jSONObject);
                 return c0596c.toString();
             }
-        
+
             public static String s(List<C0594a> list, JSONObject jSONObject) {
                 C0596c c0596c = new C0596c();
                 c0596c.a = list;
                 c0596c.d(jSONObject);
                 return c0596c.toString();
             }
-        
+
             public final C0596c a(String str) {
                 this.f = str;
                 return this;
             }
-        
+
             public final C0596c b() {
                 this.e = "application/dash+xml";
                 return this;
             }
-        
+
             public final C0596c d(JSONObject jSONObject) {
                 if (jSONObject == null) {
                     return this;
@@ -4986,7 +4829,7 @@ public class Danmu extends Spider {
                 this.c = (LinkedHashMap) new Gson().fromJson(jSONObject.toString(), new a().getType());
                 return this;
             }
-        
+
             public final C0596c e(Map<String, String> map) {
                 if (map.isEmpty()) {
                     return this;
@@ -4994,7 +4837,7 @@ public class Danmu extends Spider {
                 this.d = new Gson().toJson(map);
                 return this;
             }
-        
+
             /* renamed from: e  reason: collision with other method in static class */
             public final void m95e(Map map) {
                 if (map.isEmpty()) {
@@ -5002,27 +4845,27 @@ public class Danmu extends Spider {
                 }
                 this.d = new Gson().toJson(map);
             }
-        
+
             public final C0596c f() {
                 this.j = 1;
                 return this;
             }
-        
+
             public final C0596c g() {
                 this.e = "application/x-mpegURL";
                 return this;
             }
-        
+
             public final C0596c h() {
                 this.e = "application/octet-stream";
                 return this;
             }
-        
+
             public final C0596c hh() {
                 this.e = "video/x-iso";
                 return this;
             }
-        
+
             public final C0596c i(int i, int i2, int i3, int i4) {
                 if (i <= 0) {
                     i = Integer.MAX_VALUE;
@@ -5042,7 +4885,7 @@ public class Danmu extends Spider {
                 this.l = Integer.valueOf(i2);
                 return this;
             }
-        
+
             /* renamed from: i  reason: collision with other method in static class */
             public final void m96i(int i, int i2, int i3, int i4) {
                 if (i <= 0) {
@@ -5062,53 +4905,54 @@ public class Danmu extends Spider {
                 }
                 this.l = Integer.valueOf(i2);
             }
-        
+
             public final C0596c j() {
                 this.i = 1;
                 return this;
             }
-        
+
             public final C0596c k(int i) {
                 this.i = i;
                 return this;
             }
-        
+
             public final String o() {
                 return toString();
             }
-        
+
             public final C0596c t(List<C0597d> list) {
                 this.h = list;
                 return this;
             }
-        
+
             public final String toString() {
                 return new Gson().newBuilder().disableHtmlEscaping().create().toJson(this);
             }
-        
+
             public final C0596c u(String str) {
                 this.g = str;
                 return this;
             }
-        
+
             public final C0596c v(List<String> list) {
                 this.g = list;
                 return this;
             }
-        
+
             public final C0596c w(List<C0598e> list) {
                 this.b = list;
                 return this;
             }
-        
+
             public final void w(String str) {
                 this.g = str;
             }
-        
+
             public final void y(ArrayList arrayList) {
                 this.b = arrayList;
             }
         }
 
     }
+
 }
