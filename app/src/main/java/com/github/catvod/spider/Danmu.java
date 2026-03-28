@@ -1,4 +1,5 @@
 package com.github.catvod.spider;
+
 import android.app.Application;
 import android.content.SharedPreferences;
 import android.os.Environment;
@@ -72,7 +73,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-static class Danmu extends Spider {
+
+public class Danmu extends Spider {
     public static Object[] AppDanmu(Map<String, String> map) {
         SpiderDebug.log("开始获取弹幕");
         Object[] objArr = {200, "application/xml", new ByteArrayInputStream("".getBytes())};
@@ -1024,107 +1026,465 @@ static class Danmu extends Spider {
         }
     }
 
+    // --- 拓扑融合区 ---
+    static class AB {
 
-    // ↓↓↓ 依赖融合区 ↓↓↓
-    static class k {
+        static class o {
 
-        /* renamed from: com.github.catvod.spider.merge.k.b  reason: case insensitive filesystem */
-        public final static class C0619b {
-            private OkHttpClient a;
+            public final static class K {
+                public static String a = "";
 
-            /* JADX INFO: Access modifiers changed from: private */
-            /* renamed from: com.github.catvod.spider.merge.k.b$a */
-            /* loaded from: classes.dex */
-            public static static class a {
-                static volatile C0619b a = new C0619b();
-            }
-
-            public static String a(String str, Map<String, String> map) {
-                String str2 = a().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute().headers().get("Location");
-                if (str2 == null) {
-                    return null;
-                }
-                return str2;
-            }
-
-            public static OkHttpClient a() {
-                if (a.a.a != null) {
-                    return a.a.a;
-                }
-                C0619b c0619b = a.a;
-                OkHttpClient.Builder dns = new OkHttpClient.Builder().addInterceptor(new C0622e()).dns(Spider.safeDns());
-                TimeUnit timeUnit = TimeUnit.SECONDS;
-                OkHttpClient build = dns.connectTimeout(30L, timeUnit).readTimeout(30L, timeUnit).writeTimeout(30L, timeUnit).hostnameVerifier(new HostnameVerifier() { // from static class: com.github.catvod.spider.merge.k.a
-                    @Override // javax.net.ssl.HostnameVerifier
-                    public final boolean verify(String str, SSLSession sSLSession) {
-                        return true;
+                private static String a(String str) {
+                    if (str == null || str.isEmpty()) {
+                        return null;
                     }
-                }).sslSocketFactory(new f(), f.d).build();
-                c0619b.a = build;
-                return build;
-            }
-
-            /* JADX WARN: Code restructure failed: missing block: B:9:0x003c, code lost:
-                if (r2.containsKey("Location") != false) goto L7;
-             */
-            /*
-                Code decompiled incorrectly, please refer to instructions dump.
-            */
-            public static String b(String str, Map<String, String> map) {
-                Map multimap = e().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute().headers().toMultimap();
-                if (multimap != null) {
-                    String str2 = multimap.containsKey("location") ? "location" : "Location";
-                    return (String) ((List) multimap.get(str2)).get(0);
+                    int indexOf = str.indexOf("{");
+                    int lastIndexOf = str.lastIndexOf("}");
+                    if (indexOf == -1 || lastIndexOf == -1 || indexOf >= lastIndexOf) {
+                        return null;
+                    }
+                    return str.substring(indexOf, lastIndexOf + 1);
                 }
-                return null;
+
+                public static String b(String str, int i) {
+                    try {
+                        SpiderDebug.log("getDanmuUrl vodName: " + str);
+                        SpiderDebug.log("getDanmuUrl vodIndex: " + i);
+                        String b = G.b("danmukey");
+                        SpiderDebug.log("getDanmuUrl danmu: " + b);
+                        if (b.isEmpty()) {
+                            return "";
+                        }
+                        JSONObject jSONObject = new JSONObject(b);
+                        if (str.contains(jSONObject.getString("searchKey"))) {
+                            JSONArray jSONArray = jSONObject.getJSONArray("details");
+                            return jSONArray.length() == 0 ? "" : jSONArray.getString(i - 1).split("\\|")[1];
+                        }
+                        return "";
+                    } catch (Exception e) {
+                        SpiderDebug.log(e);
+                        return "";
+                    }
+                }
+
+                public static List<String> bilibili(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("bilibili");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "哔哩|" + optString + "|" + optString2 + "@bilibili";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> hanjutv(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("hanjutv");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "韩剧|" + optString + "|" + optString2 + "@hanjutv";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> iqiyi(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("iqiyi");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "爱奇艺|" + optString + "|" + optString2 + "@iqiyi";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> juhe(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        String[] split = str.split("\\|");
+                        String str2 = split[1];
+                        String str3 = split[2];
+                        String str4 = str2.split(" - ")[0];
+                        String[] split2 = str3.split("@");
+                        JSONArray jSONArray = new JSONArray(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu?name=" + URLEncoder.encode(str4, "UTF-8") + "&epid=" + split2[0] + "&platform=" + split2[1], null).a());
+                        if (jSONArray == null) {
+                            return arrayList;
+                        }
+                        for (int i = 0; i < jSONArray.length(); i++) {
+                            JSONObject optJSONObject = jSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("name");
+                                String optString2 = optJSONObject.optString("url");
+                                String optString3 = optJSONObject.optString("platform");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    arrayList.add(optString + "\n|vodid://" + optString2 + "@" + optString3);
+                                }
+                            }
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static String[] l(JSONArray jSONArray) {
+                    if (jSONArray == null || jSONArray.length() == 0) {
+                        return new String[0];
+                    }
+                    int length = jSONArray.length();
+                    int i = (length + 29) / 30;
+                    String[] strArr = new String[i];
+                    for (int i2 = 0; i2 < i; i2++) {
+                        StringBuilder sb = new StringBuilder();
+                        int i3 = i2 * 30;
+                        int min = Math.min(i3 + 30, length);
+                        while (i3 < min) {
+                            sb.append(jSONArray.optString(i3));
+                            if (i3 < min - 1) {
+                                sb.append(",");
+                            }
+                            i3++;
+                        }
+                        strArr[i2] = sb.toString();
+                    }
+                    return strArr;
+                }
+
+                public static List<String> leshi(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("leshi");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "乐视|" + optString + "|" + optString2 + "@leshi";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> maiduidui(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("maiduidui");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "埋堆堆|" + optString + "|" + optString2 + "@maiduidui";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> mango(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("mango");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "芒果|" + optString + "|" + optString2 + "@mango";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> renren(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("renren");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "人人|" + optString + "|" + optString2 + "@renren";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> tencent(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("tencent");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "腾讯|" + optString + "|" + optString2 + "@tencent";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> xigua(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("xigua");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "西瓜|" + optString + "|" + optString2 + "@xigua";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
+
+                public static List<String> youku(String str) {
+                    ArrayList arrayList = new ArrayList();
+                    try {
+                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("youku");
+                        if (optJSONArray == null) {
+                            return arrayList;
+                        }
+                        int i = 0;
+                        while (i < optJSONArray.length()) {
+                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
+                            if (optJSONObject != null) {
+                                String optString = optJSONObject.optString("vod_name");
+                                String optString2 = optJSONObject.optString("vod_id");
+                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
+                                    String str2 = "优酷|" + optString + "|" + optString2 + "@youku";
+                                    if (optString.equals(str)) {
+                                        arrayList.add(0, str2);
+                                    } else {
+                                        arrayList.add(str2);
+                                    }
+                                    i++;
+                                }
+                            }
+                            i++;
+                        }
+                        return arrayList;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return arrayList;
+                    }
+                }
             }
 
-            public static Response c(String str) {
-                return a().newCall(new Request.Builder().url(str).build()).execute();
-            }
-
-            public static Response d(String str, Map<String, String> map) {
-                return a().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute();
-            }
-
-            public static OkHttpClient e() {
-                return a().newBuilder().followRedirects(false).followSslRedirects(false).build();
-            }
-
-            public static C0621d f(String str, String str2, Map<String, String> map) {
-                return new C0620c(str, str2, map).a(a());
-            }
-
-            public static C0621d g(String str, Map<String, String> map, Map<String, String> map2) {
-                return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, str, map, map2).a(a());
-            }
-
-            public static String h(String str, String str2) {
-                return f(str, str2, null).a();
-            }
-
-            public static String i(Map map) {
-                return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, "https://passport.aliyundrive.com/newlogin/qrcode/query.do?appName=aliyun_drive&fromSite=52&_bx-v=2.2.3", map, (Map<String, String>) null).a(a()).a();
-            }
-
-            public static C0621d j(OkHttpClient okHttpClient, String str, Map map, Map map2, Map map3) {
-                C0620c c0620c = new C0620c(str, map, map2, map3);
-                c0620c.b();
-                return c0620c.a(okHttpClient);
-            }
-
-            public static String k(String str) {
-                return l(str, null);
-            }
-
-            public static String l(String str, Map<String, String> map) {
-                return str.startsWith("http") ? new C0620c(com.github.catvod.spider.merge.AB.m.c.c, str, (Map<String, String>) null, map).a(a()).a() : "";
-            }
         }
 
     }
 
     static class m {
+
+        /* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
+        public final static class C0647l {
+            private static SharedPreferences a() {
+                Application context = Init.context();
+                return context.getSharedPreferences(Init.context().getPackageName() + "_preferences", 0);
+            }
+
+            public static void a(String str, String str2) {
+                SharedPreferences.Editor edit = a().edit();
+                edit.putString(str, str2);
+                edit.apply();
+            }
+
+            public static String b(String str) {
+                return a().getString(str, "");
+            }
+
+            public static void c(String str, Object obj) {
+                SharedPreferences.Editor putLong;
+                if (obj == null) {
+                    return;
+                }
+                if (obj instanceof String) {
+                    putLong = a().edit().putString(str, (String) obj);
+                } else if (obj instanceof Boolean) {
+                    putLong = a().edit().putBoolean(str, ((Boolean) obj).booleanValue());
+                } else if (obj instanceof Float) {
+                    putLong = a().edit().putFloat(str, ((Float) obj).floatValue());
+                } else if (obj instanceof Integer) {
+                    putLong = a().edit().putInt(str, ((Integer) obj).intValue());
+                } else if (!(obj instanceof Long)) {
+                    return;
+                } else {
+                    putLong = a().edit().putLong(str, ((Long) obj).longValue());
+                }
+                putLong.apply();
+            }
+        }
 
         /* renamed from: com.github.catvod.spider.merge.m.k  reason: case insensitive filesystem */
         public final static class C0646k {
@@ -1541,7 +1901,7 @@ static class Danmu extends Spider {
             }
 
             public static boolean f() {
-                for (Method method : Spider.static class.getDeclaredMethods()) {
+                for (Method method : Spider.class.getDeclaredMethods()) {
                     if ("action".equals(method.getName())) {
                         return true;
                     }
@@ -2216,461 +2576,102 @@ static class Danmu extends Spider {
             }
         }
 
-        /* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
-        public final static class C0647l {
-            private static SharedPreferences a() {
-                Application context = Init.context();
-                return context.getSharedPreferences(Init.context().getPackageName() + "_preferences", 0);
-            }
-
-            public static void a(String str, String str2) {
-                SharedPreferences.Editor edit = a().edit();
-                edit.putString(str, str2);
-                edit.apply();
-            }
-
-            public static String b(String str) {
-                return a().getString(str, "");
-            }
-
-            public static void c(String str, Object obj) {
-                SharedPreferences.Editor putLong;
-                if (obj == null) {
-                    return;
-                }
-                if (obj instanceof String) {
-                    putLong = a().edit().putString(str, (String) obj);
-                } else if (obj instanceof Boolean) {
-                    putLong = a().edit().putBoolean(str, ((Boolean) obj).booleanValue());
-                } else if (obj instanceof Float) {
-                    putLong = a().edit().putFloat(str, ((Float) obj).floatValue());
-                } else if (obj instanceof Integer) {
-                    putLong = a().edit().putInt(str, ((Integer) obj).intValue());
-                } else if (!(obj instanceof Long)) {
-                    return;
-                } else {
-                    putLong = a().edit().putLong(str, ((Long) obj).longValue());
-                }
-                putLong.apply();
-            }
-        }
-
     }
 
-    static class AB {
+    static class k {
 
-        static class o {
+        /* renamed from: com.github.catvod.spider.merge.k.b  reason: case insensitive filesystem */
+        public final static class C0619b {
+            private OkHttpClient a;
 
-            public final static class K {
-                public static String a = "";
-
-                private static String a(String str) {
-                    if (str == null || str.isEmpty()) {
-                        return null;
-                    }
-                    int indexOf = str.indexOf("{");
-                    int lastIndexOf = str.lastIndexOf("}");
-                    if (indexOf == -1 || lastIndexOf == -1 || indexOf >= lastIndexOf) {
-                        return null;
-                    }
-                    return str.substring(indexOf, lastIndexOf + 1);
-                }
-
-                public static String b(String str, int i) {
-                    try {
-                        SpiderDebug.log("getDanmuUrl vodName: " + str);
-                        SpiderDebug.log("getDanmuUrl vodIndex: " + i);
-                        String b = G.b("danmukey");
-                        SpiderDebug.log("getDanmuUrl danmu: " + b);
-                        if (b.isEmpty()) {
-                            return "";
-                        }
-                        JSONObject jSONObject = new JSONObject(b);
-                        if (str.contains(jSONObject.getString("searchKey"))) {
-                            JSONArray jSONArray = jSONObject.getJSONArray("details");
-                            return jSONArray.length() == 0 ? "" : jSONArray.getString(i - 1).split("\\|")[1];
-                        }
-                        return "";
-                    } catch (Exception e) {
-                        SpiderDebug.log(e);
-                        return "";
-                    }
-                }
-
-                public static List<String> bilibili(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("bilibili");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "哔哩|" + optString + "|" + optString2 + "@bilibili";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> hanjutv(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("hanjutv");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "韩剧|" + optString + "|" + optString2 + "@hanjutv";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> iqiyi(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("iqiyi");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "爱奇艺|" + optString + "|" + optString2 + "@iqiyi";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> juhe(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        String[] split = str.split("\\|");
-                        String str2 = split[1];
-                        String str3 = split[2];
-                        String str4 = str2.split(" - ")[0];
-                        String[] split2 = str3.split("@");
-                        JSONArray jSONArray = new JSONArray(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu?name=" + URLEncoder.encode(str4, "UTF-8") + "&epid=" + split2[0] + "&platform=" + split2[1], null).a());
-                        if (jSONArray == null) {
-                            return arrayList;
-                        }
-                        for (int i = 0; i < jSONArray.length(); i++) {
-                            JSONObject optJSONObject = jSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("name");
-                                String optString2 = optJSONObject.optString("url");
-                                String optString3 = optJSONObject.optString("platform");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    arrayList.add(optString + "\n|vodid://" + optString2 + "@" + optString3);
-                                }
-                            }
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static String[] l(JSONArray jSONArray) {
-                    if (jSONArray == null || jSONArray.length() == 0) {
-                        return new String[0];
-                    }
-                    int length = jSONArray.length();
-                    int i = (length + 29) / 30;
-                    String[] strArr = new String[i];
-                    for (int i2 = 0; i2 < i; i2++) {
-                        StringBuilder sb = new StringBuilder();
-                        int i3 = i2 * 30;
-                        int min = Math.min(i3 + 30, length);
-                        while (i3 < min) {
-                            sb.append(jSONArray.optString(i3));
-                            if (i3 < min - 1) {
-                                sb.append(",");
-                            }
-                            i3++;
-                        }
-                        strArr[i2] = sb.toString();
-                    }
-                    return strArr;
-                }
-
-                public static List<String> leshi(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("leshi");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "乐视|" + optString + "|" + optString2 + "@leshi";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> maiduidui(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("maiduidui");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "埋堆堆|" + optString + "|" + optString2 + "@maiduidui";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> mango(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("mango");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "芒果|" + optString + "|" + optString2 + "@mango";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> renren(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("renren");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "人人|" + optString + "|" + optString2 + "@renren";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> tencent(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("tencent");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "腾讯|" + optString + "|" + optString2 + "@tencent";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> xigua(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("xigua");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "西瓜|" + optString + "|" + optString2 + "@xigua";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
-
-                public static List<String> youku(String str) {
-                    ArrayList arrayList = new ArrayList();
-                    try {
-                        JSONArray optJSONArray = new JSONObject(com.github.catvod.spider.merge.AB.m.c.b("http://127.0.0.1:1314/danmu/search?keywords=" + URLEncoder.encode(str, "UTF-8"), new HashMap()).a()).optJSONArray("youku");
-                        if (optJSONArray == null) {
-                            return arrayList;
-                        }
-                        int i = 0;
-                        while (i < optJSONArray.length()) {
-                            JSONObject optJSONObject = optJSONArray.optJSONObject(i);
-                            if (optJSONObject != null) {
-                                String optString = optJSONObject.optString("vod_name");
-                                String optString2 = optJSONObject.optString("vod_id");
-                                if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                                    String str2 = "优酷|" + optString + "|" + optString2 + "@youku";
-                                    if (optString.equals(str)) {
-                                        arrayList.add(0, str2);
-                                    } else {
-                                        arrayList.add(str2);
-                                    }
-                                    i++;
-                                }
-                            }
-                            i++;
-                        }
-                        return arrayList;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return arrayList;
-                    }
-                }
+            /* JADX INFO: Access modifiers changed from: private */
+            /* renamed from: com.github.catvod.spider.merge.k.b$a */
+            /* loaded from: classes.dex */
+            static class a {
+                static volatile C0619b a = new C0619b();
             }
 
+            public static String a(String str, Map<String, String> map) {
+                String str2 = a().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute().headers().get("Location");
+                if (str2 == null) {
+                    return null;
+                }
+                return str2;
+            }
+
+            public static OkHttpClient a() {
+                if (a.a.a != null) {
+                    return a.a.a;
+                }
+                C0619b c0619b = a.a;
+                OkHttpClient.Builder dns = new OkHttpClient.Builder().addInterceptor(new C0622e()).dns(Spider.safeDns());
+                TimeUnit timeUnit = TimeUnit.SECONDS;
+                OkHttpClient build = dns.connectTimeout(30L, timeUnit).readTimeout(30L, timeUnit).writeTimeout(30L, timeUnit).hostnameVerifier(new HostnameVerifier() { // from static class: com.github.catvod.spider.merge.k.a
+                    @Override // javax.net.ssl.HostnameVerifier
+                    public final boolean verify(String str, SSLSession sSLSession) {
+                        return true;
+                    }
+                }).sslSocketFactory(new f(), f.d).build();
+                c0619b.a = build;
+                return build;
+            }
+
+            /* JADX WARN: Code restructure failed: missing block: B:9:0x003c, code lost:
+                if (r2.containsKey("Location") != false) goto L7;
+             */
+            /*
+                Code decompiled incorrectly, please refer to instructions dump.
+            */
+            public static String b(String str, Map<String, String> map) {
+                Map multimap = e().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute().headers().toMultimap();
+                if (multimap != null) {
+                    String str2 = multimap.containsKey("location") ? "location" : "Location";
+                    return (String) ((List) multimap.get(str2)).get(0);
+                }
+                return null;
+            }
+
+            public static Response c(String str) {
+                return a().newCall(new Request.Builder().url(str).build()).execute();
+            }
+
+            public static Response d(String str, Map<String, String> map) {
+                return a().newCall(new Request.Builder().url(str).headers(Headers.of(map)).build()).execute();
+            }
+
+            public static OkHttpClient e() {
+                return a().newBuilder().followRedirects(false).followSslRedirects(false).build();
+            }
+
+            public static C0621d f(String str, String str2, Map<String, String> map) {
+                return new C0620c(str, str2, map).a(a());
+            }
+
+            public static C0621d g(String str, Map<String, String> map, Map<String, String> map2) {
+                return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, str, map, map2).a(a());
+            }
+
+            public static String h(String str, String str2) {
+                return f(str, str2, null).a();
+            }
+
+            public static String i(Map map) {
+                return new C0620c(com.github.catvod.spider.merge.AB.m.c.b, "https://passport.aliyundrive.com/newlogin/qrcode/query.do?appName=aliyun_drive&fromSite=52&_bx-v=2.2.3", map, (Map<String, String>) null).a(a()).a();
+            }
+
+            public static C0621d j(OkHttpClient okHttpClient, String str, Map map, Map map2, Map map3) {
+                C0620c c0620c = new C0620c(str, map, map2, map3);
+                c0620c.b();
+                return c0620c.a(okHttpClient);
+            }
+
+            public static String k(String str) {
+                return l(str, null);
+            }
+
+            public static String l(String str, Map<String, String> map) {
+                return str.startsWith("http") ? new C0620c(com.github.catvod.spider.merge.AB.m.c.c, str, (Map<String, String>) null, map).a(a()).a() : "";
+            }
         }
 
     }
@@ -4954,5 +4955,4 @@ static class Danmu extends Spider {
         }
 
     }
-
 }
