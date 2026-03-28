@@ -982,20 +982,11 @@ public class Danmu extends Spider {
         }
     }
 
-// ========== 自动合并依赖（唯一结构·全static） ==========
 
+// ========== 自动合并依赖（唯一结构·全static） ==========
 static class AB {
 static class o {
-import android.text.TextUtils;
-import com.github.catvod.crawler.SpiderDebug;
-import java.net.URLEncoder;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-public final class K {
+            public final class K {
     static String a = "";
 
     private static String a(String str) {
@@ -1407,18 +1398,7 @@ public final class K {
 }
 }
 static class k {
-import com.github.catvod.crawler.Spider;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.SSLSession;
-import okhttp3.Headers;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-/* renamed from: com.github.catvod.spider.merge.k.b  reason: case insensitive filesystem */
+        /* renamed from: com.github.catvod.spider.merge.k.b  reason: case insensitive filesystem */
 public final class C0619b {
     private OkHttpClient a;
 
@@ -1513,11 +1493,7 @@ public final class C0619b {
 }
 }
 static class m {
-import android.app.Application;
-import android.content.SharedPreferences;
-import com.github.catvod.spider.Init;
-
-/* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
+        /* renamed from: com.github.catvod.spider.merge.m.l  reason: case insensitive filesystem */
 public final class C0647l {
     private static SharedPreferences a() {
         Application context = Init.context();
@@ -1557,9 +1533,7 @@ public final class C0647l {
 }
 }
 static class C {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.C.ۣ۟ۦۧ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.C.ۣ۟ۦۧ  reason: contains not printable characters */
 class C0007 {
 
     /* renamed from: ۨ۟ۤ۟  reason: not valid java name and contains not printable characters */
@@ -1609,9 +1583,7 @@ class C0007 {
 }
 }
 static class G {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.G.ۥۧۡۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.G.ۥۧۡۢ  reason: contains not printable characters */
 class C0012 {
 
     /* renamed from: ۟ۦ۟ۢۥ  reason: not valid java name and contains not printable characters */
@@ -1661,7 +1633,7 @@ class C0012 {
 }
 }
 static class a {
-/* renamed from: com.github.catvod.spider.merge.a.c  reason: case insensitive filesystem */
+        /* renamed from: com.github.catvod.spider.merge.a.c  reason: case insensitive filesystem */
 public final /* synthetic */ class C0575c {
     static String a(String str, String str2) {
         return str + str2;
@@ -1669,9 +1641,7 @@ public final /* synthetic */ class C0575c {
 }
 }
 static class U {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.U.۟ۢۦۥۧ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.U.۟ۢۦۥۧ  reason: contains not printable characters */
 class C0030 {
 
     /* renamed from: ۟ۥ۠ۢۡ  reason: not valid java name and contains not printable characters */
@@ -1721,9 +1691,7 @@ class C0030 {
 }
 }
 static class x {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.x.ۥۨۨۤ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.x.ۥۨۨۤ  reason: contains not printable characters */
 class C0051 {
 
     /* renamed from: ۣۣ۟ۧۧ  reason: not valid java name and contains not printable characters */
@@ -1773,9 +1741,7 @@ class C0051 {
 }
 }
 static class E {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.E.ۥۨۧۧ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.E.ۥۨۧۧ  reason: contains not printable characters */
 class C0010 {
 
     /* renamed from: ۣۢۡۧ  reason: not valid java name and contains not printable characters */
@@ -1825,9 +1791,7 @@ class C0010 {
 }
 }
 static class h {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.h.۟ۦۣۧ۟  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.h.۟ۦۣۧ۟  reason: contains not printable characters */
 class C0039 {
 
     /* renamed from: ۥ۠ۦۦ  reason: contains not printable characters */
@@ -1877,9 +1841,7 @@ class C0039 {
 }
 }
 static class J {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.J.ۦۡۡۥ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.J.ۦۡۡۥ  reason: contains not printable characters */
 class C0021 {
 
     /* renamed from: ۟ۡ۟ۦۧ  reason: not valid java name and contains not printable characters */
@@ -1929,9 +1891,7 @@ class C0021 {
 }
 }
 static class D {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.D.۟ۡۥۡۥ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.D.۟ۡۥۡۥ  reason: contains not printable characters */
 class C0009 {
 
     /* renamed from: ۣ۟ۢۡ۠  reason: not valid java name and contains not printable characters */
@@ -1988,9 +1948,7 @@ class C0009 {
 }
 }
 static class Q {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.Q.۟ۢۤ۟  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.Q.۟ۢۤ۟  reason: contains not printable characters */
 class C0027 {
 
     /* renamed from: ۟ۧ۟۟۟  reason: not valid java name and contains not printable characters */
@@ -2038,9 +1996,7 @@ class C0027 {
 }
 }
 static class i {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.i.ۣۣ۟ۤ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.i.ۣۣ۟ۤ  reason: contains not printable characters */
 class C0041 {
 
     /* renamed from: ۟ۢۤۢ  reason: not valid java name and contains not printable characters */
@@ -2090,9 +2046,7 @@ class C0041 {
 }
 }
 static class H {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.H.۟ۧۥ۠ۡ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.H.۟ۧۥ۠ۡ  reason: contains not printable characters */
 class C0015 {
 
     /* renamed from: ۟ۥۤۧۤ  reason: not valid java name and contains not printable characters */
@@ -2149,9 +2103,7 @@ class C0015 {
 }
 }
 static class I {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.I.ۦۡ۟  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.I.ۦۡ۟  reason: contains not printable characters */
 class C0019 {
 
     /* renamed from: ۣ۟ۥ۟ۥ  reason: not valid java name and contains not printable characters */
@@ -2208,9 +2160,7 @@ class C0019 {
 }
 }
 static class M {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.M.۟۟ۤۧ۠  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.M.۟۟ۤۧ۠  reason: contains not printable characters */
 class C0023 {
 
     /* renamed from: ۣۡۤۡ  reason: not valid java name and contains not printable characters */
@@ -2260,9 +2210,7 @@ class C0023 {
 }
 }
 static class O {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.O.۟ۦۨ۟ۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.O.۟ۦۨ۟ۢ  reason: contains not printable characters */
 class C0025 {
 
     /* renamed from: ۟ۥۣۡۧ  reason: not valid java name and contains not printable characters */
@@ -2312,9 +2260,7 @@ class C0025 {
 }
 }
 static class P {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.P.۟ۦۧۤۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.P.۟ۦۧۤۢ  reason: contains not printable characters */
 class C0026 {
 
     /* renamed from: ۟ۤۦۥ  reason: not valid java name and contains not printable characters */
@@ -2371,9 +2317,7 @@ class C0026 {
 }
 }
 static class w {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.w.۟ۢۥۤۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.w.۟ۢۥۤۢ  reason: contains not printable characters */
 class C0049 {
 
     /* renamed from: ۥۣۦ۟  reason: contains not printable characters */
@@ -2430,9 +2374,7 @@ class C0049 {
 }
 }
 static class T {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.T.ۣۣۥۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.T.ۣۣۥۢ  reason: contains not printable characters */
 class C0029 {
 
     /* renamed from: ۤۥۣۣ  reason: not valid java name and contains not printable characters */
@@ -2482,10 +2424,7 @@ class C0029 {
 }
 }
 static class b {
-import java.util.ArrayList;
-import java.util.HashMap;
-
-/* renamed from: com.github.catvod.spider.merge.b.h  reason: case insensitive filesystem */
+        /* renamed from: com.github.catvod.spider.merge.b.h  reason: case insensitive filesystem */
 public final /* synthetic */ class C0588h {
     static String a(String str, C0596c c0596c, int i, int i2, int i3, ArrayList arrayList) {
         c0596c.i(Integer.valueOf(str).intValue(), i, i2, i3);
@@ -2512,9 +2451,7 @@ public final /* synthetic */ class C0588h {
 }
 }
 static class f {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.f.ۨۥ۟۠  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.f.ۨۥ۟۠  reason: contains not printable characters */
 class C0037 {
 
     /* renamed from: ۟۠ۧ۠ۧ  reason: not valid java name and contains not printable characters */
@@ -2571,9 +2508,7 @@ class C0037 {
 }
 }
 static class l {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.l.۟ۡۦۧۨ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.l.۟ۡۦۧۨ  reason: contains not printable characters */
 class C0043 {
 
     /* renamed from: ۟ۤۨۥ  reason: not valid java name and contains not printable characters */
@@ -2623,9 +2558,7 @@ class C0043 {
 }
 }
 static class q {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.q.ۥۧۦ۠  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.q.ۥۧۦ۠  reason: contains not printable characters */
 class C0045 {
 
     /* renamed from: ۣۧۢ۠  reason: not valid java name and contains not printable characters */
@@ -2675,9 +2608,7 @@ class C0045 {
 }
 }
 static class j {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.j.ۣ۟۟ۢۢ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.j.ۣ۟۟ۢۢ  reason: contains not printable characters */
 class C0042 {
 
     /* renamed from: ۦۥۤۧ  reason: contains not printable characters */
@@ -2734,9 +2665,7 @@ class C0042 {
 }
 }
 static class t {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.t.ۣ۟ۤۤۤ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.t.ۣ۟ۤۤۤ  reason: contains not printable characters */
 class C0046 {
 
     /* renamed from: ۤ۟ۥۤ  reason: not valid java name and contains not printable characters */
@@ -2786,9 +2715,7 @@ class C0046 {
 }
 }
 static class u {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.u.ۣۣۣ۟ۧ  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.u.ۣۣۣ۟ۧ  reason: contains not printable characters */
 class C0048 {
 
     /* renamed from: ۣ۟ۤۨۨ  reason: not valid java name and contains not printable characters */
@@ -2838,9 +2765,7 @@ class C0048 {
 }
 }
 static class z {
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.z.ۨۧۢ۟  reason: contains not printable characters */
+        /* renamed from: com.github.catvod.spider.merge.z.ۨۧۢ۟  reason: contains not printable characters */
 class C0054 {
 
     /* renamed from: ۣ۟ۧۥ  reason: not valid java name and contains not printable characters */
@@ -2890,18 +2815,7 @@ class C0054 {
 }
 }
 static class c {
-import com.google.gson.Gson;
-import com.google.gson.annotations.SerializedName;
-import com.google.gson.reflect.TypeToken;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import org.json.JSONObject;
-
-/* renamed from: com.github.catvod.spider.merge.c.c  reason: case insensitive filesystem */
+        /* renamed from: com.github.catvod.spider.merge.c.c  reason: case insensitive filesystem */
 public final class C0596c {
     @SerializedName("class")
     private List<C0594a> a;
@@ -3182,9 +3096,7 @@ public final class C0596c {
     }
 }
 }
-import java.io.ByteArrayOutputStream;
-
-/* renamed from: com.github.catvod.spider.merge.۟ۢۧۦ  reason: contains not printable characters */
+    /* renamed from: com.github.catvod.spider.merge.۟ۢۧۦ  reason: contains not printable characters */
 class C0055 {
 
     /* renamed from: ۟ۤۡ۠  reason: not valid java name and contains not printable characters */
