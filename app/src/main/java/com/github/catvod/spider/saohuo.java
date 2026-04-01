@@ -5,6 +5,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 import com.github.catvod.utils.Util;
 
 import org.jsoup.Jsoup;
@@ -18,12 +19,12 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class ShaoHuo extends Spider {
+public class saohuo extends Spider {
 
     private String host = "https://shdy3.com"; // 默认备用域名
     private final HashMap<String, String> headers = new HashMap<>();
 
-    public ShaoHuo() {
+    public saohuo() {
         headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 12; V2196A) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.5060.129 Mobile Safari/537.36");
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
@@ -57,6 +58,7 @@ public class ShaoHuo extends Spider {
 
     @Override
     public String homeContent(boolean filter) {
+        // 分类列表
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("20", "国产剧"));
         classes.add(new Class("1", "电影"));
@@ -110,7 +112,11 @@ public class ShaoHuo extends Spider {
         filters.put("2", tvFilters);
         filters.put("4", animeFilters);
 
-        return Result.string(classes, filters);
+        // 构建 JSON 返回
+        Map<String, Object> result = new HashMap<>();
+        result.put("class", classes);
+        result.put("filters", filters);
+        return com.github.catvod.utils.Util.gson.toJson(result);
     }
 
     private Map<String, String> createFilterValue(String name, String value) {
@@ -122,15 +128,17 @@ public class ShaoHuo extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
+        int page = Integer.parseInt(pg);
         String cateId = extend.getOrDefault("cateId", tid);
-        String url = host + "/list/" + cateId + "-" + pg + ".html";
+        String url = host + "/list/" + cateId + "-" + page + ".html";
         try {
             String html = OkHttp.string(url, headers);
             Document doc = Jsoup.parse(html);
             List<Vod> list = parseList(doc);
-            return Result.string(list, Integer.parseInt(pg), 1, list.size(), 999);
+            // 参数顺序：page, hasNext, total, totalPages, list
+            return Result.string(page, 1, list.size(), 999, list);
         } catch (Exception e) {
-            return Result.string(new ArrayList<>(), Integer.parseInt(pg), 0, 0, 0);
+            return Result.string(page, 0, 0, 0, new ArrayList<Vod>());
         }
     }
 
@@ -217,7 +225,8 @@ public class ShaoHuo extends Spider {
             vod.setVodId(url);
             vod.setVodName(name);
             vod.setVodPic(pic);
-            vod.setVodType(type);
+            // 类型存入备注（因 Vod 无 setVodType）
+            vod.setVodRemarks(type);
             vod.setVodArea(area);
             vod.setVodYear(year);
             vod.setVodDirector(director);
@@ -229,7 +238,7 @@ public class ShaoHuo extends Spider {
             return Result.string(vod);
         } catch (Exception e) {
             System.out.println("详情页解析错误: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -243,7 +252,7 @@ public class ShaoHuo extends Spider {
             List<Vod> list = parseList(doc);
             return Result.string(list);
         } catch (Exception e) {
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -307,7 +316,8 @@ public class ShaoHuo extends Spider {
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
 
             String postBody = buildPostBody(payload);
-            String apiResp = OkHttp.post(apiUrl, postBody, apiHeaders);
+            OkResult okResult = OkHttp.post(apiUrl, postBody, apiHeaders);
+            String apiResp = okResult.string();
 
             com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(apiResp).getAsJsonObject();
             if (json.get("code").getAsInt() == 200) {
@@ -347,36 +357,16 @@ public class ShaoHuo extends Spider {
     }
 
     private int naturalCompare(String s1, String s2) {
-        // 分割数字与非数字
-        List<Object> list1 = splitNatural(s1);
-        List<Object> list2 = splitNatural(s2);
-        int minLen = Math.min(list1.size(), list2.size());
-        for (int i = 0; i < minLen; i++) {
-            Object o1 = list1.get(i);
-            Object o2 = list2.get(i);
-            if (o1 instanceof Integer && o2 instanceof Integer) {
-                int cmp = Integer.compare((Integer) o1, (Integer) o2);
-                if (cmp != 0) return cmp;
-            } else {
-                int cmp = o1.toString().compareTo(o2.toString());
-                if (cmp != 0) return cmp;
-            }
+        // 简单数字优先排序：提取数字比较，否则字符串比较
+        Pattern numPattern = Pattern.compile("(\\d+)");
+        Matcher m1 = numPattern.matcher(s1);
+        Matcher m2 = numPattern.matcher(s2);
+        if (m1.find() && m2.find()) {
+            int num1 = Integer.parseInt(m1.group(1));
+            int num2 = Integer.parseInt(m2.group(1));
+            if (num1 != num2) return Integer.compare(num1, num2);
         }
-        return Integer.compare(list1.size(), list2.size());
-    }
-
-    private List<Object> splitNatural(String s) {
-        List<Object> parts = new ArrayList<>();
-        Matcher matcher = Pattern.compile("(\\d+|[^\\d]+)").matcher(s);
-        while (matcher.find()) {
-            String part = matcher.group();
-            if (part.matches("\\d+")) {
-                parts.add(Integer.parseInt(part));
-            } else {
-                parts.add(part);
-            }
-        }
-        return parts;
+        return s1.compareTo(s2);
     }
 
     private String decodeKey(String encodedStr, Map<String, String> eeDict) {
