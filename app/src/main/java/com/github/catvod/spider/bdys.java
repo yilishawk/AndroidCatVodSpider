@@ -23,8 +23,7 @@ import java.util.regex.Pattern;
 public class bdys extends Spider {
 
     private static final String HOST = "https://v.xlys.ltd.ua/";
-    private static final String USER_AGENT = Util.CHROME; // 复用catvod的chrome UA
-    private static final String FIXED_SESSION = "BE9F4982E7333BC81314A607392E2961";
+    private static final String USER_AGENT = Util.CHROME;
 
     private HashMap<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
@@ -32,10 +31,18 @@ public class bdys extends Spider {
         return headers;
     }
 
-    private HashMap<String, String> getHeadersWithCookie() {
-        HashMap<String, String> headers = getHeaders();
-        headers.put("Cookie", "JSESSIONID=" + FIXED_SESSION);
-        return headers;
+    @Override
+    public String getName() {
+        return "量子资源(完整版)";
+    }
+
+    @Override
+    public void init(String extend) {
+    }
+
+    @Override
+    public boolean isVideoCast() {
+        return true;
     }
 
     @Override
@@ -50,6 +57,7 @@ public class bdys extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = Integer.parseInt(pg);
         String url = HOST + "s/all/" + page + "?type=" + tid;
+        System.out.println("[CAT] 请求URL: " + url);
         String html = OkHttp.string(url, getHeaders());
         Document doc = Jsoup.parse(html);
         List<Vod> list = new ArrayList<>();
@@ -64,26 +72,79 @@ public class bdys extends Spider {
             String remark = card.selectFirst(".bg-pink") != null ? card.selectFirst(".bg-pink").text().trim() : "";
             list.add(new Vod(vodId, name, pic, remark));
         }
-        return Result.string(page, 1, list.size(), Integer.MAX_VALUE, list);
+        System.out.println("[CAT] 找到 " + list.size() + " 个视频");
+        return Result.string(list, page, 1, list.size(), Integer.MAX_VALUE);
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String id = ids.get(0);
         String url = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
-        String html = OkHttp.string(url, getHeaders());
-        Document doc = Jsoup.parse(html);
-        String name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "";
-        String pic = "";
-        Element cover = doc.selectFirst(".cover-lg-max-25 img");
-        if (cover != null) pic = cover.attr("src");
-        String content = doc.selectFirst("#synopsis .card-body") != null ? doc.selectFirst("#synopsis .card-body").text().trim() : "暂无简介";
+        System.out.println("[DETAIL] 请求URL: " + url);
 
-        Elements playButtons = doc.select("#play-list a.btn-square");
+        String html = OkHttp.string(url, getHeaders());
+        System.out.println("[DETAIL] 响应状态码: 200");
+        System.out.println("[DETAIL] 响应内容片段: " + (html.length() > 500 ? html.substring(0, 500) : html));
+
+        Document doc = Jsoup.parse(html);
+
+        // 标题（第二个 h2，类名 d-sm-block d-md-none）
+        Element titleElem = doc.selectFirst("h2.d-sm-block.d-md-none");
+        String name = titleElem != null ? titleElem.text().trim() : "";
+
+        // 封面
+        Element picElem = doc.selectFirst(".cover-lg-max-25 img");
+        String pic = picElem != null ? picElem.attr("src") : "";
+
+        // 简介
+        Element contentElem = doc.selectFirst("#synopsis .card-body");
+        String content = contentElem != null ? contentElem.text().trim() : "暂无简介";
+
+        // 导演、演员、地区、语言、集数
+        String director = "";
+        String actor = "";
+        String area = "";
+        String lang = "";
+        String remarks = "";
+
+        Element infoContainer = doc.selectFirst("div.col.mb-2");
+        if (infoContainer != null) {
+            for (Element p : infoContainer.select("p")) {
+                Element strong = p.selectFirst("strong");
+                if (strong == null) continue;
+                String label = strong.text().trim().replace("：", "");
+                // 去除 strong 标签后的纯文本
+                Element pClone = p.clone();
+                pClone.select("strong").remove();
+                String value = pClone.text().trim();
+
+                if ("导演".equals(label)) {
+                    List<String> directors = new ArrayList<>();
+                    for (Element a : p.select("a")) {
+                        directors.add(a.text().trim());
+                    }
+                    director = directors.isEmpty() ? value : String.join(", ", directors);
+                } else if ("主演".equals(label)) {
+                    List<String> actors = new ArrayList<>();
+                    for (Element a : p.select("a")) {
+                        actors.add(a.text().trim());
+                    }
+                    actor = actors.isEmpty() ? value : String.join(", ", actors);
+                } else if ("制片国家/地区".equals(label)) {
+                    area = value.replaceAll("[\\[\\]]", "");
+                } else if ("语言".equals(label)) {
+                    lang = value;
+                } else if ("集数".equals(label)) {
+                    remarks = value;
+                }
+            }
+        }
+
+        // 播放列表
         List<String> playList = new ArrayList<>();
-        for (Element btn : playButtons) {
-            String text = btn.text().trim();
-            String href = btn.attr("href").split(";")[0].trim();
+        for (Element a : doc.select("#play-list a.btn-square")) {
+            String text = a.text().trim();
+            String href = a.attr("href").split(";")[0].trim();
             playList.add(text + "$" + href);
         }
         String playUrl = String.join("#", playList);
@@ -93,81 +154,25 @@ public class bdys extends Spider {
         vod.setVodName(name);
         vod.setVodPic(pic);
         vod.setVodContent(content);
-        vod.setVodPlayFrom("量子资源");
+        vod.setVodPlayFrom("哔嘀影视");  // 注意：原文是“哔嘀影视”，如需改为“量子资源”请自行修改
         vod.setVodPlayUrl(playUrl);
+        vod.setVodDirector(director);
+        vod.setVodActor(actor);
+        vod.setVodArea(area);
+        vod.setVodLang(lang);
+        vod.setVodRemarks(remarks);
+
+        System.out.println("[DETAIL] 提取成功: " + name);
         return Result.string(vod);
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        // 该源没有实现搜索，返回空列表
+        // 该源未实现搜索，返回空列表
         return Result.string(new ArrayList<>());
     }
 
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
-        System.out.println("[解析日志] 正在解析: " + playUrl);
-
-        // 1. 获取pid
-        String pageHtml = OkHttp.string(playUrl, getHeadersWithCookie());
-        Pattern pidPattern = Pattern.compile("var pid\\s*=\\s*(\\d+)");
-        Matcher pidMatcher = pidPattern.matcher(pageHtml);
-        if (!pidMatcher.find()) {
-            // 未找到pid，直接返回原链接
-            return Result.get().url(playUrl).header(getHeaders()).string();
-        }
-        String pid = pidMatcher.group(1);
-
-        // 2. 生成加密参数
-        Map<String, String> sgAndT = getSgAndT(pid);
-        String sg = sgAndT.get("sg");
-        String t = sgAndT.get("t");
-
-        // 3. 请求API
-        String apiUrl = HOST + "lines?t=" + t + "&sg=" + sg + "&pid=" + pid;
-        HashMap<String, String> apiHeaders = new HashMap<>(getHeadersWithCookie());
-        apiHeaders.put("Referer", playUrl);
-        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-        apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
-        String apiResp = OkHttp.string(apiUrl, apiHeaders);
-
-        // 4. 提取JSON
-        Pattern jsonPattern = Pattern.compile("(\\{.*\\})");
-        Matcher jsonMatcher = jsonPattern.matcher(apiResp);
-        if (jsonMatcher.find()) {
-            String jsonStr = jsonMatcher.group(1);
-            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
-            int code = json.get("code").getAsInt();
-            if (code == 0 && json.has("data")) {
-                com.google.gson.JsonObject data = json.getAsJsonObject("data");
-                String rawUrl = null;
-                if (data.has("url3") && !data.get("url3").isJsonNull()) {
-                    rawUrl = data.get("url3").getAsString();
-                } else if (data.has("m3u8_2") && !data.get("m3u8_2").isJsonNull()) {
-                    rawUrl = data.get("m3u8_2").getAsString();
-                } else if (data.has("m3u8") && !data.get("m3u8").isJsonNull()) {
-                    rawUrl = data.get("m3u8").getAsString();
-                }
-                if (rawUrl != null && !rawUrl.isEmpty()) {
-                    String finalUrl = rawUrl.split(",")[0].split("#")[0].trim();
-                    System.out.println("[SUCCESS] 提取成功: " + finalUrl);
-                    return Result.get().url(finalUrl).header(getHeaders()).string();
-                } else {
-                    System.out.println("[ERROR] 接口返回成功，但未找到播放地址字段");
-                }
-            } else {
-                String msg = json.has("msg") ? json.get("msg").getAsString() : "未知错误";
-                System.out.println("[ERROR] 接口返回状态异常: " + msg);
-            }
-        } else {
-            System.out.println("[ERROR] 响应非有效JSON格式");
-        }
-
-        // 失败时返回原链接
-        return Result.get().url(playUrl).header(getHeaders()).string();
-    }
-
+    // 加密参数生成（MD5 + AES）
     private Map<String, String> getSgAndT(String pid) {
         long timestamp = System.currentTimeMillis();
         String t = Long.toString(timestamp);
@@ -204,5 +209,73 @@ public class bdys extends Spider {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        String playUrl = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
+        System.out.println("[PLAY] 正在解析: " + playUrl);
+
+        // 使用 OkHttp 的 Session 管理（需自行实现 Cookie 持久化，这里简单用 OkHttp.string）
+        // 注意：OkHttp 默认不自动管理 Cookie，如需自动处理需额外设置，此处简化，直接请求并携带固定 Cookie
+        HashMap<String, String> headers = new HashMap<>(getHeaders());
+        headers.put("Cookie", "JSESSIONID=BE9F4982E7333BC81314A607392E2961"); // 固定 session，可根据需要改为动态获取
+        String pageHtml = OkHttp.string(playUrl, headers);
+        Pattern pidPattern = Pattern.compile("var pid\\s*=\\s*(\\d+)");
+        Matcher pidMatcher = pidPattern.matcher(pageHtml);
+        if (!pidMatcher.find()) {
+            System.out.println("[PLAY] 未找到 pid");
+            return Result.get().url(playUrl).header(getHeaders()).string();
+        }
+        String pid = pidMatcher.group(1);
+        System.out.println("[PLAY] pid: " + pid);
+
+        Map<String, String> sgAndT = getSgAndT(pid);
+        String sg = sgAndT.get("sg");
+        String t = sgAndT.get("t");
+        System.out.println("[PLAY] sg: " + sg + ", t: " + t);
+
+        String apiUrl = HOST + "lines?t=" + t + "&sg=" + sg + "&pid=" + pid;
+        HashMap<String, String> apiHeaders = new HashMap<>(headers);
+        apiHeaders.put("Referer", playUrl);
+        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+        apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
+        String apiResp = OkHttp.string(apiUrl, apiHeaders);
+        System.out.println("[PLAY] API status: 200");
+        System.out.println("[PLAY] API raw response: " + apiResp);
+
+        Pattern jsonPattern = Pattern.compile("(\\{.*\\})");
+        Matcher jsonMatcher = jsonPattern.matcher(apiResp);
+        if (jsonMatcher.find()) {
+            String jsonStr = jsonMatcher.group(1);
+            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
+            int code = json.get("code").getAsInt();
+            if (code == 0 && json.has("data")) {
+                com.google.gson.JsonObject data = json.getAsJsonObject("data");
+                String rawUrl = null;
+                if (data.has("url3") && !data.get("url3").isJsonNull()) {
+                    rawUrl = data.get("url3").getAsString();
+                } else if (data.has("m3u8_2") && !data.get("m3u8_2").isJsonNull()) {
+                    rawUrl = data.get("m3u8_2").getAsString();
+                } else if (data.has("m3u8") && !data.get("m3u8").isJsonNull()) {
+                    rawUrl = data.get("m3u8").getAsString();
+                }
+                if (rawUrl != null && !rawUrl.isEmpty()) {
+                    String finalUrl = rawUrl.split(",")[0].split("#")[0].trim();
+                    System.out.println("[SUCCESS] 提取成功: " + finalUrl);
+                    return Result.get().url(finalUrl).header(getHeaders()).string();
+                } else {
+                    System.out.println("[ERROR] 未找到播放地址字段");
+                    System.out.println("[DEBUG] 可用字段: " + data.keySet());
+                }
+            } else {
+                String msg = json.has("msg") ? json.get("msg").getAsString() : "未知错误";
+                System.out.println("[ERROR] 接口返回异常: code=" + code + ", msg=" + msg);
+            }
+        } else {
+            System.out.println("[ERROR] 响应非有效JSON格式");
+        }
+
+        return Result.get().url(playUrl).header(getHeaders()).string();
     }
 }
