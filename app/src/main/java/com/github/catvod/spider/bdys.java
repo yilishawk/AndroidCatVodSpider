@@ -20,7 +20,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class bdys extends Spider {  // 注意类名与文件名一致，原错误日志中类名为bdys
+public class bdys extends Spider {
 
     private static final String HOST = "https://v.xlys.ltd.ua/";
     private static final String USER_AGENT = Util.CHROME;
@@ -31,16 +31,16 @@ public class bdys extends Spider {  // 注意类名与文件名一致，原错�
         return headers;
     }
 
-    @Override
+    // 已去掉 @Override
     public String getName() {
         return "量子资源(完整版)";
     }
 
-    @Override
+    // 已去掉 @Override
     public void init(String extend) {
     }
 
-    @Override
+    // 已去掉 @Override
     public boolean isVideoCast() {
         return true;
     }
@@ -73,7 +73,7 @@ public class bdys extends Spider {  // 注意类名与文件名一致，原错�
             list.add(new Vod(vodId, name, pic, remark));
         }
         System.out.println("[CAT] 找到 " + list.size() + " 个视频");
-        // 修正：参数顺序为 page, hasNext, total, totalPages, list
+        // 修正参数顺序：page, hasNext, total, totalPages, list
         return Result.string(page, 1, list.size(), Integer.MAX_VALUE, list);
     }
 
