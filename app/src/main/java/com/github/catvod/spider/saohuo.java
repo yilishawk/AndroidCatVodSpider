@@ -5,7 +5,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -19,7 +18,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.google.gson.Gson;
-import okhttp3.ResponseBody;
 
 public class saohuo extends Spider {
 
@@ -33,14 +31,11 @@ public class saohuo extends Spider {
         headers.put("Accept-Encoding", "gzip, deflate");
     }
 
-    // 移除 @Override
     public String getName() {
         return "骚火电影[首页秒开版]";
     }
 
-    // 移除 @Override
     public void init(String extend) {
-        // 动态获取最新域名
         try {
             String html = OkHttp.string("http://shapp.us", headers);
             Pattern pattern = Pattern.compile("(https://.*?\\.com).*?最新网址");
@@ -53,21 +48,18 @@ public class saohuo extends Spider {
         }
     }
 
-    // 移除 @Override
     public boolean isVideoCast() {
         return true;
     }
 
     @Override
     public String homeContent(boolean filter) {
-        // 分类列表
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("20", "国产剧"));
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
         classes.add(new Class("4", "动漫"));
 
-        // 筛选配置
         Map<String, List<Map<String, Object>>> filters = new HashMap<>();
 
         // 电视剧筛选
@@ -114,12 +106,10 @@ public class saohuo extends Spider {
         filters.put("2", tvFilters);
         filters.put("4", animeFilters);
 
-        // 构建 JSON 返回
         Map<String, Object> result = new HashMap<>();
         result.put("class", classes);
         result.put("filters", filters);
-        Gson gson = new Gson();
-        return gson.toJson(result);
+        return new Gson().toJson(result);
     }
 
     private Map<String, String> createFilterValue(String name, String value) {
@@ -138,7 +128,6 @@ public class saohuo extends Spider {
             String html = OkHttp.string(url, headers);
             Document doc = Jsoup.parse(html);
             List<Vod> list = parseList(doc);
-            // 参数顺序：page, hasNext, total, totalPages, list
             return Result.string(page, 1, list.size(), 999, list);
         } catch (Exception e) {
             return Result.string(page, 0, 0, 0, new ArrayList<Vod>());
@@ -152,7 +141,6 @@ public class saohuo extends Spider {
             String html = OkHttp.string(url, headers);
             Document doc = Jsoup.parse(html);
 
-            // 基本信息容器
             Element vInfo = doc.selectFirst(".v_info_box");
             String infoText = vInfo != null ? vInfo.select("p").text() : "";
 
@@ -162,27 +150,20 @@ public class saohuo extends Spider {
             String director = "";
             String actor = "";
 
-            // 地区
             Matcher areaMatcher = Pattern.compile("^(.*?)\\s*/").matcher(infoText);
             if (areaMatcher.find()) area = areaMatcher.group(1).trim();
-            // 年份
             Matcher yearMatcher = Pattern.compile("(\\d{4})").matcher(infoText);
             if (yearMatcher.find()) year = yearMatcher.group(1);
-            // 类型
             Matcher typeMatcher = Pattern.compile("\\d{4}\\s*/\\s*(.*?)\\s*/").matcher(infoText);
             if (typeMatcher.find()) type = typeMatcher.group(1).trim();
-            // 导演
             Matcher directorMatcher = Pattern.compile("导演:(.*?)(?= / 主演:|$)").matcher(infoText);
             if (directorMatcher.find()) director = directorMatcher.group(1).trim();
-            // 演员
             Matcher actorMatcher = Pattern.compile("主演:(.*?)$").matcher(infoText);
             if (actorMatcher.find()) actor = actorMatcher.group(1).trim();
 
-            // 标题
             Element titleElem = vInfo != null ? vInfo.selectFirst("h1.v_title a") : null;
             String name = titleElem != null ? titleElem.text() : "";
 
-            // 图片
             Element imgElem = doc.selectFirst(".v_img img");
             String pic = "";
             if (imgElem != null) {
@@ -190,11 +171,9 @@ public class saohuo extends Spider {
                 if (pic.isEmpty()) pic = imgElem.attr("src");
             }
 
-            // 简介
             Element contentElem = doc.selectFirst(".p_txt.show_part");
             String content = contentElem != null ? contentElem.text().replace("剧情介绍", "").trim() : "";
 
-            // 播放源名称
             Elements playFromElems = doc.select(".play_from ul li");
             List<String> playFromList = new ArrayList<>();
             for (Element li : playFromElems) {
@@ -202,7 +181,6 @@ public class saohuo extends Spider {
             }
             String playFrom = String.join("$$$", playFromList);
 
-            // 播放列表（多源）
             Elements playLinkGroups = doc.select("#play_link li");
             List<String> playUrlGroups = new ArrayList<>();
 
@@ -214,7 +192,6 @@ public class saohuo extends Spider {
                     String fullUrl = href.startsWith("http") ? href : host + href;
                     links.add(new AbstractMap.SimpleEntry<>(text, fullUrl));
                 }
-                // 自然排序
                 links.sort((o1, o2) -> naturalCompare(o1.getKey(), o2.getKey()));
                 List<String> formatted = new ArrayList<>();
                 for (Map.Entry<String, String> entry : links) {
@@ -228,8 +205,7 @@ public class saohuo extends Spider {
             vod.setVodId(url);
             vod.setVodName(name);
             vod.setVodPic(pic);
-            // 类型存入备注（因 Vod 无 setVodType）
-            vod.setVodRemarks(type);
+            vod.setVodRemarks(type); // 类型放入备注
             vod.setVodArea(area);
             vod.setVodYear(year);
             vod.setVodDirector(director);
@@ -264,19 +240,16 @@ public class saohuo extends Spider {
         try {
             String html = OkHttp.string(id, headers);
 
-            // 提取 iframe 地址
             Matcher iframeMatcher = Pattern.compile("iframe src=\"(.*?)\"").matcher(html);
             if (!iframeMatcher.find()) {
                 return Result.get().url(id).header(headers).string();
             }
             String jxUrl = iframeMatcher.group(1);
 
-            // 请求 iframe 页面
             HashMap<String, String> jxHeaders = new HashMap<>(headers);
             jxHeaders.put("Referer", host + "/");
             String jxHtml = OkHttp.string(jxUrl, jxHeaders);
 
-            // 提取 url, t, key
             Matcher urlMatcher = Pattern.compile("var url = \"(.*?)\";").matcher(jxHtml);
             Matcher tMatcher = Pattern.compile("var t = \"(.*?)\";").matcher(jxHtml);
             Matcher keyMatcher = Pattern.compile("var key = OKOK\\(\"(.*?)\"\\);").matcher(jxHtml);
@@ -287,7 +260,6 @@ public class saohuo extends Spider {
             String tVal = tMatcher.group(1);
             String encodedKey = keyMatcher.group(1);
 
-            // 提取 ee 字典
             Matcher eeMatcher = Pattern.compile("const ee = (\\{.*?\\}) ;").matcher(jxHtml);
             Map<String, String> eeDict = new HashMap<>();
             if (eeMatcher.find()) {
@@ -300,10 +272,8 @@ public class saohuo extends Spider {
                 return Result.get().url(id).header(headers).string();
             }
 
-            // 解密 key
             String realKey = decodeKey(encodedKey, eeDict);
 
-            // 请求 API
             String apiUrl = "https://hhjx.hhplayer.com/api.php";
             Map<String, String> payload = new HashMap<>();
             payload.put("url", urlVal);
@@ -318,9 +288,8 @@ public class saohuo extends Spider {
             apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
 
-            String postBody = buildPostBody(payload);
-            OkResult okResult = OkHttp.post(apiUrl, postBody, apiHeaders);
-            String apiResp = okResult.body().string();
+            // 直接使用 OkHttp.post 返回 String
+            String apiResp = OkHttp.post(apiUrl, payload, apiHeaders);
 
             com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(apiResp).getAsJsonObject();
             if (json.get("code").getAsInt() == 200) {
@@ -360,7 +329,6 @@ public class saohuo extends Spider {
     }
 
     private int naturalCompare(String s1, String s2) {
-        // 简单数字优先排序：提取数字比较，否则字符串比较
         Pattern numPattern = Pattern.compile("(\\d+)");
         Matcher m1 = numPattern.matcher(s1);
         Matcher m2 = numPattern.matcher(s2);
@@ -376,7 +344,6 @@ public class saohuo extends Spider {
         try {
             byte[] decodedBytes = Base64.getDecoder().decode(encodedStr);
             String decoded = new String(decodedBytes, StandardCharsets.UTF_8);
-            // 按长度降序排序 key
             List<String> keys = new ArrayList<>(eeDict.keySet());
             keys.sort((a, b) -> Integer.compare(b.length(), a.length()));
 
@@ -401,14 +368,5 @@ public class saohuo extends Spider {
         } catch (Exception e) {
             return "";
         }
-    }
-
-    private String buildPostBody(Map<String, String> params) {
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, String> entry : params.entrySet()) {
-            if (sb.length() > 0) sb.append("&");
-            sb.append(entry.getKey()).append("=").append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
-        }
-        return sb.toString();
     }
 }
