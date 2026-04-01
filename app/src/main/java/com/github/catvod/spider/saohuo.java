@@ -5,6 +5,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -288,8 +289,9 @@ public class saohuo extends Spider {
             apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
 
-            // 直接使用 OkHttp.post 返回 String
-            String apiResp = OkHttp.post(apiUrl, payload, apiHeaders);
+            String postBody = buildPostBody(payload);
+            OkResult okResult = OkHttp.post(apiUrl, postBody, apiHeaders);
+            String apiResp = okResult.string();  // 关键：调用 string() 获取响应体
 
             com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(apiResp).getAsJsonObject();
             if (json.get("code").getAsInt() == 200) {
@@ -368,5 +370,14 @@ public class saohuo extends Spider {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private String buildPostBody(Map<String, String> params) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            if (sb.length() > 0) sb.append("&");
+            sb.append(entry.getKey()).append("=").append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+        }
+        return sb.toString();
     }
 }
