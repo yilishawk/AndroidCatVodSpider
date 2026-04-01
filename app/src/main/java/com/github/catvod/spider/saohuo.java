@@ -5,7 +5,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -290,8 +289,8 @@ public class saohuo extends Spider {
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
 
             String postBody = buildPostBody(payload);
-            OkResult okResult = OkHttp.post(apiUrl, postBody, apiHeaders);
-            String apiResp = okResult.string();  // 关键：调用 string() 获取响应体
+            // 直接使用返回 String 的重载（假设存在）
+            String apiResp = OkHttp.post(apiUrl, postBody, apiHeaders);
 
             com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(apiResp).getAsJsonObject();
             if (json.get("code").getAsInt() == 200) {
