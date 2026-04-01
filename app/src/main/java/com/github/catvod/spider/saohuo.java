@@ -6,7 +6,6 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
-import com.github.catvod.utils.Util;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -18,6 +17,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import com.google.gson.Gson;
+import okhttp3.ResponseBody;
 
 public class saohuo extends Spider {
 
@@ -31,12 +33,12 @@ public class saohuo extends Spider {
         headers.put("Accept-Encoding", "gzip, deflate");
     }
 
-    @Override
+    // 移除 @Override
     public String getName() {
         return "骚火电影[首页秒开版]";
     }
 
-    @Override
+    // 移除 @Override
     public void init(String extend) {
         // 动态获取最新域名
         try {
@@ -51,7 +53,7 @@ public class saohuo extends Spider {
         }
     }
 
-    @Override
+    // 移除 @Override
     public boolean isVideoCast() {
         return true;
     }
@@ -116,7 +118,8 @@ public class saohuo extends Spider {
         Map<String, Object> result = new HashMap<>();
         result.put("class", classes);
         result.put("filters", filters);
-        return com.github.catvod.utils.Util.gson.toJson(result);
+        Gson gson = new Gson();
+        return gson.toJson(result);
     }
 
     private Map<String, String> createFilterValue(String name, String value) {
@@ -317,7 +320,7 @@ public class saohuo extends Spider {
 
             String postBody = buildPostBody(payload);
             OkResult okResult = OkHttp.post(apiUrl, postBody, apiHeaders);
-            String apiResp = okResult.string();
+            String apiResp = okResult.body().string();
 
             com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(apiResp).getAsJsonObject();
             if (json.get("code").getAsInt() == 200) {
