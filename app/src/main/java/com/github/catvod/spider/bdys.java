@@ -20,7 +20,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class bdys extends Spider {
+public class bdys extends Spider {  // 注意类名与文件名一致，原错误日志中类名为bdys
 
     private static final String HOST = "https://v.xlys.ltd.ua/";
     private static final String USER_AGENT = Util.CHROME;
@@ -73,7 +73,8 @@ public class bdys extends Spider {
             list.add(new Vod(vodId, name, pic, remark));
         }
         System.out.println("[CAT] 找到 " + list.size() + " 个视频");
-        return Result.string(list, page, 1, list.size(), Integer.MAX_VALUE);
+        // 修正：参数顺序为 page, hasNext, total, totalPages, list
+        return Result.string(page, 1, list.size(), Integer.MAX_VALUE, list);
     }
 
     @Override
@@ -140,6 +141,15 @@ public class bdys extends Spider {
             }
         }
 
+        // 将语言合并到备注中（如果集数已存在，用 | 分隔）
+        if (!lang.isEmpty()) {
+            if (!remarks.isEmpty()) {
+                remarks += " | " + lang;
+            } else {
+                remarks = lang;
+            }
+        }
+
         // 播放列表
         List<String> playList = new ArrayList<>();
         for (Element a : doc.select("#play-list a.btn-square")) {
@@ -154,13 +164,13 @@ public class bdys extends Spider {
         vod.setVodName(name);
         vod.setVodPic(pic);
         vod.setVodContent(content);
-        vod.setVodPlayFrom("哔嘀影视");  // 注意：原文是“哔嘀影视”，如需改为“量子资源”请自行修改
+        vod.setVodPlayFrom("哔嘀影视");
         vod.setVodPlayUrl(playUrl);
         vod.setVodDirector(director);
         vod.setVodActor(actor);
         vod.setVodArea(area);
-        vod.setVodLang(lang);
         vod.setVodRemarks(remarks);
+        // 注意：Vod 类可能没有 setVodLang，故不调用
 
         System.out.println("[DETAIL] 提取成功: " + name);
         return Result.string(vod);
@@ -168,7 +178,6 @@ public class bdys extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        // 该源未实现搜索，返回空列表
         return Result.string(new ArrayList<>());
     }
 
@@ -178,13 +187,10 @@ public class bdys extends Spider {
         String t = Long.toString(timestamp);
         String plain = pid + "-" + t;
         try {
-            // MD5
             MessageDigest md = MessageDigest.getInstance("MD5");
             byte[] md5Bytes = md.digest(plain.getBytes(StandardCharsets.UTF_8));
             String md5Hex = bytesToHex(md5Bytes);
-            // 取前16字节作为AES密钥
             byte[] keyBytes = md5Hex.substring(0, 16).getBytes(StandardCharsets.UTF_8);
-            // AES/ECB/PKCS5Padding 加密
             Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
             SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
             cipher.init(Cipher.ENCRYPT_MODE, keySpec);
@@ -216,10 +222,9 @@ public class bdys extends Spider {
         String playUrl = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
         System.out.println("[PLAY] 正在解析: " + playUrl);
 
-        // 使用 OkHttp 的 Session 管理（需自行实现 Cookie 持久化，这里简单用 OkHttp.string）
-        // 注意：OkHttp 默认不自动管理 Cookie，如需自动处理需额外设置，此处简化，直接请求并携带固定 Cookie
         HashMap<String, String> headers = new HashMap<>(getHeaders());
-        headers.put("Cookie", "JSESSIONID=BE9F4982E7333BC81314A607392E2961"); // 固定 session，可根据需要改为动态获取
+        // 使用固定 session，可根据需要改为动态获取
+        headers.put("Cookie", "JSESSIONID=BE9F4982E7333BC81314A607392E2961");
         String pageHtml = OkHttp.string(playUrl, headers);
         Pattern pidPattern = Pattern.compile("var pid\\s*=\\s*(\\d+)");
         Matcher pidMatcher = pidPattern.matcher(pageHtml);
@@ -241,7 +246,6 @@ public class bdys extends Spider {
         apiHeaders.put("X-Requested-With", "XMLHttpRequest");
         apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
         String apiResp = OkHttp.string(apiUrl, apiHeaders);
-        System.out.println("[PLAY] API status: 200");
         System.out.println("[PLAY] API raw response: " + apiResp);
 
         Pattern jsonPattern = Pattern.compile("(\\{.*\\})");
