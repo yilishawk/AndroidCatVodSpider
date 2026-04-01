@@ -64,7 +64,7 @@ public class bdys extends Spider {
             String remark = card.selectFirst(".bg-pink") != null ? card.selectFirst(".bg-pink").text().trim() : "";
             list.add(new Vod(vodId, name, pic, remark));
         }
-        return Result.string(list, page, 1, list.size(), Integer.MAX_VALUE);
+        return Result.string(page, 1, list.size(), Integer.MAX_VALUE, list);
     }
 
     @Override
