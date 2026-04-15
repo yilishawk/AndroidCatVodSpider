@@ -6,7 +6,8 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Util;
-
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -31,20 +32,6 @@ public class bdys extends Spider {
         return headers;
     }
 
-    // 已去掉 @Override
-    public String getName() {
-        return "量子资源(完整版)";
-    }
-
-    // 已去掉 @Override
-    public void init(String extend) {
-    }
-
-    // 已去掉 @Override
-    public boolean isVideoCast() {
-        return true;
-    }
-
     @Override
     public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
@@ -57,7 +44,6 @@ public class bdys extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = Integer.parseInt(pg);
         String url = HOST + "s/all/" + page + "?type=" + tid;
-        System.out.println("[CAT] 请求URL: " + url);
         String html = OkHttp.string(url, getHeaders());
         Document doc = Jsoup.parse(html);
         List<Vod> list = new ArrayList<>();
@@ -65,221 +51,136 @@ public class bdys extends Spider {
         for (Element card : cards) {
             Element a = card.selectFirst("a");
             if (a == null) continue;
-            String href = a.attr("href");
-            String vodId = href.split(";")[0].trim();
+            String vodId = a.attr("href");
             String name = card.selectFirst("h3.text-truncate") != null ? card.selectFirst("h3.text-truncate").text().trim() : "";
             String pic = card.selectFirst("img") != null ? card.selectFirst("img").attr("src") : "";
             String remark = card.selectFirst(".bg-pink") != null ? card.selectFirst(".bg-pink").text().trim() : "";
             list.add(new Vod(vodId, name, pic, remark));
         }
-        System.out.println("[CAT] 找到 " + list.size() + " 个视频");
-        // 修正参数顺序：page, hasNext, total, totalPages, list
-        return Result.string(page, 1, list.size(), Integer.MAX_VALUE, list);
+        // TVBox 标准返回：Result.string(当前页, 下一页, 总数, 总页数, 列表)
+        // 这里的 1000 是个估算值，只要当前页小于总页数，TVBox 就会允许翻页
+        return Result.string(page, page + 1, 20, 1000, list);
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String id = ids.get(0);
-        String url = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
-        System.out.println("[DETAIL] 请求URL: " + url);
-
+        String url = id.startsWith("http") ? id : HOST + id.replaceAll("^/+", "");
         String html = OkHttp.string(url, getHeaders());
-        System.out.println("[DETAIL] 响应状态码: 200");
-        System.out.println("[DETAIL] 响应内容片段: " + (html.length() > 500 ? html.substring(0, 500) : html));
-
         Document doc = Jsoup.parse(html);
 
-        // 标题（第二个 h2，类名 d-sm-block d-md-none）
+        Vod vod = new Vod();
+        vod.setVodId(id);
+        
         Element titleElem = doc.selectFirst("h2.d-sm-block.d-md-none");
-        String name = titleElem != null ? titleElem.text().trim() : "";
+        vod.setVodName(titleElem != null ? titleElem.text().trim() : "");
 
-        // 封面
         Element picElem = doc.selectFirst(".cover-lg-max-25 img");
-        String pic = picElem != null ? picElem.attr("src") : "";
+        vod.setVodPic(picElem != null ? picElem.attr("src") : "");
 
-        // 简介
         Element contentElem = doc.selectFirst("#synopsis .card-body");
-        String content = contentElem != null ? contentElem.text().trim() : "暂无简介";
-
-        // 导演、演员、地区、语言、集数
-        String director = "";
-        String actor = "";
-        String area = "";
-        String lang = "";
-        String remarks = "";
+        vod.setVodContent(contentElem != null ? contentElem.text().trim() : "暂无简介");
 
         Element infoContainer = doc.selectFirst("div.col.mb-2");
         if (infoContainer != null) {
             for (Element p : infoContainer.select("p")) {
-                Element strong = p.selectFirst("strong");
-                if (strong == null) continue;
-                String label = strong.text().trim().replace("：", "");
-                // 去除 strong 标签后的纯文本
-                Element pClone = p.clone();
-                pClone.select("strong").remove();
-                String value = pClone.text().trim();
-
-                if ("导演".equals(label)) {
-                    List<String> directors = new ArrayList<>();
-                    for (Element a : p.select("a")) {
-                        directors.add(a.text().trim());
-                    }
-                    director = directors.isEmpty() ? value : String.join(", ", directors);
-                } else if ("主演".equals(label)) {
-                    List<String> actors = new ArrayList<>();
-                    for (Element a : p.select("a")) {
-                        actors.add(a.text().trim());
-                    }
-                    actor = actors.isEmpty() ? value : String.join(", ", actors);
-                } else if ("制片国家/地区".equals(label)) {
-                    area = value.replaceAll("[\\[\\]]", "");
-                } else if ("语言".equals(label)) {
-                    lang = value;
-                } else if ("集数".equals(label)) {
-                    remarks = value;
-                }
+                String pText = p.text();
+                if (pText.contains("导演")) vod.setVodDirector(pText.replace("导演：", "").trim());
+                else if (pText.contains("主演")) vod.setVodActor(pText.replace("主演：", "").trim());
+                else if (pText.contains("制片国家")) vod.setVodArea(pText.replace("制片国家/地区：", "").trim());
+                else if (pText.contains("集数")) vod.setVodRemarks(pText.replace("集数：", "").trim());
             }
         }
 
-        // 将语言合并到备注中（如果集数已存在，用 | 分隔）
-        if (!lang.isEmpty()) {
-            if (!remarks.isEmpty()) {
-                remarks += " | " + lang;
-            } else {
-                remarks = lang;
-            }
-        }
-
-        // 播放列表
         List<String> playList = new ArrayList<>();
         for (Element a : doc.select("#play-list a.btn-square")) {
             String text = a.text().trim();
-            String href = a.attr("href").split(";")[0].trim();
+            String href = a.attr("href");
             playList.add(text + "$" + href);
         }
-        String playUrl = String.join("#", playList);
+        
+        vod.setVodPlayFrom("量子资源");
+        vod.setVodPlayUrl(String.join("#", playList));
 
-        Vod vod = new Vod();
-        vod.setVodId(id);
-        vod.setVodName(name);
-        vod.setVodPic(pic);
-        vod.setVodContent(content);
-        vod.setVodPlayFrom("哔嘀影视");
-        vod.setVodPlayUrl(playUrl);
-        vod.setVodDirector(director);
-        vod.setVodActor(actor);
-        vod.setVodArea(area);
-        vod.setVodRemarks(remarks);
-        // 注意：Vod 类可能没有 setVodLang，故不调用
-
-        System.out.println("[DETAIL] 提取成功: " + name);
         return Result.string(vod);
     }
 
     @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        return Result.string(new ArrayList<>());
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        String playUrl = id.startsWith("http") ? id : HOST + id.replaceAll("^/+", "");
+        String pageHtml = OkHttp.string(playUrl, getHeaders());
+        
+        Matcher matcher = Pattern.compile("var pid\\s*=\\s*(\\d+)").matcher(pageHtml);
+        if (!matcher.find()) return Result.get().url(playUrl).string();
+        String pid = matcher.group(1);
+
+        Map<String, String> sgAndT = getSgAndT(pid);
+        String apiUrl = HOST + "lines?t=" + sgAndT.get("t") + "&sg=" + sgAndT.get("sg") + "&pid=" + pid;
+        
+        HashMap<String, String> apiHeaders = getHeaders();
+        apiHeaders.put("Referer", playUrl);
+        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+        
+        String apiResp = OkHttp.string(apiUrl, apiHeaders);
+        // 兼容非标准 JSON 情况
+        String jsonStr = apiResp.substring(apiResp.indexOf("{"), apiResp.lastIndexOf("}") + 1);
+        JsonObject json = JsonParser.parseString(jsonStr).getAsJsonObject();
+        
+        if (json.get("code").getAsInt() == 0) {
+            JsonObject data = json.getAsJsonObject("data");
+            String url = "";
+            if (data.has("url3")) url = data.get("url3").getAsString();
+            else if (data.has("m3u8")) url = data.get("m3u8").getAsString();
+            
+            if (!url.isEmpty()) {
+                return Result.get().url(url.split(",")[0]).header(getHeaders()).string();
+            }
+        }
+        return Result.get().url(playUrl).string();
     }
 
-    // 加密参数生成（MD5 + AES）
+    @Override
+    public String searchContent(String key, boolean quick) throws Exception {
+        String url = HOST + "search?text=" + key;
+        String html = OkHttp.string(url, getHeaders());
+        Document doc = Jsoup.parse(html);
+        List<Vod> list = new ArrayList<>();
+        for (Element card : doc.select(".row-cards .col-4 .card-sm")) {
+            Element a = card.selectFirst("a");
+            if (a == null) continue;
+            String name = card.selectFirst("h3") != null ? card.selectFirst("h3").text().trim() : "";
+            list.add(new Vod(a.attr("href"), name, card.selectFirst("img").attr("src"), ""));
+        }
+        return Result.string(list);
+    }
+
     private Map<String, String> getSgAndT(String pid) {
         long timestamp = System.currentTimeMillis();
         String t = Long.toString(timestamp);
-        String plain = pid + "-" + t;
+        Map<String, String> result = new HashMap<>();
         try {
+            String plain = pid + "-" + t;
             MessageDigest md = MessageDigest.getInstance("MD5");
             byte[] md5Bytes = md.digest(plain.getBytes(StandardCharsets.UTF_8));
             String md5Hex = bytesToHex(md5Bytes);
             byte[] keyBytes = md5Hex.substring(0, 16).getBytes(StandardCharsets.UTF_8);
+            
             Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec);
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"));
             byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-            String sg = bytesToHex(encrypted).toUpperCase();
-            Map<String, String> result = new HashMap<>();
-            result.put("sg", sg);
+            
+            result.put("sg", bytesToHex(encrypted).toUpperCase());
             result.put("t", t);
-            return result;
         } catch (Exception e) {
-            e.printStackTrace();
-            Map<String, String> result = new HashMap<>();
             result.put("sg", "");
             result.put("t", t);
-            return result;
         }
+        return result;
     }
 
     private String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
+        for (byte b : bytes) sb.append(String.format("%02x", b));
         return sb.toString();
-    }
-
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
-        System.out.println("[PLAY] 正在解析: " + playUrl);
-
-        HashMap<String, String> headers = new HashMap<>(getHeaders());
-        // 使用固定 session，可根据需要改为动态获取
-        headers.put("Cookie", "JSESSIONID=BE9F4982E7333BC81314A607392E2961");
-        String pageHtml = OkHttp.string(playUrl, headers);
-        Pattern pidPattern = Pattern.compile("var pid\\s*=\\s*(\\d+)");
-        Matcher pidMatcher = pidPattern.matcher(pageHtml);
-        if (!pidMatcher.find()) {
-            System.out.println("[PLAY] 未找到 pid");
-            return Result.get().url(playUrl).header(getHeaders()).string();
-        }
-        String pid = pidMatcher.group(1);
-        System.out.println("[PLAY] pid: " + pid);
-
-        Map<String, String> sgAndT = getSgAndT(pid);
-        String sg = sgAndT.get("sg");
-        String t = sgAndT.get("t");
-        System.out.println("[PLAY] sg: " + sg + ", t: " + t);
-
-        String apiUrl = HOST + "lines?t=" + t + "&sg=" + sg + "&pid=" + pid;
-        HashMap<String, String> apiHeaders = new HashMap<>(headers);
-        apiHeaders.put("Referer", playUrl);
-        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-        apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
-        String apiResp = OkHttp.string(apiUrl, apiHeaders);
-        System.out.println("[PLAY] API raw response: " + apiResp);
-
-        Pattern jsonPattern = Pattern.compile("(\\{.*\\})");
-        Matcher jsonMatcher = jsonPattern.matcher(apiResp);
-        if (jsonMatcher.find()) {
-            String jsonStr = jsonMatcher.group(1);
-            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
-            int code = json.get("code").getAsInt();
-            if (code == 0 && json.has("data")) {
-                com.google.gson.JsonObject data = json.getAsJsonObject("data");
-                String rawUrl = null;
-                if (data.has("url3") && !data.get("url3").isJsonNull()) {
-                    rawUrl = data.get("url3").getAsString();
-                } else if (data.has("m3u8_2") && !data.get("m3u8_2").isJsonNull()) {
-                    rawUrl = data.get("m3u8_2").getAsString();
-                } else if (data.has("m3u8") && !data.get("m3u8").isJsonNull()) {
-                    rawUrl = data.get("m3u8").getAsString();
-                }
-                if (rawUrl != null && !rawUrl.isEmpty()) {
-                    String finalUrl = rawUrl.split(",")[0].split("#")[0].trim();
-                    System.out.println("[SUCCESS] 提取成功: " + finalUrl);
-                    return Result.get().url(finalUrl).header(getHeaders()).string();
-                } else {
-                    System.out.println("[ERROR] 未找到播放地址字段");
-                    System.out.println("[DEBUG] 可用字段: " + data.keySet());
-                }
-            } else {
-                String msg = json.has("msg") ? json.get("msg").getAsString() : "未知错误";
-                System.out.println("[ERROR] 接口返回异常: code=" + code + ", msg=" + msg);
-            }
-        } else {
-            System.out.println("[ERROR] 响应非有效JSON格式");
-        }
-
-        return Result.get().url(playUrl).header(getHeaders()).string();
     }
 }
