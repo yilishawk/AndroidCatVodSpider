@@ -75,7 +75,7 @@ public class Fkvm extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 完全交给壳子嗅探，格式遵循 FongMi 规范
+        // 交给壳子嗅探，格式遵循 FongMi 规范
         return Result.get()
                 .parse(1)
                 .url(id)
