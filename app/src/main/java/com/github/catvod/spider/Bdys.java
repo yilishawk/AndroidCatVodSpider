@@ -21,7 +21,7 @@ public class Bdys extends Spider {
 
     private HashMap<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
-        // 严格按照你抓包成功的 Headers 填充
+        // 按照你抓包成功的 Headers 填充
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
         headers.put("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
         headers.put("accept-language", "zh-CN,zh;q=0.9");
