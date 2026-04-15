@@ -4,6 +4,7 @@ import android.text.TextUtils;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.utils.OkHttp;
+import com.github.catvod.utils.Util;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -29,38 +30,61 @@ public class bttw extends Spider {
     private String ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private boolean domainInited = false;
 
+    private String fetch(String url) {
+        try {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("User-Agent", ua)
+                    .build();
+            Response response = OkHttp.client().newCall(request).execute();
+            String result = response.body().string();
+            response.close();
+            return result;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private String fetchWithReferer(String url, String referer) {
+        try {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("User-Agent", ua)
+                    .header("Referer", referer)
+                    .build();
+            Response response = OkHttp.client().newCall(request).execute();
+            String result = response.body().string();
+            response.close();
+            return result;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
     @Override
     public void init(String extend) {
         if (domainInited) return;
 
         try {
-            Request request = new Request.Builder()
-                    .url(host)
-                    .header("User-Agent", ua)
-                    .build();
-            Response response = OkHttp.client().newCall(request).execute();
-            if (response.isSuccessful()) {
+            String html = fetch(host);
+            if (html != null) {
                 domainInited = true;
+                return;
             }
-            response.close();
         } catch (Exception e) {
             // 尝试获取新域名
             try {
-                Request pubRequest = new Request.Builder()
-                        .url("https://www.bttwo.vip/")
-                        .header("User-Agent", ua)
-                        .build();
-                Response pubResponse = OkHttp.client().newCall(pubRequest).execute();
-                if (pubResponse.isSuccessful()) {
-                    String html = pubResponse.body().string();
+                String pubHtml = fetch("https://www.bttwo.vip/");
+                if (pubHtml != null) {
                     Pattern pattern = Pattern.compile("href=\"(https?://www\\.bttwo\\.[a-z]+)\"");
-                    Matcher matcher = pattern.matcher(html);
+                    Matcher matcher = pattern.matcher(pubHtml);
                     if (matcher.find()) {
                         host = matcher.group(1).replaceAll("/$", "");
                         domainInited = true;
                     }
                 }
-                pubResponse.close();
             } catch (Exception ex) {
                 // ignore
             }
@@ -69,7 +93,7 @@ public class bttw extends Spider {
 
     @Override
     public String getName() {
-        return "两个BT[修复版]";
+        return "两个BT";
     }
 
     @Override
@@ -111,15 +135,8 @@ public class bttw extends Spider {
         JSONArray list = new JSONArray();
         
         try {
-            Request request = new Request.Builder()
-                    .url(url)
-                    .header("User-Agent", ua)
-                    .header("Referer", host + "/")
-                    .build();
-            Response response = OkHttp.client().newCall(request).execute();
-            
-            if (response.isSuccessful()) {
-                String html = response.body().string();
+            String html = fetchWithReferer(url, host + "/");
+            if (html != null) {
                 Document doc = Jsoup.parse(html);
                 
                 Elements items = doc.select("div.bt_img ul li");
@@ -158,7 +175,6 @@ public class bttw extends Spider {
                     list.put(video);
                 }
             }
-            response.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -180,15 +196,8 @@ public class bttw extends Spider {
         JSONObject vod = new JSONObject();
         
         try {
-            Request request = new Request.Builder()
-                    .url(url)
-                    .header("User-Agent", ua)
-                    .header("Referer", host + "/")
-                    .build();
-            Response response = OkHttp.client().newCall(request).execute();
-            
-            if (response.isSuccessful()) {
-                String html = response.body().string();
+            String html = fetchWithReferer(url, host + "/");
+            if (html != null) {
                 Document doc = Jsoup.parse(html);
                 
                 Element titleTag = doc.selectFirst("h1");
@@ -243,7 +252,6 @@ public class bttw extends Spider {
                     vod.put("vod_play_url", "");
                 }
             }
-            response.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -262,15 +270,9 @@ public class bttw extends Spider {
         
         try {
             String searchUrl = host + "/xsssearch?q=" + URLEncoder.encode(key, "UTF-8");
-            Request request = new Request.Builder()
-                    .url(searchUrl)
-                    .header("User-Agent", ua)
-                    .header("Referer", host + "/xsssearch")
-                    .build();
-            Response response = OkHttp.client().newCall(request).execute();
+            String html = fetchWithReferer(searchUrl, host + "/xsssearch");
             
-            if (response.isSuccessful()) {
-                String html = response.body().string();
+            if (html != null) {
                 Document doc = Jsoup.parse(html);
                 Elements items = doc.select("ul li");
                 
@@ -302,7 +304,6 @@ public class bttw extends Spider {
                     }
                 }
             }
-            response.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -321,16 +322,9 @@ public class bttw extends Spider {
         JSONObject result = new JSONObject();
         
         try {
-            Request request = new Request.Builder()
-                    .url(id)
-                    .header("User-Agent", ua)
-                    .header("Referer", host + "/")
-                    .build();
-            Response response = OkHttp.client().newCall(request).execute();
+            String html = fetchWithReferer(id, host + "/");
             
-            if (response.isSuccessful()) {
-                String html = response.body().string();
-                
+            if (html != null) {
                 String[] patterns = {
                     "fetch\\s*\\(\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
                     "url\\s*:\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
@@ -358,7 +352,6 @@ public class bttw extends Spider {
                     }
                 }
             }
-            response.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
