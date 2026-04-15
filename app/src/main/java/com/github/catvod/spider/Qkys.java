@@ -1,6 +1,5 @@
 package com.github.catvod.spider;
 
-import android.content.Context;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -11,7 +10,6 @@ import com.google.gson.JsonParser;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -32,26 +30,25 @@ public class Qkys extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("guochan", "國產劇"));
-        classes.add(new Class("2", "連續劇"));
-        classes.add(new Class("1", "電影"));
-        classes.add(new Class("3", "綜藝"));
-        classes.add(new Class("4", "動漫"));
-        return Result.string(classes, new ArrayList<Vod>());
+        classes.add(new Class("guochan", "国产剧"));
+        classes.add(new Class("2", "连续剧"));
+        classes.add(new Class("1", "电影"));
+        classes.add(new Class("3", "综艺"));
+        classes.add(new Class("4", "动漫"));
+        return Result.string(classes, new ArrayList<>());
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = host + "/qkwshow/" + tid + "--------" + pg + "---.html";
-        String html = OkHttp.string(url, getHeaders());
-        Document doc = Jsoup.parse(html);
+        Document doc = Jsoup.parse(OkHttp.string(url, getHeaders()));
         List<Vod> list = new ArrayList<>();
         for (Element item : doc.select(".stui-vodlist__item")) {
             Element thumb = item.selectFirst(".stui-vodlist__thumb");
             if (thumb == null) continue;
             list.add(new Vod(thumb.attr("href"), thumb.attr("title"), thumb.attr("data-original"), item.select(".pic-text").text().trim()));
         }
-        return Result.string(Integer.parseInt(pg), Integer.parseInt(pg) + 1, list.size(), 1000, list);
+        return Result.get().page(Integer.parseInt(pg), Integer.parseInt(pg) + 1, list.size(), 1000).vod(list).string();
     }
 
     @Override
@@ -59,7 +56,8 @@ public class Qkys extends Spider {
         String url = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
         Document doc = Jsoup.parse(OkHttp.string(url, getHeaders()));
         Vod vod = new Vod();
-        vod.setVodName(doc.selectFirst(".stui-content__detail .title").text());
+        vod.setVodId(ids.get(0));
+        vod.setVodName(doc.selectFirst(".stui-content__detail .title").text().trim());
         vod.setVodPic(doc.selectFirst(".stui-content__thumb img").attr("data-original"));
         
         List<String> fromList = new ArrayList<>();
@@ -76,7 +74,7 @@ public class Qkys extends Spider {
         }
         vod.setVodPlayFrom(String.join("$$$", fromList));
         vod.setVodPlayUrl(String.join("$$$", urlList));
-        return Result.string(vod);
+        return Result.get().vod(vod).string();
     }
 
     @Override
@@ -91,18 +89,20 @@ public class Qkys extends Spider {
             String idxUrl = jxHost + "/index.php?url=" + pdata.get("url").getAsString() + "&type=" + pdata.get("from").getAsString();
             String idxHtml = OkHttp.string(idxUrl, getHeaders());
             
-            Map<String, String> apiPayload = new HashMap<>();
-            apiPayload.put("url", extractField("url", idxHtml));
-            apiPayload.put("time", extractField("time", idxHtml));
-            apiPayload.put("vkey", extractField("vkey", idxHtml));
+            Map<String, String> params = new HashMap<>();
+            params.put("url", extractField("url", idxHtml));
+            params.put("time", extractField("time", idxHtml));
+            params.put("key", "");
+            params.put("vkey", extractField("vkey", idxHtml));
             
             HashMap<String, String> apiHeaders = getHeaders();
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
             apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
 
-            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders).getBody();
-            JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
-            String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : resJson.get("video_url").getAsString();
+            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", params, apiHeaders).getBody();
+            JsonObject res = JsonParser.parseString(apiResp).getAsJsonObject();
+            String finalUrl = res.has("url") ? res.get("url").getAsString() : res.get("video_url").getAsString();
+            
             return Result.get().url(finalUrl).header(getHeaders()).string();
         } catch (Exception e) {
             return Result.get().parse(1).url(playUrl).string();
@@ -114,3 +114,4 @@ public class Qkys extends Spider {
         return m.find() ? m.group(1) : "";
     }
 }
+
