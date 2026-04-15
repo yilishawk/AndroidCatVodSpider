@@ -19,7 +19,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class 4kvm extends Spider {
+public class Fkvm extends Spider {
 
     private String host = "https://www.4kvm.me";
 
