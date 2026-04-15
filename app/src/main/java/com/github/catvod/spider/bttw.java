@@ -7,6 +7,8 @@ import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Util;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -59,6 +61,8 @@ public class bttw extends Spider {
         classes.add(new Class("new-movie", "电影"));
         classes.add(new Class("meiju", "美剧"));
         classes.add(new Class("jpsrtv", "日韩剧"));
+        
+        // 根据bdys.java的写法，homeContent返回Result.string(classes, new ArrayList<>())
         return Result.string(classes, new ArrayList<>());
     }
 
@@ -111,6 +115,7 @@ public class bttw extends Spider {
             }
             
             System.out.println("[CAT] 找到 " + list.size() + " 个视频");
+            // 使用bdys.java中的格式：Result.string(page, list.size(), Integer.MAX_VALUE, list)
             return Result.string(page, list.size(), Integer.MAX_VALUE, list);
         } catch (Exception e) {
             e.printStackTrace();
@@ -182,6 +187,7 @@ public class bttw extends Spider {
             }
             
             System.out.println("[DETAIL] 提取成功: " + name);
+            // 使用bdys.java中的格式：Result.string(vod)
             return Result.string(vod);
         } catch (Exception e) {
             e.printStackTrace();
@@ -263,6 +269,7 @@ public class bttw extends Spider {
                         m3u8Url = m3u8Url.replace("\\/", "/");
                         
                         System.out.println("[PLAYER] 提取到m3u8地址: " + m3u8Url);
+                        // 使用bdys.java中的格式：Result.get().url(url).header(headers).string()
                         return Result.get().url(m3u8Url).header(headers).string();
                     }
                 }
