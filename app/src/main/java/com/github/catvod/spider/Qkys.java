@@ -26,12 +26,11 @@ public class Qkys extends Spider {
 
     private HashMap<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", Util.CHROME);
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
         headers.put("Referer", host + "/");
         return headers;
     }
 
-    // 修复点：去掉 @Override，因为基类没有这个方法
     public String getName() {
         return "全看影院";
     }
@@ -44,21 +43,41 @@ public class Qkys extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("guochan", "国产剧"));
-        classes.add(new Class("2", "连续剧"));
-        classes.add(new Class("1", "电影"));
-        classes.add(new Class("3", "综艺"));
-        classes.add(new Class("4", "动漫"));
+        classes.add(new Class("guochan", "國產劇"));
+        classes.add(new Class("2", "連續劇"));
+        classes.add(new Class("1", "電影"));
+        classes.add(new Class("3", "綜藝"));
+        classes.add(new Class("4", "動漫"));
         return Result.string(classes, new ArrayList<Vod>());
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        // tid 對應分類 ID，pg 對應頁碼
         String url = host + "/qkwshow/" + tid + "--------" + pg + "---.html";
         try {
             String html = OkHttp.string(url, getHeaders());
-            List<Vod> list = parseList(html);
+            Document doc = Jsoup.parse(html);
+            List<Vod> list = new ArrayList<>();
+            // 嘗試解析列表，全看影視主要使用 stui-vodlist__item
+            Elements items = doc.select(".stui-vodlist__item, .stui-vodlist li");
+            
+            for (Element item : items) {
+                Element thumb = item.selectFirst("a.stui-vodlist__thumb");
+                if (thumb == null) continue;
+                
+                String vodId = thumb.attr("href");
+                String name = thumb.attr("title");
+                String pic = thumb.attr("data-original");
+                if (pic.isEmpty()) pic = thumb.attr("src");
+                if (pic.startsWith("//")) pic = "https:" + pic;
+                
+                String remark = item.select(".pic-text").text().trim();
+                list.add(new Vod(vodId, name, pic, remark));
+            }
+            
             int page = Integer.parseInt(pg);
+            // 關鍵：必須回傳 5 個參數 (page, pageCount, limit, total, list)
             return Result.string(page, page + 1, list.size(), 1000, list);
         } catch (Exception e) {
             return Result.string(Integer.parseInt(pg), 0, 0, 0, new ArrayList<Vod>());
@@ -79,7 +98,7 @@ public class Qkys extends Spider {
             Element pic = doc.selectFirst(".stui-content__thumb img");
             if (pic != null) vod.setVodPic(pic.attr("data-original"));
             vod.setVodActor(detail.select("p.data:contains(主演)").text().replace("主演：", "").trim());
-            vod.setVodDirector(detail.select("p.data:contains(导演)").text().replace("导演：", "").trim());
+            vod.setVodDirector(detail.select("p.data:contains(導演)").text().replace("導演：", "").trim());
             vod.setVodContent(doc.selectFirst(".stui-content__desc").text().trim());
 
             List<String> fromList = new ArrayList<>();
@@ -106,32 +125,26 @@ public class Qkys extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        String url = host + "/qkwsearch/-------------.html?wd=" + URLEncoder.encode(key, "UTF-8") + "&submit=";
+        String url = host + "/qkwsearch/-------------.html?wd=" + URLEncoder.encode(key, "UTF-8");
         try {
             String html = OkHttp.string(url, getHeaders());
-            List<Vod> list = parseList(html);
+            Document doc = Jsoup.parse(html);
+            List<Vod> list = new ArrayList<>();
+            for (Element item : doc.select(".stui-vodlist__item")) {
+                Element thumb = item.selectFirst(".stui-vodlist__thumb");
+                if (thumb == null) continue;
+                list.add(new Vod(thumb.attr("href"), thumb.attr("title"), thumb.attr("data-original"), ""));
+            }
             return Result.string(list);
         } catch (Exception e) {
             return Result.string(new ArrayList<Vod>());
         }
     }
 
-    private List<Vod> parseList(String html) {
-        List<Vod> list = new ArrayList<>();
-        Document doc = Jsoup.parse(html);
-        for (Element item : doc.select("li.stui-vodlist__item")) {
-            Element thumb = item.selectFirst(".stui-vodlist__thumb");
-            if (thumb == null) continue;
-            list.add(new Vod(thumb.attr("href"), thumb.attr("title"), thumb.attr("data-original"), item.select(".pic-text").text().trim()));
-        }
-        return list;
-    }
-
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playUrl = id.startsWith("http") ? id : host + id;
         String html = OkHttp.string(playUrl, getHeaders());
-        if (!html.contains("player_aaaa")) return Result.get().url(playUrl).string();
         try {
             Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
             if (!m.find()) return Result.get().url(playUrl).string();
