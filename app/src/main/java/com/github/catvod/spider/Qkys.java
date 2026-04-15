@@ -31,6 +31,7 @@ public class Qkys extends Spider {
         return headers;
     }
 
+    @Override
     public String getName() {
         return "全看影院";
     }
@@ -53,13 +54,12 @@ public class Qkys extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        // 对应 Python: f"{self.host}/qkwshow/{tid}--------{pg}---.html"
         String url = host + "/qkwshow/" + tid + "--------" + pg + "---.html";
         try {
             String html = OkHttp.string(url, getHeaders());
             List<Vod> list = parseList(html);
             int page = Integer.parseInt(pg);
-            // 严格 5 参数：page, pageCount, limit, total, list
+            // 严格遵守 5 参数要求
             return Result.string(page, page + 1, list.size(), 1000, list);
         } catch (Exception e) {
             return Result.string(Integer.parseInt(pg), 0, 0, 0, new ArrayList<Vod>());
@@ -73,13 +73,10 @@ public class Qkys extends Spider {
         try {
             String html = OkHttp.string(url, getHeaders());
             Document doc = Jsoup.parse(html);
-            
             Vod vod = new Vod();
             vod.setVodId(id);
-            
             Element detail = doc.selectFirst(".stui-content__detail");
             vod.setVodName(detail.selectFirst(".title").text().trim());
-            
             Element pic = doc.selectFirst(".stui-content__thumb img");
             if (pic != null) vod.setVodPic(pic.attr("data-original"));
             
@@ -89,9 +86,7 @@ public class Qkys extends Spider {
 
             List<String> fromList = new ArrayList<>();
             List<String> urlList = new ArrayList<>();
-            
-            Elements panels = doc.select(".stui-pannel__head");
-            for (Element head : panels) {
+            for (Element head : doc.select(".stui-pannel__head")) {
                 String title = head.select("h3.title").text();
                 if (title.contains("源") || title.contains("播放")) {
                     fromList.add(title);
@@ -103,10 +98,8 @@ public class Qkys extends Spider {
                     urlList.add(String.join("#", links));
                 }
             }
-            
             vod.setVodPlayFrom(String.join("$$$", fromList));
             vod.setVodPlayUrl(String.join("$$$", urlList));
-
             return Result.string(vod);
         } catch (Exception e) {
             return Result.string(new Vod());
@@ -131,11 +124,7 @@ public class Qkys extends Spider {
         for (Element item : doc.select("li.stui-vodlist__item")) {
             Element thumb = item.selectFirst(".stui-vodlist__thumb");
             if (thumb == null) continue;
-            String vodId = thumb.attr("href");
-            String name = thumb.attr("title");
-            String pic = thumb.attr("data-original");
-            String remark = item.select(".pic-text").text().trim();
-            list.add(new Vod(vodId, name, pic, remark));
+            list.add(new Vod(thumb.attr("href"), thumb.attr("title"), thumb.attr("data-original"), item.select(".pic-text").text().trim()));
         }
         return list;
     }
@@ -143,38 +132,25 @@ public class Qkys extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playUrl = id.startsWith("http") ? id : host + id;
-        
-        // 1. 获取播放页源码提取 player_aaaa 变量
         String html = OkHttp.string(playUrl, getHeaders());
-        if (!html.contains("player_aaaa")) {
-            return Result.get().url(playUrl).string();
-        }
+        if (!html.contains("player_aaaa")) return Result.get().url(playUrl).string();
 
         try {
-            String jsonStr = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html).find() ? 
-                             Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html).group(1) : "";
-            if (jsonStr.isEmpty()) return Result.get().url(playUrl).string();
+            Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
+            if (!m.find()) return Result.get().url(playUrl).string();
+            JsonObject pdata = JsonParser.parseString(m.group(1)).getAsJsonObject();
             
-            JsonObject pdata = JsonParser.parseString(jsonStr).getAsJsonObject();
-            
-            // 2. 构建中转解析页 URL
             String urlVal = pdata.get("url").getAsString();
             String fromVal = pdata.get("from").getAsString();
-            
-            // 模拟 Python 中的 api 载荷提取逻辑
             String idxUrl = jxHost + "/index.php?url=" + urlVal + "&type=" + fromVal;
             String idxHtml = OkHttp.string(idxUrl, getHeaders());
             
-            // 从中转页提取 config 中的 url, time, vkey
             String url = extractField("url", idxHtml);
             String time = extractField("time", idxHtml);
             String vkey = extractField("vkey", idxHtml);
             
-            if (url == null || time == null || vkey == null) {
-                return Result.get().url(playUrl).string();
-            }
+            if (url == null || time == null || vkey == null) return Result.get().url(playUrl).string();
 
-            // 3. POST 获取真实地址
             Map<String, String> apiPayload = new HashMap<>();
             apiPayload.put("url", url);
             apiPayload.put("time", time);
@@ -183,35 +159,27 @@ public class Qkys extends Spider {
             
             HashMap<String, String> apiHeaders = getHeaders();
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-            apiHeaders.put("Origin", jxHost);
             apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
 
-            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders);
+            // CRITICAL FIX: 调用 .getBody() 将 OkResult 转换为 String
+            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders).getBody();
             JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
             
             String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : 
                              (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
             
-            if (!finalUrl.isEmpty()) {
-                return Result.get().url(finalUrl).header(getHeaders()).string();
-            }
-
+            if (!finalUrl.isEmpty()) return Result.get().url(finalUrl).header(getHeaders()).string();
         } catch (Exception e) {
             e.printStackTrace();
         }
-
         return Result.get().url(playUrl).string();
     }
 
     private String extractField(String name, String text) {
-        String pattern = "\"" + name + "\":\\s*\"(.*?)\"";
-        Matcher m = Pattern.compile(pattern).matcher(text);
+        Matcher m = Pattern.compile("\"" + name + "\":\\s*\"(.*?)\"").matcher(text);
         if (m.find()) return m.group(1);
-        
-        pattern = "\"" + name + "\":\\s*'(.*?)'";
-        m = Pattern.compile(pattern).matcher(text);
+        m = Pattern.compile("\"" + name + "\":\\s*'(.*?)'").matcher(text);
         if (m.find()) return m.group(1);
-        
         return null;
     }
 }
