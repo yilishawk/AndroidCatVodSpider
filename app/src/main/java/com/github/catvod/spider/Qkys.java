@@ -31,7 +31,7 @@ public class Qkys extends Spider {
         return headers;
     }
 
-    @Override
+    // 修复点：去掉 @Override，因为基类没有这个方法
     public String getName() {
         return "全看影院";
     }
@@ -59,7 +59,6 @@ public class Qkys extends Spider {
             String html = OkHttp.string(url, getHeaders());
             List<Vod> list = parseList(html);
             int page = Integer.parseInt(pg);
-            // 严格遵守 5 参数要求
             return Result.string(page, page + 1, list.size(), 1000, list);
         } catch (Exception e) {
             return Result.string(Integer.parseInt(pg), 0, 0, 0, new ArrayList<Vod>());
@@ -79,7 +78,6 @@ public class Qkys extends Spider {
             vod.setVodName(detail.selectFirst(".title").text().trim());
             Element pic = doc.selectFirst(".stui-content__thumb img");
             if (pic != null) vod.setVodPic(pic.attr("data-original"));
-            
             vod.setVodActor(detail.select("p.data:contains(主演)").text().replace("主演：", "").trim());
             vod.setVodDirector(detail.select("p.data:contains(导演)").text().replace("导演：", "").trim());
             vod.setVodContent(doc.selectFirst(".stui-content__desc").text().trim());
@@ -134,40 +132,29 @@ public class Qkys extends Spider {
         String playUrl = id.startsWith("http") ? id : host + id;
         String html = OkHttp.string(playUrl, getHeaders());
         if (!html.contains("player_aaaa")) return Result.get().url(playUrl).string();
-
         try {
             Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
             if (!m.find()) return Result.get().url(playUrl).string();
             JsonObject pdata = JsonParser.parseString(m.group(1)).getAsJsonObject();
-            
             String urlVal = pdata.get("url").getAsString();
             String fromVal = pdata.get("from").getAsString();
             String idxUrl = jxHost + "/index.php?url=" + urlVal + "&type=" + fromVal;
             String idxHtml = OkHttp.string(idxUrl, getHeaders());
-            
             String url = extractField("url", idxHtml);
             String time = extractField("time", idxHtml);
             String vkey = extractField("vkey", idxHtml);
-            
             if (url == null || time == null || vkey == null) return Result.get().url(playUrl).string();
-
             Map<String, String> apiPayload = new HashMap<>();
             apiPayload.put("url", url);
             apiPayload.put("time", time);
             apiPayload.put("key", "");
             apiPayload.put("vkey", vkey);
-            
             HashMap<String, String> apiHeaders = getHeaders();
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
             apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-
-            // CRITICAL FIX: 调用 .getBody() 将 OkResult 转换为 String
             String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders).getBody();
             JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
-            
-            String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : 
-                             (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
-            
+            String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
             if (!finalUrl.isEmpty()) return Result.get().url(finalUrl).header(getHeaders()).string();
         } catch (Exception e) {
             e.printStackTrace();
