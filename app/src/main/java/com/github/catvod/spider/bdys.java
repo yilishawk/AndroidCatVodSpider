@@ -25,7 +25,6 @@ public class bdys extends Spider {
 
     private static final String HOST = "https://v.xlys.ltd.ua/";
 
-    // 1. 去掉此处可能报错的 @Override
     public String getName() {
         return "量子资源";
     }
@@ -38,7 +37,7 @@ public class bdys extends Spider {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("1", "电视剧"));
         classes.add(new Class("0", "电影"));
-        return Result.string(classes, new ArrayList<>());
+        return Result.string(classes, new ArrayList<Vod>());
     }
 
     @Override
@@ -49,6 +48,7 @@ public class bdys extends Spider {
         Document doc = Jsoup.parse(html);
         List<Vod> list = new ArrayList<>();
         Elements cards = doc.select(".row-cards .col-4 .card-sm");
+        
         for (Element card : cards) {
             Element a = card.selectFirst("a");
             if (a == null) continue;
@@ -58,9 +58,9 @@ public class bdys extends Spider {
             String remark = card.selectFirst(".bg-pink") != null ? card.selectFirst(".bg-pink").text().trim() : "";
             list.add(new Vod(vodId, name, pic, remark));
         }
-        
-        // 2. 重点：修复 Result.string 的参数，必须传 5 个参数
-        // 参数顺序：当前页, 总页数, 每页数量, 总记录数, 数据列表
+
+        // --- 核心修复：必须传入 5 个参数 ---
+        // 参数顺序：当前页(Integer), 总页数(Integer), 每页条数(Integer), 总记录数(Integer), 数据列表(List<Vod>)
         return Result.string(page, page + 1, list.size(), 1000, list);
     }
 
@@ -73,9 +73,11 @@ public class bdys extends Spider {
 
         Vod vod = new Vod();
         vod.setVodId(id);
-        vod.setVodName(doc.selectFirst("h2.d-sm-block.d-md-none") != null ? doc.selectFirst("h2.d-sm-block.d-md-none").text() : "");
-        vod.setVodPic(doc.selectFirst(".cover-lg-max-25 img") != null ? doc.selectFirst(".cover-lg-max-25 img").attr("src") : "");
-        
+        Element titleElem = doc.selectFirst("h2.d-sm-block.d-md-none");
+        vod.setVodName(titleElem != null ? titleElem.text().trim() : "未知");
+        Element picElem = doc.selectFirst(".cover-lg-max-25 img");
+        vod.setVodPic(picElem != null ? picElem.attr("src") : "");
+
         List<String> playList = new ArrayList<>();
         for (Element a : doc.select("#play-list a.btn-square")) {
             playList.add(a.text().trim() + "$" + a.attr("href"));
@@ -107,9 +109,9 @@ public class bdys extends Spider {
         
         if (json.get("code").getAsInt() == 0) {
             JsonObject data = json.getAsJsonObject("data");
-            String finalUrl = data.has("url3") ? data.get("url3").getAsString() : (data.has("m3u8") ? data.get("m3u8").getAsString() : "");
-            if (!finalUrl.isEmpty()) {
-                return Result.get().url(finalUrl.split(",")[0]).string();
+            String url = data.has("url3") ? data.get("url3").getAsString() : (data.has("m3u8") ? data.get("m3u8").getAsString() : "");
+            if (!url.isEmpty()) {
+                return Result.get().url(url.split(",")[0]).string();
             }
         }
         return Result.get().url(playUrl).string();
