@@ -1,161 +1,137 @@
 package com.github.catvod.spider;
 
+import android.content.Context;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.net.URLEncoder;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-public class bdys extends Spider {
+public class Bdys extends Spider {
 
-    private static final String HOST = "https://v.xlys.ltd.ua/";
+    // 使用你抓包获取的域名
+    private String host = "https://v.xlys.ltd.ua";
 
-    public String getName() {
-        return "量子资源";
-    }
-
-    public void init(String extend) {
+    private HashMap<String, String> getHeaders() {
+        HashMap<String, String> headers = new HashMap<>();
+        // 严格按照你抓包成功的 Headers 填充
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
+        headers.put("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("accept-language", "zh-CN,zh;q=0.9");
+        headers.put("sec-ch-ua", "\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"");
+        headers.put("sec-ch-ua-mobile", "?0");
+        headers.put("sec-ch-ua-platform", "\"Windows\"");
+        headers.put("sec-fetch-dest", "document");
+        headers.put("sec-fetch-mode", "navigate");
+        headers.put("sec-fetch-site", "none");
+        headers.put("sec-fetch-user", "?1");
+        headers.put("upgrade-insecure-requests", "1");
+        return headers;
     }
 
     @Override
-    public String homeContent(boolean filter) {
+    public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("1", "电视剧"));
-        classes.add(new Class("0", "电影"));
+        // type=1 电影, type=2 电视剧, type=3 动漫
+        classes.add(new Class("1", "电影"));
+        classes.add(new Class("2", "电视剧"));
+        classes.add(new Class("3", "动漫"));
         return Result.string(classes, new ArrayList<Vod>());
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        int page = Integer.parseInt(pg);
-        String url = HOST + "s/all/" + page + "?type=" + tid;
-        String html = OkHttp.string(url, null);
-        Document doc = Jsoup.parse(html);
-        List<Vod> list = new ArrayList<>();
-        Elements cards = doc.select(".row-cards .col-4 .card-sm");
+        // 构造路径: /s/all/页码?type=类型
+        String url = host + "/s/all/" + pg + "?type=" + tid;
         
-        for (Element card : cards) {
-            Element a = card.selectFirst("a");
-            if (a == null) continue;
-            String vodId = a.attr("href");
-            String name = card.selectFirst("h3") != null ? card.selectFirst("h3").text().trim() : "";
-            String pic = card.selectFirst("img") != null ? card.selectFirst("img").attr("src") : "";
-            String remark = card.selectFirst(".bg-pink") != null ? card.selectFirst(".bg-pink").text().trim() : "";
-            list.add(new Vod(vodId, name, pic, remark));
-        }
+        try {
+            // 获取网页源码
+            String html = OkHttp.string(url, getHeaders());
+            Document doc = Jsoup.parse(html);
+            List<Vod> list = new ArrayList<>();
+            
+            // 哔滴影视典型的列表选择器 (card 或者 list-item)
+            Elements items = doc.select(".card, .list-item, .video-list-item");
+            if (items.isEmpty()) {
+                // 备用选择器：如果是基于 tag 结构的
+                items = doc.select("a.relative.group"); 
+            }
 
-        // --- 核心修复：必须传入 5 个参数 ---
-        // 参数顺序：当前页(Integer), 总页数(Integer), 每页条数(Integer), 总记录数(Integer), 数据列表(List<Vod>)
-        return Result.string(page, page + 1, list.size(), 1000, list);
+            for (Element item : items) {
+                String vodId = item.attr("href");
+                if (vodId.isEmpty()) vodId = item.select("a").attr("href");
+                
+                String name = item.select(".title, h3, .name").text().trim();
+                String pic = item.select("img").attr("data-src");
+                if (pic.isEmpty()) pic = item.select("img").attr("src");
+                if (pic.startsWith("//")) pic = "https:" + pic;
+                else if (pic.startsWith("/")) pic = host + pic;
+                
+                String remark = item.select(".tag, .remark, .absolute.bottom-1").text().trim();
+                
+                if (!vodId.isEmpty()) {
+                    list.add(new Vod(vodId, name, pic, remark));
+                }
+            }
+
+            int page = Integer.parseInt(pg);
+            // 返回 5 参数格式，确保壳子加载数据
+            return Result.string(page, page + 1, list.size(), 1000, list);
+        } catch (Exception e) {
+            return Result.string(Integer.parseInt(pg), 0, 0, 0, new ArrayList<Vod>());
+        }
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String id = ids.get(0);
-        String url = id.startsWith("http") ? id : HOST + id.replaceAll("^/+", "");
-        String html = OkHttp.string(url, null);
-        Document doc = Jsoup.parse(html);
-
+        String url = ids.get(0);
+        if (!url.startsWith("http")) url = host + url;
+        
+        Document doc = Jsoup.parse(OkHttp.string(url, getHeaders()));
         Vod vod = new Vod();
-        vod.setVodId(id);
-        Element titleElem = doc.selectFirst("h2.d-sm-block.d-md-none");
-        vod.setVodName(titleElem != null ? titleElem.text().trim() : "未知");
-        Element picElem = doc.selectFirst(".cover-lg-max-25 img");
-        vod.setVodPic(picElem != null ? picElem.attr("src") : "");
+        vod.setVodId(ids.get(0));
+        vod.setVodName(doc.select("h1").text().trim());
+        vod.setVodPic(doc.select(".poster img").attr("src"));
+        vod.setVodContent(doc.select(".introduction, .desc").text().trim());
 
-        List<String> playList = new ArrayList<>();
-        for (Element a : doc.select("#play-list a.btn-square")) {
-            playList.add(a.text().trim() + "$" + a.attr("href"));
+        List<String> playUrls = new ArrayList<>();
+        // 找到所有的播放按钮或列表
+        Elements episodes = doc.select("a[href*='/play/']");
+        for (Element a : episodes) {
+            String href = a.attr("href");
+            if (!href.startsWith("http")) href = host + href;
+            playUrls.add(a.text().trim() + "$" + href);
         }
-        vod.setVodPlayFrom("量子播放器");
-        vod.setVodPlayUrl(String.join("#", playList));
-
+        
+        vod.setVodPlayFrom("哔滴影视");
+        vod.setVodPlayUrl(String.join("#", playUrls));
         return Result.string(vod);
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : HOST + id.replaceAll("^/+", "");
-        String pageHtml = OkHttp.string(playUrl, null);
-        
-        Matcher matcher = Pattern.compile("var pid\\s*=\\s*(\\d+)").matcher(pageHtml);
-        if (!matcher.find()) return Result.get().url(playUrl).string();
-        String pid = matcher.group(1);
-
-        Map<String, String> sgAndT = getSgAndT(pid);
-        String apiUrl = HOST + "lines?t=" + sgAndT.get("t") + "&sg=" + sgAndT.get("sg") + "&pid=" + pid;
-        
-        HashMap<String, String> apiHeaders = new HashMap<>();
-        apiHeaders.put("Referer", playUrl);
-        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-        
-        String apiResp = OkHttp.string(apiUrl, apiHeaders);
-        JsonObject json = JsonParser.parseString(apiResp).getAsJsonObject();
-        
-        if (json.get("code").getAsInt() == 0) {
-            JsonObject data = json.getAsJsonObject("data");
-            String url = data.has("url3") ? data.get("url3").getAsString() : (data.has("m3u8") ? data.get("m3u8").getAsString() : "");
-            if (!url.isEmpty()) {
-                return Result.get().url(url.split(",")[0]).string();
-            }
-        }
-        return Result.get().url(playUrl).string();
+        // 哔滴影视通常需要嗅探，parse 设置为 1
+        return Result.get().parse(1).url(id).header(getHeaders()).string();
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        String url = HOST + "search?text=" + key;
-        String html = OkHttp.string(url, null);
-        Document doc = Jsoup.parse(html);
+        String url = host + "/search?wd=" + URLEncoder.encode(key, "UTF-8");
+        Document doc = Jsoup.parse(OkHttp.string(url, getHeaders()));
         List<Vod> list = new ArrayList<>();
-        for (Element card : doc.select(".row-cards .col-4 .card-sm")) {
-            Element a = card.selectFirst("a");
-            if (a == null) continue;
-            list.add(new Vod(a.attr("href"), card.selectFirst("h3").text(), card.selectFirst("img").attr("src"), ""));
+        for (Element item : doc.select(".card, .search-item")) {
+            Element a = item.selectFirst("a");
+            if (a != null) {
+                list.add(new Vod(a.attr("href"), a.select(".title").text(), "", ""));
+            }
         }
         return Result.string(list);
-    }
-
-    private Map<String, String> getSgAndT(String pid) {
-        long timestamp = System.currentTimeMillis();
-        String t = Long.toString(timestamp);
-        Map<String, String> result = new HashMap<>();
-        try {
-            String plain = pid + "-" + t;
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] md5Bytes = md.digest(plain.getBytes(StandardCharsets.UTF_8));
-            String md5Hex = bytesToHex(md5Bytes);
-            byte[] keyBytes = md5Hex.substring(0, 16).getBytes(StandardCharsets.UTF_8);
-            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"));
-            byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-            result.put("sg", bytesToHex(encrypted).toUpperCase());
-            result.put("t", t);
-        } catch (Exception e) {
-            result.put("sg", "");
-            result.put("t", t);
-        }
-        return result;
-    }
-
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.toString();
     }
 }
