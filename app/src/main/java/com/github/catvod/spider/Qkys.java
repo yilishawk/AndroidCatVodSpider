@@ -10,6 +10,7 @@ import com.google.gson.JsonParser;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements; // <--- 修复点：添加了这一行
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -114,4 +115,3 @@ public class Qkys extends Spider {
         return m.find() ? m.group(1) : "";
     }
 }
-
