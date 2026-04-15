@@ -20,7 +20,6 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import okhttp3.Headers;
 import okhttp3.Request;
 import okhttp3.Response;
 
@@ -74,7 +73,7 @@ public class bttw extends Spider {
     }
 
     @Override
-    public JSONObject homeContent(Map<String, String> filter) {
+    public String homeContent(Map<String, String> filter) {
         JSONObject result = new JSONObject();
         JSONArray classes = new JSONArray();
         
@@ -93,11 +92,11 @@ public class bttw extends Spider {
         }
         
         result.put("class", classes);
-        return result;
+        return result.toString();
     }
 
     @Override
-    public JSONObject categoryContent(String tid, String pg, Map<String, String> filter, Map<String, String> extend) {
+    public String categoryContent(String tid, String pg, Map<String, String> filter, Map<String, String> extend) {
         if (!domainInited) init("");
         
         int page = Integer.parseInt(pg);
@@ -167,13 +166,13 @@ public class bttw extends Spider {
         result.put("list", list);
         result.put("page", page);
         result.put("pagecount", 99);
-        return result;
+        return result.toString();
     }
 
     @Override
-    public JSONObject detailContent(List<String> ids) {
+    public String detailContent(List<String> ids) {
         String url = ids.get(0);
-        if (TextUtils.isEmpty(url)) return new JSONObject();
+        if (TextUtils.isEmpty(url)) return new JSONObject().toString();
         if (!domainInited) init("");
         
         JSONObject result = new JSONObject();
@@ -251,11 +250,11 @@ public class bttw extends Spider {
         
         list.put(vod);
         result.put("list", list);
-        return result;
+        return result.toString();
     }
 
     @Override
-    public JSONObject searchContent(String key, String pg) {
+    public String searchContent(String key, String pg) {
         if (!domainInited) init("");
         
         JSONObject result = new JSONObject();
@@ -309,11 +308,11 @@ public class bttw extends Spider {
         }
         
         result.put("list", list);
-        return result;
+        return result.toString();
     }
 
     @Override
-    public JSONObject playerContent(String flag, String id, List<String> vipFlags) {
+    public String playerContent(String flag, String id, List<String> vipFlags) {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", ua);
         headers.put("Origin", host.replaceAll("/$", ""));
@@ -355,7 +354,7 @@ public class bttw extends Spider {
                         result.put("url", m3u8Url);
                         JSONObject headerObj = new JSONObject(headers);
                         result.put("header", headerObj);
-                        return result;
+                        return result.toString();
                     }
                 }
             }
@@ -368,7 +367,7 @@ public class bttw extends Spider {
         result.put("url", id);
         JSONObject headerObj = new JSONObject(headers);
         result.put("header", headerObj);
-        return result;
+        return result.toString();
     }
 
     @Override
