@@ -1,14 +1,11 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.text.TextUtils;
 import com.github.catvod.bean.Class;
-import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -16,8 +13,6 @@ import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class Fkvm extends Spider {
 
@@ -25,90 +20,57 @@ public class Fkvm extends Spider {
 
     private HashMap<String, String> getHeaders(String referer) {
         HashMap<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", Util.CHROME);
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
         headers.put("Referer", referer);
+        headers.put("Origin", host);
         return headers;
     }
 
-    @Override
-    public void init(Context context, String extend) throws Exception {
-        super.init(context, extend);
-    }
-
     public String getName() {
-        return "4K影视";
-    }
-
-    private String cleanTitle(String title) {
-        if (TextUtils.isEmpty(title)) return "";
-        title = title.trim();
-        String[] parts = title.split("\\s+");
-        if (parts.length >= 2 && parts[0].equals(parts[1])) return parts[0];
-        return title;
+        return "4K影視";
     }
 
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("2|tvclasses=20", "国产剧"));
-        classes.add(new Class("1", "电影"));
-        classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("4", "综艺"));
-
-        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
-        if (filter) {
-            filters.put("1", getStandardFilters());
-            filters.put("2", getTvFilters());
-            filters.put("4", getStandardFilters());
-        }
-        return Result.string(classes, filters);
-    }
-
-    private List<Filter> getStandardFilters() {
-        List<Filter> list = new ArrayList<>();
-        list.add(new Filter("areas", "地区", Arrays.asList(new Filter.Value("全部", ""), new Filter.Value("中国", "7"), new Filter.Value("美国", "5"), new Filter.Value("日本", "11"), new Filter.Value("韩国", "12"), new Filter.Value("香港", "14"), new Filter.Value("台湾", "21"))));
-        list.add(new Filter("types", "类型", Arrays.asList(new Filter.Value("全部", ""), new Filter.Value("剧情", "1"), new Filter.Value("悬疑", "2"), new Filter.Value("科幻", "14"), new Filter.Value("动作", "10"), new Filter.Value("动画", "11"))));
-        return list;
-    }
-
-    private List<Filter> getTvFilters() {
-        List<Filter> list = new ArrayList<>();
-        list.add(new Filter("tvclasses", "分类", Arrays.asList(new Filter.Value("全部", ""), new Filter.Value("国产剧", "20"), new Filter.Value("美剧", "21"), new Filter.Value("韩剧", "22"), new Filter.Value("日剧", "23"), new Filter.Value("日番", "25"))));
-        list.addAll(getStandardFilters());
-        return list;
+        classes.add(new Class("2|tvclasses=20", "國產劇"));
+        classes.add(new Class("1", "電影"));
+        classes.add(new Class("2", "電視劇"));
+        classes.add(new Class("4", "綜藝"));
+        return Result.string(classes, new ArrayList<Vod>());
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String realTid = tid;
-        HashMap<String, String> params = new HashMap<>();
+        String extra = "";
         if (tid.contains("|")) {
             String[] parts = tid.split("\\|");
             realTid = parts[0];
-            for (String pair : parts[1].split("&")) {
-                String[] kv = pair.split("=");
-                if (kv.length == 2) params.put(kv[0], kv[1]);
+            extra = "&" + parts[1];
+        }
+        String url = host + "/filter?classify=" + realTid + "&page=" + pg + extra;
+        try {
+            String html = OkHttp.string(url, getHeaders(host));
+            Document doc = Jsoup.parse(html);
+            List<Vod> list = new ArrayList<>();
+            Elements cards = doc.select(".movie-card, .group, .relative.group");
+            for (Element card : cards) {
+                Element a = card.selectFirst("a[href^=/play/]");
+                if (a == null) continue;
+                String name = card.select("h3").text().trim();
+                Element img = card.selectFirst("img");
+                String pic = img != null ? (img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src")) : "";
+                if (!pic.startsWith("http")) pic = host + pic;
+                String remark = card.select("span.absolute").text().trim();
+                list.add(new Vod(a.attr("href").replace("/play/", ""), name, pic, remark));
             }
+            int page = Integer.parseInt(pg);
+            // 5參數返回：page, pageCount, limit, total, list
+            return Result.string(page, page + 1, list.size(), 1000, list);
+        } catch (Exception e) {
+            return Result.string(Integer.parseInt(pg), 0, 0, 0, new ArrayList<Vod>());
         }
-        if (extend != null) params.putAll(extend);
-
-        StringBuilder url = new StringBuilder(host).append("/filter?classify=").append(realTid).append("&page=").append(pg);
-        for (String key : new String[]{"areas", "tvclasses", "types"}) {
-            if (params.containsKey(key)) url.append("&").append(key).append("=").append(params.get(key));
-        }
-
-        String html = OkHttp.string(url.toString(), getHeaders(host));
-        Document doc = Jsoup.parse(html);
-        List<Vod> list = new ArrayList<>();
-        for (Element card : doc.select(".movie-card, .group")) {
-            Element a = card.selectFirst("a[href^=/play/]");
-            if (a == null) continue;
-            String name = cleanTitle(card.select("h3").text());
-            Element img = card.selectFirst("img");
-            String pic = img != null ? (img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src")) : "";
-            list.add(new Vod(a.attr("href").replace("/play/", ""), name, pic.startsWith("http") ? pic : host + pic, card.select("span.absolute.bottom-0, .remark").text().trim()));
-        }
-        return Result.string(Integer.parseInt(pg), Integer.parseInt(pg) + 1, list.size(), 1000, list);
     }
 
     @Override
@@ -117,18 +79,28 @@ public class Fkvm extends Spider {
         Document doc = Jsoup.parse(OkHttp.string(url, getHeaders(host)));
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
-        vod.setVodName(cleanTitle(doc.selectFirst("h1").text()));
-        Element img = doc.selectFirst(".movie-poster img");
-        if (img != null) vod.setVodPic(img.attr("src").startsWith("http") ? img.attr("src") : host + img.attr("src"));
+        vod.setVodName(doc.selectFirst("h1").text().trim());
+        vod.setVodPic(doc.selectFirst(".movie-poster img").attr("src"));
         vod.setVodContent(doc.select(".bg-dark-800.rounded-lg.p-3 p").text().trim());
         
         List<String> playUrls = new ArrayList<>();
-        for (Element a : doc.select(".episode-link")) {
-            playUrls.add(a.text().trim() + "$" + (a.attr("href").startsWith("http") ? a.attr("href") : host + a.attr("href")));
+        Elements episodes = doc.select("a[href*=/play/" + ids.get(0) + "]");
+        for (Element a : episodes) {
+            if (a.attr("href").contains("episode=")) {
+                String link = a.attr("href");
+                if (!link.startsWith("http")) link = host + link;
+                playUrls.add(a.text().trim() + "$" + link);
+            }
         }
-        vod.setVodPlayFrom("4K影视");
+        vod.setVodPlayFrom("4K影視");
         vod.setVodPlayUrl(String.join("#", playUrls));
         return Result.string(vod);
+    }
+
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // 直接交給殼子嗅探，返回播放頁 URL
+        return Result.get().parse(1).url(id).header(getHeaders(id)).string();
     }
 
     @Override
@@ -139,18 +111,8 @@ public class Fkvm extends Spider {
         for (Element item : doc.select(".group")) {
             Element a = item.selectFirst("a[href^=/play/]");
             if (a == null) continue;
-            Element img = item.selectFirst("img");
-            String pic = img != null ? (img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src")) : "";
-            list.add(new Vod(a.attr("href").replace("/play/", ""), cleanTitle(item.select("h3").text()), pic.startsWith("http") ? pic : host + pic, ""));
+            list.add(new Vod(a.attr("href").replace("/play/", ""), item.select("h3").text().trim(), "", ""));
         }
         return Result.string(list);
-    }
-
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String html = OkHttp.string(id.startsWith("http") ? id : host + id, getHeaders(id));
-        Matcher m = Pattern.compile("(https?://[^\\s\"']+\\.m3u8[^\\s\"']*)", Pattern.CASE_INSENSITIVE).matcher(html);
-        String videoUrl = m.find() ? m.group(1).replace("\\/", "/") : id;
-        return Result.get().url(videoUrl).header(getHeaders(id)).string();
     }
 }
