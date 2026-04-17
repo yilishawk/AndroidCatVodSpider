@@ -5,8 +5,7 @@ import android.text.TextUtils;
 import android.util.Base64;
 
 import com.github.catvod.crawler.Spider;
-import com.github.catvod.utils.Json;
-import com.google.gson.Gson;
+import com.github.catvod.net.OkHttp;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -22,27 +21,22 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
 public class Y03YY extends Spider {
 
     private String host = "https://www.03yy.live";
     private String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    private Map<String, String> headers;
-    private OkHttpClient client;
-    private Gson gson = new Gson();
 
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
-        headers = new HashMap<>();
+    }
+
+    private Map<String, String> getHeaders() {
+        Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", userAgent);
+        headers.put("Referer", host + "/");
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-        headers.put("Referer", host);
-        client = new OkHttpClient.Builder().build();
+        return headers;
     }
 
     @Override
@@ -57,21 +51,13 @@ public class Y03YY extends Spider {
 
         if (filter) {
             JsonObject filters = new JsonObject();
-            JsonArray tvTypes = createFilterValues(new String[][]{
-                {"全部", ""}, {"大陆剧", "13"}, {"欧美剧", "27"}, {"韩国剧", "26"},
-                {"香港剧", "14"}, {"台湾剧", "46"}, {"日本剧", "16"}, {"泰国剧", "47"}, {"海外剧", "28"}
-            });
-            JsonArray movieTypes = createFilterValues(new String[][]{
-                {"全部", ""}, {"动作片", "5"}, {"喜剧片", "10"}, {"爱情片", "6"},
-                {"科幻片", "7"}, {"恐怖片", "8"}, {"战争片", "9"}, {"剧情片", "12"}, {"动画片", "25"}
-            });
-            JsonArray varietyTypes = createFilterValues(new String[][]{
-                {"全部", ""}, {"大陆综艺", "29"}, {"港台综艺", "30"}, {"日韩综艺", "31"}, {"欧美综艺", "32"}
-            });
-            filters.add("13", createFilterGroup("class", "类型", tvTypes));
-            filters.add("1", createFilterGroup("class", "类型", movieTypes));
-            filters.add("3", createFilterGroup("class", "类型", varietyTypes));
-            filters.add("48", createFilterGroup("class", "类型", tvTypes));
+            String[][] tvTypes = {{"全部", ""}, {"大陆剧", "13"}, {"欧美剧", "27"}, {"韩国剧", "26"}, {"香港剧", "14"}, {"台湾剧", "46"}};
+            String[][] movieTypes = {{"全部", ""}, {"动作片", "5"}, {"喜剧片", "10"}, {"爱情片", "6"}, {"科幻片", "7"}};
+
+            filters.add("13", createFilterArray("class", "类型", tvTypes));
+            filters.add("1", createFilterArray("class", "类型", movieTypes));
+            filters.add("3", createFilterArray("class", "类型", tvTypes)); // 简化处理
+            filters.add("48", createFilterArray("class", "类型", tvTypes));
             result.add("filters", filters);
         }
         return result.toString();
@@ -84,23 +70,19 @@ public class Y03YY extends Spider {
         return obj;
     }
 
-    private JsonArray createFilterValues(String[][] pairs) {
+    private JsonArray createFilterArray(String key, String name, String[][] pairs) {
         JsonArray arr = new JsonArray();
+        JsonObject group = new JsonObject();
+        group.addProperty("key", key);
+        group.addProperty("name", name);
+        JsonArray values = new JsonArray();
         for (String[] pair : pairs) {
             JsonObject opt = new JsonObject();
             opt.addProperty("n", pair[0]);
             opt.addProperty("v", pair[1]);
-            arr.add(opt);
+            values.add(opt);
         }
-        return arr;
-    }
-
-    private JsonArray createFilterGroup(String key, String name, JsonArray values) {
-        JsonObject group = new JsonObject();
-        group.addProperty("key", key);
-        group.addProperty("name", name);
         group.add("value", values);
-        JsonArray arr = new JsonArray();
         arr.add(group);
         return arr;
     }
@@ -108,32 +90,36 @@ public class Y03YY extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = Integer.parseInt(pg);
-        String subTid = (extend != null && extend.containsKey("class")) ? extend.get("class") : tid;
+        String subTid = (extend != null && extend.containsKey("class") && !extend.get("class").isEmpty()) ? extend.get("class") : tid;
+        
+        // 修正 URL：苹果CMS 常用格式
         String url = host + "/type/index" + subTid + "-" + page + ".html";
-        String html = fetch(url);
-        if (html == null) return emptyCategoryResult(page);
+        String html = OkHttp.string(url, getHeaders());
+        if (TextUtils.isEmpty(html)) return emptyCategoryResult(page);
 
         Document doc = Jsoup.parse(html);
-        Elements items = doc.select(".Pic-list .pic-content");
+        // 兼容多种可能的列表容器选择器
+        Elements items = doc.select(".Pic-list li, .pic-list li, .vodlist li, .pic-content");
         JsonArray list = new JsonArray();
+        
         for (Element item : items) {
-            Element a = item.selectFirst("a:first-of-type");
+            Element a = item.selectFirst("a");
             if (a == null) continue;
+
             String href = a.attr("href");
-            Matcher m = Pattern.compile("/movie/index(\\d+)\\.html").matcher(href);
-            if (!m.find()) continue;
-            String vid = m.group(1);
+            String vid = extractVid(href);
+            if (vid.isEmpty()) continue;
+
             String title = a.attr("title");
-            if (TextUtils.isEmpty(title)) {
-                Element h4a = item.selectFirst("h4 a");
-                if (h4a != null) title = h4a.text();
-            }
-            Element imgElem = item.selectFirst("img");
-            String pic = imgElem != null ? imgElem.attr("src") : "";
-            if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
-            Element span = item.selectFirst("span");
-            Element iElem = item.selectFirst("i");
-            String remark = (span != null) ? span.text() : (iElem != null ? iElem.text() : "");
+            if (TextUtils.isEmpty(title)) title = item.select("h4, .title").text();
+
+            // 图片懒加载处理
+            String pic = a.select("img").attr("data-original");
+            if (TextUtils.isEmpty(pic)) pic = a.select("img").attr("src");
+            if (!pic.startsWith("http")) pic = host + pic;
+
+            String remark = item.select("span, i, .remark").text().trim();
+
             JsonObject vod = new JsonObject();
             vod.addProperty("vod_id", vid);
             vod.addProperty("vod_name", title.trim());
@@ -141,97 +127,51 @@ public class Y03YY extends Spider {
             vod.addProperty("vod_remarks", remark);
             list.add(vod);
         }
+
         JsonObject result = new JsonObject();
         result.add("list", list);
         result.addProperty("page", page);
         result.addProperty("pagecount", 99);
         result.addProperty("limit", 20);
-        result.addProperty("total", 9999);
+        result.addProperty("total", 999);
         return result.toString();
     }
 
-    private String emptyCategoryResult(int page) {
-        JsonObject result = new JsonObject();
-        result.add("list", new JsonArray());
-        result.addProperty("page", page);
-        result.addProperty("pagecount", 1);
-        result.addProperty("limit", 20);
-        result.addProperty("total", 0);
-        return result.toString();
+    private String extractVid(String href) {
+        Matcher m = Pattern.compile("index(\\d+)\\.html").matcher(href);
+        if (m.find()) return m.group(1);
+        return href.replaceAll("[^0-9]", ""); // 兜底逻辑：只提取数字
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String vid = ids.get(0);
         String url = host + "/movie/index" + vid + ".html";
-        String html = fetch(url);
-        if (html == null) return "{\"list\":[]}";
-
+        String html = OkHttp.string(url, getHeaders());
         Document doc = Jsoup.parse(html);
-        String title = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "";
-        Element imgElem = doc.selectFirst(".m-pic-l img");
-        String pic = imgElem != null ? imgElem.attr("src") : "";
-        if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
-
-        String director = "", actor = "", area = "", typeName = "", year = "";
-        Elements lis = doc.select(".m-content ul li");
-        for (Element li : lis) {
-            String text = li.text();
-            if (text.contains("导演：")) {
-                Element a = li.selectFirst("a");
-                director = a != null ? a.text().replace(" ", "").trim() : "";
-            } else if (text.contains("主演：")) {
-                List<String> actors = new ArrayList<>();
-                for (Element a : li.select("a")) actors.add(a.text());
-                actor = TextUtils.join(",", actors);
-            } else if (text.contains("地区") && li.select("span").size() > 0) {
-                Elements spans = li.select("span");
-                if (spans.size() >= 1) area = spans.get(0).text();
-                if (spans.size() >= 2) typeName = spans.get(1).text();
-                if (spans.size() >= 3) year = spans.get(2).text();
-            }
-        }
-
-        Elements introPs = doc.select(".m-intro p");
-        StringBuilder contentBuilder = new StringBuilder();
-        for (Element p : introPs) contentBuilder.append(p.text().trim()).append(" ");
-        String content = contentBuilder.toString().trim();
-
-        List<String> playFromList = new ArrayList<>();
-        List<String> playUrlList = new ArrayList<>();
-        Elements lineTabs = doc.select(".playfrom #playlist li");
-        for (int idx = 0; idx < lineTabs.size(); idx++) {
-            String lineName = lineTabs.get(idx).text().trim();
-            String listId = "stab8" + (idx + 1);
-            Element listDiv = doc.selectFirst("#" + listId);
-            if (listDiv == null) continue;
-            List<String> episodes = new ArrayList<>();
-            for (Element a : listDiv.select("ul li a")) {
-                String epName = a.text();
-                String epLink = a.attr("href");
-                if (!TextUtils.isEmpty(epLink)) {
-                    String fullLink = epLink.startsWith("http") ? epLink : host + epLink;
-                    episodes.add(epName + "$" + fullLink);
-                }
-            }
-            if (!episodes.isEmpty()) {
-                playFromList.add(lineName);
-                playUrlList.add(TextUtils.join("#", episodes));
-            }
-        }
 
         JsonObject vod = new JsonObject();
         vod.addProperty("vod_id", vid);
-        vod.addProperty("vod_name", title);
-        vod.addProperty("vod_pic", pic);
-        vod.addProperty("vod_director", director);
-        vod.addProperty("vod_actor", actor);
-        vod.addProperty("vod_area", area);
-        vod.addProperty("type_name", typeName);
-        vod.addProperty("vod_year", year);
-        vod.addProperty("vod_content", content);
-        vod.addProperty("vod_play_from", TextUtils.join("$$$", playFromList));
-        vod.addProperty("vod_play_url", TextUtils.join("$$$", playUrlList));
+        vod.addProperty("vod_name", doc.select("h1").text().trim());
+        
+        // 播放源解析
+        Elements tabs = doc.select(".playfrom #playlist li");
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
+        
+        for (int i = 0; i < tabs.size(); i++) {
+            fromList.add(tabs.get(i).text().trim());
+            Elements aList = doc.select("#stab8" + (i + 1) + " a");
+            List<String> eps = new ArrayList<>();
+            for (Element a : aList) {
+                eps.add(a.text() + "$" + a.attr("href"));
+            }
+            urlList.add(TextUtils.join("#", eps));
+        }
+
+        vod.addProperty("vod_play_from", TextUtils.join("$$$", fromList));
+        vod.addProperty("vod_play_url", TextUtils.join("$$$", urlList));
+        
         JsonArray list = new JsonArray();
         list.add(vod);
         JsonObject result = new JsonObject();
@@ -241,205 +181,37 @@ public class Y03YY extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        return searchContent(key, quick, "1");
-    }
-
-    @Override
-    public String searchContent(String key, boolean quick, String pg) throws Exception {
-        int page = Integer.parseInt(pg);
         String url = host + "/search.php?searchword=" + URLEncoder.encode(key, "UTF-8");
-        String html = fetch(url);
-        if (html == null) return emptySearchResult(page);
-
+        String html = OkHttp.string(url, getHeaders());
         Document doc = Jsoup.parse(html);
-        Elements items = doc.select(".Pic-list .pic-content");
+        Elements items = doc.select(".Pic-list li, .pic-content");
         JsonArray list = new JsonArray();
         for (Element item : items) {
-            Element a = item.selectFirst("a:first-of-type");
-            if (a == null) continue;
-            String href = a.attr("href");
-            Matcher m = Pattern.compile("/movie/index(\\d+)\\.html").matcher(href);
-            if (!m.find()) continue;
-            String vid = m.group(1);
-            String title = a.attr("title");
-            if (TextUtils.isEmpty(title)) {
-                Element h4a = item.selectFirst("h4 a");
-                if (h4a != null) title = h4a.text();
-            }
-            Element imgElem = item.selectFirst("img");
-            String pic = imgElem != null ? imgElem.attr("src") : "";
-            if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
-            Element iElem = item.selectFirst("i");
-            Element span = item.selectFirst("span");
-            String remark = (iElem != null) ? iElem.text() : (span != null ? span.text() : "");
+            String vid = extractVid(item.select("a").attr("href"));
             JsonObject vod = new JsonObject();
             vod.addProperty("vod_id", vid);
-            vod.addProperty("vod_name", title.trim());
-            vod.addProperty("vod_pic", pic);
-            vod.addProperty("vod_remarks", remark);
+            vod.addProperty("vod_name", item.select("h4, .title").text());
+            vod.addProperty("vod_pic", item.select("img").attr("data-original"));
             list.add(vod);
         }
         JsonObject result = new JsonObject();
         result.add("list", list);
-        result.addProperty("page", page);
-        return result.toString();
-    }
-
-    private String emptySearchResult(int page) {
-        JsonObject result = new JsonObject();
-        result.add("list", new JsonArray());
-        result.addProperty("page", page);
         return result.toString();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        try {
-            // 第一步：请求播放页
-            String playHtml = fetch(id);
-            if (playHtml == null) return simplePlayerResult(id);
-
-            // 提取 pn 和 now
-            String pn = extractVar(playHtml, "var pn=\"([^\"]+)\"");
-            String nowBase64 = extractVar(playHtml, "var now=base64decode\\(\"([^\"]+)\"\\)");
-            String now = nowBase64 != null ? new String(Base64.decode(nowBase64, Base64.DEFAULT), StandardCharsets.UTF_8) : null;
-            String nextPage = extractVar(playHtml, "var nextPage=\"([^\"]+)\"");
-
-            // 如果没有 pn 或 now，尝试直接从页面提取视频链接
-            if (pn == null || now == null) {
-                JsonObject direct = extractVideoFromHtml(playHtml, id);
-                if (direct != null) return direct.toString();
-                return simplePlayerResult(id);
-            }
-
-            // 请求播放器加载页
-            String loaderUrl = host + "/js/player/" + pn + ".html";
-            String loaderHtml = fetch(loaderUrl);
-            if (loaderHtml == null) return simplePlayerResult(id);
-
-            // 提取 iframe src
-            String iframeSrc = extractIframeSrc(loaderHtml);
-            if (iframeSrc == null) return simplePlayerResult(id);
-
-            // 构建 API URL
-            String apiPath = iframeSrc.split("\\?")[0];
-            Map<String, String> params = new HashMap<>();
-            params.put("url", now);
-            if (nextPage != null && !nextPage.isEmpty()) {
-                params.put("next", host + nextPage);
-            }
-            if (iframeSrc.contains("ref") || iframeSrc.contains("parentUrl")) {
-                params.put("ref", id);
-            }
-            String query = buildQuery(params);
-            String apiUrl = host + apiPath + "?" + query;
-
-            // 请求 API
-            String apiHtml = fetch(apiUrl);
-            if (apiHtml == null) return simplePlayerResult(id);
-
-            JsonObject result = extractVideoFromHtml(apiHtml, id);
-            if (result != null) return result.toString();
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return simplePlayerResult(id);
-    }
-
-    private String extractVar(String html, String pattern) {
-        Matcher m = Pattern.compile(pattern).matcher(html);
-        return m.find() ? m.group(1) : null;
-    }
-
-    private String extractIframeSrc(String html) {
-        // 尝试 <iframe src="...">
-        Matcher m1 = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']").matcher(html);
-        if (m1.find()) return m1.group(1);
-        // 尝试 iframe.src = "..."
-        Matcher m2 = Pattern.compile("iframe\\.src\\s*=\\s*[\"']([^\"']+)[\"']").matcher(html);
-        if (m2.find()) return m2.group(1);
-        return null;
-    }
-
-    private String buildQuery(Map<String, String> params) {
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, String> e : params.entrySet()) {
-            if (sb.length() > 0) sb.append("&");
-            sb.append(e.getKey()).append("=").append(e.getValue());
-        }
-        return sb.toString();
-    }
-
-    private JsonObject extractVideoFromHtml(String html, String refUrl) {
-        // 尝试匹配 mediaInfo 数组
-        Matcher mediaMatcher = Pattern.compile("(?:var|const|let)\\s+mediaInfo\\s*=\\s*(\\[.*?\\]);", Pattern.DOTALL).matcher(html);
-        if (mediaMatcher.find()) {
-            try {
-                String mediaJson = mediaMatcher.group(1);
-                JsonArray mediaList = JsonParser.parseString(mediaJson).getAsJsonArray();
-                String bestUrl = null;
-                for (int i = 0; i < mediaList.size(); i++) {
-                    JsonObject item = mediaList.get(i).getAsJsonObject();
-                    if (item.has("url")) {
-                        String url = item.get("url").getAsString();
-                        if (item.has("definition") && item.get("definition").getAsString().contains("1080P")) {
-                            bestUrl = url;
-                            break;
-                        }
-                        if (bestUrl == null) bestUrl = url;
-                    }
-                }
-                if (bestUrl != null) {
-                    JsonObject result = new JsonObject();
-                    result.addProperty("parse", 0);
-                    result.addProperty("url", bestUrl);
-                    JsonObject header = new JsonObject();
-                    header.addProperty("User-Agent", userAgent);
-                    header.addProperty("Referer", refUrl);
-                    header.addProperty("Origin", host);
-                    result.add("header", header);
-                    return result;
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        // 尝试匹配 videoUrl
-        Matcher videoMatcher = Pattern.compile("(?:var|const|let)\\s+videoUrl\\s*=\\s*\"([^\"]+)\"").matcher(html);
-        if (videoMatcher.find()) {
-            String videoUrl = videoMatcher.group(1).replace("\\/", "/");
-            JsonObject result = new JsonObject();
-            result.addProperty("parse", 0);
-            result.addProperty("url", videoUrl);
-            JsonObject header = new JsonObject();
-            header.addProperty("User-Agent", userAgent);
-            header.addProperty("Referer", refUrl);
-            header.addProperty("Origin", host);
-            result.add("header", header);
-            return result;
-        }
-        return null;
-    }
-
-    private String simplePlayerResult(String url) {
+        String playUrl = id.startsWith("http") ? id : host + id;
         JsonObject result = new JsonObject();
-        result.addProperty("parse", 1);
-        result.addProperty("url", url);
+        result.addProperty("parse", 1); // 03yy 通常使用解析接口，设置为 1 让 App 自动嗅探
+        result.addProperty("url", playUrl);
         return result.toString();
     }
 
-    private String fetch(String url) {
-        try {
-            Request request = new Request.Builder().url(url).headers(okhttp3.Headers.of(headers)).build();
-            try (Response response = client.newCall(request).execute()) {
-                if (response.isSuccessful() && response.body() != null) {
-                    return response.body().string();
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return null;
+    private String emptyCategoryResult(int page) {
+        JsonObject result = new JsonObject();
+        result.add("list", new JsonArray());
+        result.addProperty("page", page);
+        return result.toString();
     }
 }
