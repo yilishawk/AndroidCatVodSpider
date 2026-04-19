@@ -22,11 +22,11 @@ public class OkHttp {
         static volatile OkHttp INSTANCE = new OkHttp();
     }
 
-    private static OkHttp get() {
+    // 注意：這裡必須是 public，因為 BaiDuYunHandler.kt 裡有調用
+    public static OkHttp get() {
         return Loader.INSTANCE;
     }
 
-    // === 必須保留的 newCall 系列，否則 Kotlin 會報錯 ===
     public static Response newCall(Request request) throws IOException {
         return client().newCall(request).execute();
     }
@@ -39,21 +39,29 @@ public class OkHttp {
         return client().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute();
     }
 
-    // === String 返回系列 ===
     public static String string(String url) {
         return string(url, null);
     }
 
     public static String string(String url, Map<String, String> header) {
-        return string(url, header, null);
+        return string(url, null, header);
     }
 
-    // 我們新增的帶編碼的方法
+    // 關鍵：補回這個 3 參數的 string 方法，並支持 charset
+    public static String string(String url, Map<String, String> params, Map<String, String> header) {
+        return string(url, params, header, null);
+    }
+
+    // 關鍵：補回這個 4 參數的 string 方法，支持自定義編碼
+    public static String string(String url, Map<String, String> params, Map<String, String> header, String charset) {
+        return url.startsWith("http") ? new OkRequest(GET, url, params, header).execute(client(), charset).getBody() : "";
+    }
+
+    // 提供給 KaiGe.java 用的 3 參數版本
     public static String string(String url, Map<String, String> header, String charset) {
-        return url.startsWith("http") ? new OkRequest(GET, url, null, header).execute(client(), charset).getBody() : "";
+        return string(url, null, header, charset);
     }
 
-    // === Post 系列 ===
     public static String post(String url, Map<String, String> params) {
         return post(url, params, null);
     }
@@ -70,9 +78,31 @@ public class OkHttp {
         return url.startsWith("http") ? new OkRequest(POST, url, json, header).execute(client()).getBody() : "";
     }
 
-    // === 其餘工具方法保持不變 ===
     public static Map<String, List<String>> getLocationHeader(String url, Map<String, String> header) throws IOException {
         return client().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute().headers().toMultimap();
+    }
+
+    // 補回缺失的 getLocation，解決 BaiduDrive.kt 報錯
+    public static String getLocation(Map<String, List<String>> headers) {
+        if (headers == null) return null;
+        if (headers.containsKey("location")) return headers.get("location").get(0);
+        if (headers.containsKey("Location")) return headers.get("Location").get(0);
+        return null;
+    }
+
+    private static OkHttpClient build() {
+        if (get().client != null) return get().client;
+        return get().client = getBuilder().build();
+    }
+
+    private static OkHttpClient.Builder getBuilder() {
+        return new OkHttpClient.Builder()
+                .dns(safeDns())
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .hostnameVerifier((hostname, session) -> true)
+                .sslSocketFactory(new SSLCompat(), SSLCompat.TM);
     }
 
     private static OkHttpClient client() {
@@ -83,13 +113,11 @@ public class OkHttp {
         }
     }
 
-    private static OkHttpClient build() {
-        if (get().client != null) return get().client;
-        return get().client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .sslSocketFactory(new SSLCompat(), SSLCompat.TM)
-                .hostnameVerifier((hostname, session) -> true)
-                .build();
+    private static Dns safeDns() {
+        try {
+            return Objects.requireNonNull(Spider.safeDns());
+        } catch (Throwable e) {
+            return Dns.SYSTEM;
+        }
     }
 }
