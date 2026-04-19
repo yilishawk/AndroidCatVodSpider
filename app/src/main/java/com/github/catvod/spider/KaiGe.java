@@ -39,18 +39,14 @@ public class KaiGe extends Spider {
     }
 
     /**
-     * 強化的請求方法：支持編碼與 UA
+     * 使用項目自帶的 OkHttp.string 獲取網頁
      */
     private String getHtml(String url) {
         try {
             Map<String, String> header = new HashMap<>();
             header.put("User-Agent", rule.optString("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
-            
-            // OkHttp 獲取原始字節
-            byte[] bytes = OkHttp.bytes(url, header);
-            // 從規則中獲取編碼，默認 UTF-8
-            String charset = rule.optString("encoding", "utf-8");
-            return new String(bytes, charset);
+            // 這裡直接調用你項目有的方法
+            return OkHttp.string(url, header);
         } catch (Exception e) {
             return "";
         }
@@ -60,6 +56,7 @@ public class KaiGe extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             String url = rule.getString("cate_url").replace("{tid}", tid).replace("{pg}", pg);
+            // 處理其餘大括號佔位符
             url = url.replaceAll("\\{.*?\\}", "");
             return parseList(getHtml(url), pg);
         } catch (Exception e) {
@@ -122,14 +119,15 @@ public class KaiGe extends Spider {
                 String name = f.text().trim();
                 if (!name.isEmpty()) fromList.add(name);
             }
-            if (fromList.isEmpty()) fromList.add("在線播放");
+            if (fromList.isEmpty()) fromList.add("默認線路");
             vod.put("vod_play_from", join(fromList, "$$$"));
 
             Elements urlLists = doc.select(rule.getString("dt_list"));
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
                 List<String> urls = new ArrayList<>();
-                for (Element a : list.select("a")) {
+                Elements as = list.select("a");
+                for (Element a : as) {
                     urls.add(a.text().trim() + "$" + a.attr("href"));
                 }
                 if (!urls.isEmpty()) circuits.add(join(urls, "#"));
@@ -161,12 +159,15 @@ public class KaiGe extends Spider {
                 Element el = root.selectFirst(ruleStr);
                 if (el != null) {
                     String res = el.text().trim();
+                    // 如果文字為空，嘗試從常用屬性提取補位
                     if (res.isEmpty()) res = el.attr("title").trim();
                     if (res.isEmpty()) res = el.attr("alt").trim();
                     return res;
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            // 忽略
+        }
         return "";
     }
 
