@@ -1,12 +1,10 @@
 package com.github.catvod.net;
 
 import android.text.TextUtils;
-
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Util;
-
 import java.io.IOException;
 import java.util.Map;
-
 import okhttp3.FormBody;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -15,7 +13,6 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 class OkRequest {
-
     private final Map<String, String> header;
     private final Map<String, String> params;
     private final String method;
@@ -37,10 +34,10 @@ class OkRequest {
         this.method = method;
         this.params = params;
         this.header = header;
-        getInstance();
+        this.buildRequest();
     }
 
-    private void getInstance() {
+    private void buildRequest() {
         Request.Builder builder = new Request.Builder();
         if (method.equals(OkHttp.GET) && params != null) setParams();
         if (method.equals(OkHttp.POST)) builder.post(getRequestBody());
@@ -61,11 +58,16 @@ class OkRequest {
         url = Util.substring(url);
     }
 
-    public OkResult execute(OkHttpClient client) {
-        try {
-            Response response = client.newCall(request).execute();
-            return new OkResult(response.code(), response.body().string(), response.headers().toMultimap());
+    // 修復核心：增加 charset 參數
+    public OkResult execute(OkHttpClient client, String charset) {
+        try (Response res = client.newCall(request).execute()) {
+            byte[] bytes = res.body().bytes(); // 獲取原始位元組
+            String body = (charset == null || charset.isEmpty()) 
+                          ? new String(bytes) 
+                          : new String(bytes, charset); // 手動解碼
+            return new OkResult(res.code(), body, res.headers().toMultimap());
         } catch (IOException e) {
+            SpiderDebug.log(e);
             return new OkResult();
         }
     }
