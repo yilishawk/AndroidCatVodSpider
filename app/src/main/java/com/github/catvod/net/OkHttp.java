@@ -1,11 +1,13 @@
 package com.github.catvod.net;
 
 import com.github.catvod.crawler.Spider;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+
 import okhttp3.Dns;
 import okhttp3.Headers;
 import okhttp3.OkHttpClient;
@@ -16,59 +18,67 @@ public class OkHttp {
 
     public static final String POST = "POST";
     public static final String GET = "GET";
+
     private OkHttpClient client;
+
 
     private static class Loader {
         static volatile OkHttp INSTANCE = new OkHttp();
     }
 
-    public static OkHttp get() {
+    private static OkHttp get() {
         return Loader.INSTANCE;
     }
 
-    // === 百度雲/123盤等腳本調用的核心靜態方法 (返回 OkResult) ===
-    
-    public static OkResult get(String url, Map<String, String> params, Map<String, String> header) {
-        return new OkRequest(GET, url, params, header).execute(client());
+    public static Response newCall(Request request) throws IOException {
+        return client().newCall(request).execute();
     }
 
-    public static OkResult post(String url, Map<String, String> params, Map<String, String> header) {
-        return new OkRequest(POST, url, params, header).execute(client());
+    public static Response newCall(String url) throws IOException {
+        return client().newCall(new Request.Builder().url(url).build()).execute();
     }
 
-    public static OkResult postJson(String url, String json, Map<String, String> header) {
-        return new OkRequest(POST, url, json, header).execute(client());
+    public static Response newCall(String url, Map<String, String> header) throws IOException {
+        return client().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute();
     }
-
-    // === 必須嚴格對齊參數順序的 String 返回方法 ===
 
     public static String string(String url) {
         return string(url, null);
     }
 
     public static String string(String url, Map<String, String> header) {
-        // 修正點：原始順序是 (url, params, header)，這裡 header 必須放在第三位
-        return string(url, null, header, null);
+        return string(url, null, header);
     }
 
-    // 提供給 KaiGe.java 用的 3 參數快捷方法
-    public static String string(String url, Map<String, String> header, String charset) {
-        return string(url, null, header, charset);
+    public static String string(String url, Map<String, String> params, Map<String, String> header) {
+        return url.startsWith("http") ? new OkRequest(GET, url, params, header).execute(client()).getBody() : "";
     }
 
-    // 最底層的 string 方法
-    public static String string(String url, Map<String, String> params, Map<String, String> header, String charset) {
-        return url.startsWith("http") ? new OkRequest(GET, url, params, header).execute(client(), charset).getBody() : "";
+    public static OkResult get(String url, Map<String, String> params, Map<String, String> header) {
+        return new OkRequest(GET, url, params, header).execute(client());
     }
 
-    // === Kotlin 腳本依賴的 newCall 和 工具方法 ===
-
-    public static Response newCall(Request request) throws IOException {
-        return client().newCall(request).execute();
+    public static String post(String url, Map<String, String> params) {
+        return post(url, params, null).getBody();
     }
 
-    public static Response newCall(String url, Map<String, String> header) throws IOException {
-        return client().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute();
+    public static OkResult post(String url, Map<String, String> params, Map<String, String> header) {
+        return new OkRequest(POST, url, params, header).execute(client());
+    }
+
+    public static String post(String url, String json) {
+        return post(url, json, null).getBody();
+    }
+
+    public static OkResult post(String url, String json, Map<String, String> header) {
+        return new OkRequest(POST, url, json, header).execute(client());
+    }
+
+    public static String getLocation(String url, Map<String, String> header) throws IOException {
+        return getLocation(client().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute().headers().toMultimap());
+    }
+    public static Map<String, List<String>>  getLocationHeader(String url, Map<String, String> header) throws IOException {
+        return client().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute().headers().toMultimap();
     }
 
     public static String getLocation(Map<String, List<String>> headers) {
@@ -78,7 +88,14 @@ public class OkHttp {
         return null;
     }
 
-    // === Client 構建邏輯 ===
+    private static OkHttpClient build() {
+        if (get().client != null) return get().client;
+        return get().client = getBuilder().build();
+    }
+
+    private static OkHttpClient.Builder getBuilder() {
+        return new OkHttpClient.Builder().dns(safeDns()).connectTimeout(30, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).writeTimeout(30, TimeUnit.SECONDS).hostnameVerifier((hostname, session) -> true).sslSocketFactory(new SSLCompat(), SSLCompat.TM);
+    }
 
     private static OkHttpClient client() {
         try {
@@ -88,13 +105,11 @@ public class OkHttp {
         }
     }
 
-    private static OkHttpClient build() {
-        if (get().client != null) return get().client;
-        return get().client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .sslSocketFactory(new SSLCompat(), SSLCompat.TM)
-                .hostnameVerifier((hostname, session) -> true)
-                .build();
+    private static Dns safeDns() {
+        try {
+            return Objects.requireNonNull(Spider.safeDns());
+        } catch (Throwable e) {
+            return Dns.SYSTEM;
+        }
     }
 }
