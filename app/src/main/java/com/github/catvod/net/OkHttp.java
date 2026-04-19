@@ -22,12 +22,11 @@ public class OkHttp {
         static volatile OkHttp INSTANCE = new OkHttp();
     }
 
-    // 這個方法必須保留，但不能和下面的靜態請求方法衝突
     public static OkHttp get() {
         return Loader.INSTANCE;
     }
 
-    // === 百度雲/123盤腳本最依賴的靜態請求方法 (返回 OkResult) ===
+    // === 百度雲/123盤等腳本調用的核心靜態方法 (返回 OkResult) ===
     
     public static OkResult get(String url, Map<String, String> params, Map<String, String> header) {
         return new OkRequest(GET, url, params, header).execute(client());
@@ -41,26 +40,28 @@ public class OkHttp {
         return new OkRequest(POST, url, json, header).execute(client());
     }
 
-    // === 供 KaiGe.java 等使用的 String 返回方法 ===
+    // === 必須嚴格對齊參數順序的 String 返回方法 ===
 
     public static String string(String url) {
         return string(url, null);
     }
 
     public static String string(String url, Map<String, String> header) {
+        // 修正點：原始順序是 (url, params, header)，這裡 header 必須放在第三位
         return string(url, null, header, null);
     }
 
-    // 新增：支持編碼的 string 方法
+    // 提供給 KaiGe.java 用的 3 參數快捷方法
     public static String string(String url, Map<String, String> header, String charset) {
         return string(url, null, header, charset);
     }
 
+    // 最底層的 string 方法
     public static String string(String url, Map<String, String> params, Map<String, String> header, String charset) {
         return url.startsWith("http") ? new OkRequest(GET, url, params, header).execute(client(), charset).getBody() : "";
     }
 
-    // === 原有的 newCall 和 工具方法 ===
+    // === Kotlin 腳本依賴的 newCall 和 工具方法 ===
 
     public static Response newCall(Request request) throws IOException {
         return client().newCall(request).execute();
@@ -77,7 +78,7 @@ public class OkHttp {
         return null;
     }
 
-    // === 底層構建 ===
+    // === Client 構建邏輯 ===
 
     private static OkHttpClient client() {
         try {
