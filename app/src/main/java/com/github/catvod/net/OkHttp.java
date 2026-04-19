@@ -22,7 +22,7 @@ public class OkHttp {
         static volatile OkHttp INSTANCE = new OkHttp();
     }
 
-    // 注意：這裡必須是 public，因為 BaiDuYunHandler.kt 裡有調用
+    // 必須是 static 且返回 OkHttp 對象，供 Kotlin 調用
     public static OkHttp get() {
         return Loader.INSTANCE;
     }
@@ -47,17 +47,17 @@ public class OkHttp {
         return string(url, null, header);
     }
 
-    // 關鍵：補回這個 3 參數的 string 方法，並支持 charset
+    // 這裡的參數順序必須嚴格按照你原始文件的 (url, params, header)
     public static String string(String url, Map<String, String> params, Map<String, String> header) {
         return string(url, params, header, null);
     }
 
-    // 關鍵：補回這個 4 參數的 string 方法，支持自定義編碼
+    // 新增：支持編碼的底層方法
     public static String string(String url, Map<String, String> params, Map<String, String> header, String charset) {
         return url.startsWith("http") ? new OkRequest(GET, url, params, header).execute(client(), charset).getBody() : "";
     }
 
-    // 提供給 KaiGe.java 用的 3 參數版本
+    // 提供給 KaiGe.java 用的快捷方法
     public static String string(String url, Map<String, String> header, String charset) {
         return string(url, null, header, charset);
     }
@@ -82,7 +82,7 @@ public class OkHttp {
         return client().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(new Request.Builder().url(url).headers(Headers.of(header)).build()).execute().headers().toMultimap();
     }
 
-    // 補回缺失的 getLocation，解決 BaiduDrive.kt 報錯
+    // 必須保留，供 BaiduDrive.kt 使用
     public static String getLocation(Map<String, List<String>> headers) {
         if (headers == null) return null;
         if (headers.containsKey("location")) return headers.get("location").get(0);
