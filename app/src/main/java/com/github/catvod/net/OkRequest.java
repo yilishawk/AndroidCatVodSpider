@@ -58,13 +58,18 @@ class OkRequest {
         url = Util.substring(url);
     }
 
-    // 修復核心：增加 charset 參數
+    // 為了兼容原有調用，保留這個方法
+    public OkResult execute(OkHttpClient client) {
+        return execute(client, null);
+    }
+
+    // 新增支持自定義編碼的方法
     public OkResult execute(OkHttpClient client, String charset) {
         try (Response res = client.newCall(request).execute()) {
-            byte[] bytes = res.body().bytes(); // 獲取原始位元組
+            byte[] bytes = res.body().bytes();
             String body = (charset == null || charset.isEmpty()) 
                           ? new String(bytes) 
-                          : new String(bytes, charset); // 手動解碼
+                          : new String(bytes, charset);
             return new OkResult(res.code(), body, res.headers().toMultimap());
         } catch (IOException e) {
             SpiderDebug.log(e);
