@@ -2,10 +2,9 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import com.github.catvod.crawler.Spider;
-import com.github.catvod.utils.okhttp.OkHttp;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
-import com.alibaba.fastjson.JSONArray;
+import com.github.catvod.net.OkHttp;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -13,8 +12,7 @@ import org.jsoup.select.Elements;
 import java.util.*;
 
 /**
- * 凱哥萬能規則引擎 - 自成一派版
- * 核心邏輯：底層 JAR 固化，業務邏輯由外部 JSON 驅動
+ * 凱哥萬能規則引擎 - 穩健兼容版 (org.json)
  */
 public class KaiGe extends Spider {
     private JSONObject rule = new JSONObject();
@@ -22,9 +20,8 @@ public class KaiGe extends Spider {
     @Override
     public void init(Context context, String extend) {
         try {
-            // 支持從 URL 或 直接字符串加載 JSON 規則
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
-            this.rule = JSON.parseObject(json);
+            this.rule = new JSONObject(json);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -32,35 +29,47 @@ public class KaiGe extends Spider {
 
     @Override
     public String homeContent(boolean filter) {
-        JSONObject result = new JSONObject();
-        result.put("class", rule.getJSONArray("classes"));
-        if (rule.containsKey("filter")) {
-            result.put("filters", rule.getJSONObject("filter"));
+        try {
+            JSONObject result = new JSONObject();
+            result.put("class", rule.optJSONArray("classes"));
+            if (rule.has("filter")) {
+                result.put("filters", rule.optJSONObject("filter"));
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return "";
         }
-        return result.toJSONString();
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        String url = rule.getString("cate_url").replace("{tid}", tid).replace("{pg}", pg);
-        if (filter && extend != null) {
-            for (String key : extend.keySet()) {
-                String val = extend.get(key);
-                if (url.contains("{" + key + "}")) {
-                    url = url.replace("{" + key + "}", val);
-                } else {
-                    url += (url.contains("?") ? "&" : "?") + key + "=" + val;
+        try {
+            String url = rule.getString("cate_url").replace("{tid}", tid).replace("{pg}", pg);
+            if (filter && extend != null) {
+                for (String key : extend.keySet()) {
+                    String val = extend.get(key);
+                    if (url.contains("{" + key + "}")) {
+                        url = url.replace("{" + key + "}", val);
+                    } else {
+                        url += (url.contains("?") ? "&" : "?") + key + "=" + val;
+                    }
                 }
             }
+            url = url.replaceAll("\\{.*?\\}", "");
+            return parseList(OkHttp.string(url, null), pg);
+        } catch (Exception e) {
+            return "";
         }
-        url = url.replaceAll("\\{.*?\\}", ""); // 清理未匹配的佔位符
-        return parseList(OkHttp.string(url, null), pg);
     }
 
     @Override
     public String searchContent(String key, boolean quick) {
-        String url = rule.getString("search_url").replace("{wd}", key);
-        return parseList(OkHttp.string(url, null), "1");
+        try {
+            String url = rule.getString("search_url").replace("{wd}", key);
+            return parseList(OkHttp.string(url, null), "1");
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private String parseList(String html, String pg) {
@@ -74,13 +83,15 @@ public class KaiGe extends Spider {
                 vod.put("vod_name", extract(item, rule.getString("cate_name")));
                 vod.put("vod_pic", extract(item, rule.getString("cate_pic")));
                 vod.put("vod_remarks", extract(item, rule.getString("cate_remarks")));
-                list.add(vod);
+                list.put(vod);
             }
             JSONObject result = new JSONObject();
             result.put("list", list);
             result.put("page", pg);
-            return result.toJSONString();
-        } catch (Exception e) { return ""; }
+            return result.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Override
@@ -100,11 +111,10 @@ public class KaiGe extends Spider {
             vod.put("vod_director", extract(doc, rule.getString("dt_director")));
             vod.put("vod_content", extract(doc, rule.getString("dt_content")));
 
-            // 解析播放源與集數
             Elements froms = doc.select(rule.getString("dt_from"));
             List<String> fromList = new ArrayList<>();
             for (Element f : froms) fromList.add(f.text());
-            vod.put("vod_play_from", String.join("$$$", fromList));
+            vod.put("vod_play_from", join(fromList, "$$$"));
 
             Elements urlLists = doc.select(rule.getString("dt_list"));
             List<String> circuits = new ArrayList<>();
@@ -113,14 +123,18 @@ public class KaiGe extends Spider {
                 for (Element a : list.select("a")) {
                     urls.add(a.text() + "$" + a.attr("href"));
                 }
-                circuits.add(String.join("#", urls));
+                circuits.add(join(urls, "#"));
             }
-            vod.put("vod_play_url", String.join("$$$", circuits));
+            vod.put("vod_play_url", join(circuits, "$$$"));
 
             JSONObject result = new JSONObject();
-            result.put("list", new JSONArray(Collections.singletonList(vod)));
-            return result.toJSONString();
-        } catch (Exception e) { return ""; }
+            JSONArray list = new JSONArray();
+            list.put(vod);
+            result.put("list", list);
+            return result.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private String extract(Element root, String ruleStr) {
@@ -134,14 +148,30 @@ public class KaiGe extends Spider {
             }
             Element el = root.selectFirst(ruleStr);
             return el != null ? el.text() : "";
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        JSONObject result = new JSONObject();
-        result.put("parse", rule.getIntValue("parse"));
-        result.put("url", id);
-        return result.toJSONString();
+        try {
+            JSONObject result = new JSONObject();
+            result.put("parse", rule.optInt("parse", 0));
+            result.put("url", id);
+            return result.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    // 兼容低版本 Android 的 join 方法
+    private String join(List<String> list, String del) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(del);
+            sb.append(list.get(i));
+        }
+        return sb.toString();
     }
 }
