@@ -12,8 +12,8 @@ import org.jsoup.select.Elements;
 import java.util.*;
 
 /**
- * 凱哥萬能規則引擎 - 增強解析版
- * 修復了屬性提取 [attr] 邏輯與播放源缺失問題
+ * 凱哥萬能規則引擎 - 文字解析強化版
+ * 解決文字定位不到、線路名缺失問題
  */
 public class KaiGe extends Spider {
     private JSONObject rule = new JSONObject();
@@ -21,6 +21,7 @@ public class KaiGe extends Spider {
     @Override
     public void init(Context context, String extend) {
         try {
+            // 支持遠端 JSON 或本地配置
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
         } catch (Exception e) {
@@ -115,8 +116,8 @@ public class KaiGe extends Spider {
                 String name = f.text().trim();
                 if (!name.isEmpty()) fromList.add(name);
             }
-            // 兜底策略：如果沒抓到線路名，強制給一個，否則殼子不顯示集數
-            if (fromList.isEmpty()) fromList.add("默認線路");
+            // 關鍵修復：如果線路名為空，強制給一個文字，否則殼子不顯示播放按鈕
+            if (fromList.isEmpty()) fromList.add("在線播放");
             vod.put("vod_play_from", join(fromList, "$$$"));
 
             // 解析播放列表
@@ -126,7 +127,7 @@ public class KaiGe extends Spider {
                 List<String> urls = new ArrayList<>();
                 Elements as = list.select("a");
                 for (Element a : as) {
-                    urls.add(a.text() + "$" + a.attr("href"));
+                    urls.add(a.text().trim() + "$" + a.attr("href"));
                 }
                 if (!urls.isEmpty()) circuits.add(join(urls, "#"));
             }
@@ -142,11 +143,15 @@ public class KaiGe extends Spider {
         }
     }
 
+    /**
+     * 強化的數據提取器
+     * 支持 [attr] 語法，且具備文字/屬性自動互補邏輯
+     */
     private String extract(Element root, String ruleStr) {
         try {
             if (ruleStr == null || ruleStr.isEmpty() || root == null) return "";
             
-            // 處理屬性提取，如 [alt] 或 [data-original]
+            // 處理帶屬性的情況，如: img[data-original]
             if (ruleStr.contains("[") && ruleStr.endsWith("]")) {
                 int index = ruleStr.lastIndexOf("[");
                 String selector = ruleStr.substring(0, index);
@@ -154,15 +159,22 @@ public class KaiGe extends Spider {
                 
                 Element el = selector.isEmpty() ? root : root.selectFirst(selector);
                 if (el != null) {
-                    return attr.equalsIgnoreCase("text") ? el.text().trim() : el.attr(attr).trim();
+                    if (attr.equalsIgnoreCase("text")) return el.text().trim();
+                    return el.attr(attr).trim();
                 }
             } else {
-                // 普通文本提取
+                // 普通 CSS 選擇器文本提取
                 Element el = root.selectFirst(ruleStr);
-                return el != null ? el.text().trim() : "";
+                if (el != null) {
+                    String res = el.text().trim();
+                    // 如果 text() 是空的，嘗試從 title 或 alt 屬性補位 (常見於圖片站點)
+                    if (res.isEmpty()) res = el.attr("title").trim();
+                    if (res.isEmpty()) res = el.attr("alt").trim();
+                    return res;
+                }
             }
         } catch (Exception e) {
-            // 忽略異常返回空
+            // 靜默處理
         }
         return "";
     }
