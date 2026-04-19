@@ -34,10 +34,10 @@ class OkRequest {
         this.method = method;
         this.params = params;
         this.header = header;
-        this.buildRequest();
+        this.getInstance();
     }
 
-    private void buildRequest() {
+    private void getInstance() {
         Request.Builder builder = new Request.Builder();
         if (method.equals(OkHttp.GET) && params != null) setParams();
         if (method.equals(OkHttp.POST)) builder.post(getRequestBody());
@@ -58,19 +58,19 @@ class OkRequest {
         url = Util.substring(url);
     }
 
-    // 為了兼容原有調用，保留這個方法
+    // 兼容原本的調用
     public OkResult execute(OkHttpClient client) {
         return execute(client, null);
     }
 
-    // 新增支持自定義編碼的方法
+    // 新增：支持自定義編碼
     public OkResult execute(OkHttpClient client, String charset) {
-        try (Response res = client.newCall(request).execute()) {
-            byte[] bytes = res.body().bytes();
+        try (Response response = client.newCall(request).execute()) {
+            byte[] bytes = response.body().bytes();
             String body = (charset == null || charset.isEmpty()) 
                           ? new String(bytes) 
                           : new String(bytes, charset);
-            return new OkResult(res.code(), body, res.headers().toMultimap());
+            return new OkResult(response.code(), body, response.headers().toMultimap());
         } catch (IOException e) {
             SpiderDebug.log(e);
             return new OkResult();
