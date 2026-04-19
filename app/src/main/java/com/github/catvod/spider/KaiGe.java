@@ -12,7 +12,8 @@ import org.jsoup.select.Elements;
 import java.util.*;
 
 /**
- * 凱哥萬能規則引擎 - 穩健兼容版 (org.json)
+ * 凱哥萬能規則引擎 - 增強解析版
+ * 修復了屬性提取 [attr] 邏輯與播放源缺失問題
  */
 public class KaiGe extends Spider {
     private JSONObject rule = new JSONObject();
@@ -48,11 +49,7 @@ public class KaiGe extends Spider {
             if (filter && extend != null) {
                 for (String key : extend.keySet()) {
                     String val = extend.get(key);
-                    if (url.contains("{" + key + "}")) {
-                        url = url.replace("{" + key + "}", val);
-                    } else {
-                        url += (url.contains("?") ? "&" : "?") + key + "=" + val;
-                    }
+                    url = url.contains("{" + key + "}") ? url.replace("{" + key + "}", val) : url + (url.contains("?") ? "&" : "?") + key + "=" + val;
                 }
             }
             url = url.replaceAll("\\{.*?\\}", "");
@@ -104,33 +101,41 @@ public class KaiGe extends Spider {
             vod.put("vod_id", ids.get(0));
             vod.put("vod_name", extract(doc, rule.getString("dt_name")));
             vod.put("vod_pic", extract(doc, rule.getString("dt_pic")));
-            vod.put("type_name", extract(doc, rule.getString("dt_type")));
-            vod.put("vod_year", extract(doc, rule.getString("dt_year")));
-            vod.put("vod_area", extract(doc, rule.getString("dt_area")));
-            vod.put("vod_actor", extract(doc, rule.getString("dt_actor")));
-            vod.put("vod_director", extract(doc, rule.getString("dt_director")));
-            vod.put("vod_content", extract(doc, rule.getString("dt_content")));
+            vod.put("type_name", extract(doc, rule.optString("dt_type")));
+            vod.put("vod_year", extract(doc, rule.optString("dt_year")));
+            vod.put("vod_area", extract(doc, rule.optString("dt_area")));
+            vod.put("vod_actor", extract(doc, rule.optString("dt_actor")));
+            vod.put("vod_director", extract(doc, rule.optString("dt_director")));
+            vod.put("vod_content", extract(doc, rule.optString("dt_content")));
 
+            // 解析播放源名稱
             Elements froms = doc.select(rule.getString("dt_from"));
             List<String> fromList = new ArrayList<>();
-            for (Element f : froms) fromList.add(f.text());
+            for (Element f : froms) {
+                String name = f.text().trim();
+                if (!name.isEmpty()) fromList.add(name);
+            }
+            // 兜底策略：如果沒抓到線路名，強制給一個，否則殼子不顯示集數
+            if (fromList.isEmpty()) fromList.add("默認線路");
             vod.put("vod_play_from", join(fromList, "$$$"));
 
+            // 解析播放列表
             Elements urlLists = doc.select(rule.getString("dt_list"));
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
                 List<String> urls = new ArrayList<>();
-                for (Element a : list.select("a")) {
+                Elements as = list.select("a");
+                for (Element a : as) {
                     urls.add(a.text() + "$" + a.attr("href"));
                 }
-                circuits.add(join(urls, "#"));
+                if (!urls.isEmpty()) circuits.add(join(urls, "#"));
             }
             vod.put("vod_play_url", join(circuits, "$$$"));
 
             JSONObject result = new JSONObject();
-            JSONArray list = new JSONArray();
-            list.put(vod);
-            result.put("list", list);
+            JSONArray resList = new JSONArray();
+            resList.put(vod);
+            result.put("list", resList);
             return result.toString();
         } catch (Exception e) {
             return "";
@@ -139,18 +144,27 @@ public class KaiGe extends Spider {
 
     private String extract(Element root, String ruleStr) {
         try {
-            if (ruleStr == null || ruleStr.isEmpty()) return "";
+            if (ruleStr == null || ruleStr.isEmpty() || root == null) return "";
+            
+            // 處理屬性提取，如 [alt] 或 [data-original]
             if (ruleStr.contains("[") && ruleStr.endsWith("]")) {
-                String attr = ruleStr.substring(ruleStr.lastIndexOf("[") + 1, ruleStr.length() - 1);
-                String selector = ruleStr.substring(0, ruleStr.lastIndexOf("["));
+                int index = ruleStr.lastIndexOf("[");
+                String selector = ruleStr.substring(0, index);
+                String attr = ruleStr.substring(index + 1, ruleStr.length() - 1);
+                
                 Element el = selector.isEmpty() ? root : root.selectFirst(selector);
-                return el != null ? el.attr(attr) : "";
+                if (el != null) {
+                    return attr.equalsIgnoreCase("text") ? el.text().trim() : el.attr(attr).trim();
+                }
+            } else {
+                // 普通文本提取
+                Element el = root.selectFirst(ruleStr);
+                return el != null ? el.text().trim() : "";
             }
-            Element el = root.selectFirst(ruleStr);
-            return el != null ? el.text() : "";
         } catch (Exception e) {
-            return "";
+            // 忽略異常返回空
         }
+        return "";
     }
 
     @Override
@@ -165,7 +179,6 @@ public class KaiGe extends Spider {
         }
     }
 
-    // 兼容低版本 Android 的 join 方法
     private String join(List<String> list, String del) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < list.size(); i++) {
