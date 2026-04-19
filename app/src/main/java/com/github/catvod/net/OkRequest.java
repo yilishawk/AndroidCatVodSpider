@@ -1,10 +1,12 @@
 package com.github.catvod.net;
 
 import android.text.TextUtils;
-import com.github.catvod.crawler.SpiderDebug;
+
 import com.github.catvod.utils.Util;
+
 import java.io.IOException;
 import java.util.Map;
+
 import okhttp3.FormBody;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -13,6 +15,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 class OkRequest {
+
     private final Map<String, String> header;
     private final Map<String, String> params;
     private final String method;
@@ -34,7 +37,7 @@ class OkRequest {
         this.method = method;
         this.params = params;
         this.header = header;
-        this.getInstance();
+        getInstance();
     }
 
     private void getInstance() {
@@ -58,21 +61,11 @@ class OkRequest {
         url = Util.substring(url);
     }
 
-    // 兼容原本的調用
     public OkResult execute(OkHttpClient client) {
-        return execute(client, null);
-    }
-
-    // 新增：支持自定義編碼
-    public OkResult execute(OkHttpClient client, String charset) {
-        try (Response response = client.newCall(request).execute()) {
-            byte[] bytes = response.body().bytes();
-            String body = (charset == null || charset.isEmpty()) 
-                          ? new String(bytes) 
-                          : new String(bytes, charset);
-            return new OkResult(response.code(), body, response.headers().toMultimap());
+        try {
+            Response response = client.newCall(request).execute();
+            return new OkResult(response.code(), response.body().string(), response.headers().toMultimap());
         } catch (IOException e) {
-            SpiderDebug.log(e);
             return new OkResult();
         }
     }
