@@ -110,9 +110,15 @@ public class KaiGe extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        // --- 🛡️ 凱哥，這是最關鍵的「死命令」攔截，防止日誌地址跳轉 ---
-        if (id != null && id.contains("kaige_debug")) {
-            logger("🛠️ [系統] 攔截日誌請求，強制靜態返回，已終結跳轉。");
+        // --- 🛡️ 加強版死命令拦截：只要是 debug 日誌或 proxy 請求就直接靜止返回，徹底阻止跳轉 ---
+        if (id != null && (
+                id.contains("kaige_debug") || 
+                id.contains("/proxy?") || 
+                id.contains("proxy?do=") || 
+                id.contains("127.0.0.1:9978") ||
+                id.contains(":9978/proxy")
+        )) {
+            logger("🛠️ [系統] 攔截日誌/代理請求，強制靜態返回，已終結跳轉。");
             return "{\"parse\":0,\"url\":\"\",\"js\":\"\"}";
         }
 
