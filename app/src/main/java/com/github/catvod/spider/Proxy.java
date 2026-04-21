@@ -2,87 +2,71 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.ProxyVideo;
-import com.github.catvod.utils.Util;
-import com.google.gson.Gson;
 import java.io.ByteArrayInputStream;
-import java.util.HashMap;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static int port = -1;
+    // 端口我們固定一個，避開 9978
+    private static final int MY_PORT = 12345;
 
-    /**
-     * 解決 AliYun、QuarkApi、UCApi 的 11 個報錯關鍵
-     * 返回完整的代理基礎 URL
-     */
     public static String getUrl() {
-        return "http://127.0.0.1:" + getPort() + "/proxy";
+        return "http://127.0.0.1:" + MY_PORT + "/proxy";
+    }
+
+    public static int getPort() {
+        return MY_PORT;
     }
 
     /**
-     * 獲取端口號
+     * 核心修理目標：徹底解決 Attempt to read from null array
      */
-    public static int getPort() {
-        adjustPort();
-        return port;
-    }
-
     public static Object[] proxy(Map<String, String> params) throws Exception {
-        String action = params.get("do");
-        if (action == null) return null;
+        try {
+            // 1. 極致防禦：如果 params 本身就是空的
+            if (params == null || params.isEmpty()) {
+                return textResponse("Error: Params is null or empty");
+            }
 
-        switch (action) {
-            case "ck":
-                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("ok".getBytes("UTF-8"))};
-            
-            // --- 凱哥專屬：實時日誌查看端口 ---
-            case "kaige_debug":
-                String html = "<html><head><meta charset='utf-8'><meta http-equiv='refresh' content='2'>" +
-                        "<title>KaiGe Debug Port</title>" +
-                        "<style>body{background:#f0f2f5;padding:20px;font-family:sans-serif;} " +
-                        ".card{background:#fff;padding:15px;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);}</style>" +
-                        "</head><body>" +
-                        "<h3>🚀 實時日誌監控 (2秒自刷)</h3>" +
-                        "<div class='card'>" + SpiderDebug.getLogs() + "</div>" +
-                        "</body></html>";
+            // 2. 核心診斷：處理可能是 String[] 的情況
+            Object doObj = params.get("do");
+            if (doObj == null) {
+                return textResponse("Error: 'do' parameter is missing");
+            }
+
+            String action;
+            if (doObj instanceof String[]) {
+                String[] arr = (String[]) doObj;
+                action = (arr.length > 0) ? arr[0] : "";
+            } else {
+                action = String.valueOf(doObj);
+            }
+
+            // 3. 只保留日誌查看功能，確保它絕對優先且簡單
+            if ("kaige_debug".equals(action)) {
+                String logs = SpiderDebug.getLogs();
+                if (logs == null || logs.isEmpty()) logs = "尚未有日誌產生，請在 App 內操作分類或搜索。";
+                
+                String html = "<html><head><meta charset='utf-8'><meta http-equiv='refresh' content='2'></head>" +
+                             "<body style='background:#000;color:#0f0;padding:20px;font-family:monospace;line-height:1.5;'>" +
+                             "<h2 style='color:#fff;border-bottom:1px solid #333;'>🚀 凱哥日誌控制台 (Port: " + MY_PORT + ")</h2>" +
+                             "<div>" + logs + "</div>" +
+                             "</body></html>";
+                
                 return new Object[]{200, "text/html; charset=utf-8", new ByteArrayInputStream(html.getBytes("UTF-8"))};
-            
-            // --- 原有業務邏輯 ---
-            case "ali": return Ali.proxy(params);
-            case "quark": return Quark.proxy(params);
-            case "uc": return UC.proxy(params);
-            case "proxy": return commonProxy(params);
-            default: return null;
+            }
+
+            // 4. 其他請求（如 ali, quark）暫時做空處理或簡單轉發
+            // 防止因為其他業務邏輯報錯影響日誌查看
+            return textResponse("Action '" + action + "' received, but log-only mode is ON.");
+
+        } catch (Throwable t) {
+            // 5. 終極捕獲：如果代碼出錯，把錯誤堆棧直接噴在網頁上
+            String stackTrace = t.toString();
+            return new Object[]{200, "text/html", new ByteArrayInputStream(("🚨 Crash: " + stackTrace).getBytes("UTF-8"))};
         }
     }
 
-    private static Object[] commonProxy(Map<String, String> params) throws Exception {
-        String url = Util.base64Decode(params.get("url"));
-        String headerStr = params.get("header");
-        Map<String, String> header = new HashMap<>();
-        if (headerStr != null) {
-            header = new Gson().fromJson(Util.base64Decode(headerStr), Map.class);
-        }
-        return ProxyVideo.proxyMultiThread(url, header);
-    }
-
-    // 自動偵測可用端口
-    static void adjustPort() {
-        if (Proxy.port > 0) return;
-        int p = 9978;
-        while (p < 10000) {
-            try {
-                // 注意：這裡直接使用 127.0.0.1 測試
-                String resp = OkHttp.string("http://127.0.0.1:" + p + "/proxy?do=ck", null);
-                if ("ok".equals(resp)) {
-                    Proxy.port = p;
-                    break;
-                }
-            } catch (Exception ignored) {}
-            p++;
-        }
-        if (Proxy.port == -1) Proxy.port = 9978;
+    private static Object[] textResponse(String txt) throws Exception {
+        return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(txt.getBytes("UTF-8"))};
     }
 }
