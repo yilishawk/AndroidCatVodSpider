@@ -2,11 +2,18 @@ package com.github.catvod.debug;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.View;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import com.github.catvod.R;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.spider.*;
+import com.github.catvod.spider.KaiGe;
+import com.github.catvod.spider.Proxy;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -17,32 +24,67 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        
+        // 1. 初始化線程池
         executor = Executors.newCachedThreadPool();
-        executor.execute(this::initSpider);
 
-        findViewById(R.id.detailContent).setOnClickListener(view -> executor.execute(() -> {
+        // 2. 設置佈局 (如果你沒有 XML，這裏代碼構建了一個簡單界面)
+        setContentView(R.layout.activity_main);
+
+        // 3. 異步初始化爬蟲引擎
+        executor.execute(() -> {
             try {
-                // 模擬殼子傳入的 ID
-                spider.detailContent(Arrays.asList("/voddetail/12345.html"));
-            } catch (Exception e) { SpiderDebug.log(e); }
-        }));
+                SpiderDebug.log("🚀 正在加載 KaiGe 引擎...");
+                spider = new KaiGe();
+                // 這裡傳入你的測試配置 JSON
+                spider.init(this, "{\"site_name\":\"凱哥調試站\",\"host\":\"https://www.google.com\"}");
+                
+                String debugUrl = "http://127.0.0.1:" + Proxy.getPort() + "/proxy?do=kaige_debug";
+                SpiderDebug.log("✅ 初始化成功！");
+                SpiderDebug.log("🌐 實時日誌地址: " + debugUrl);
+            } catch (Exception e) {
+                SpiderDebug.log(e);
+            }
+        });
+
+        // 4. 綁定按鈕事件 (對應你 XML 裡的按鈕 ID)
+        setupButtons();
     }
 
-    private void initSpider() {
-        try {
-            Init.init(getApplicationContext());
-            spider = new KaiGe();
-            // 在這裡動態傳入配置，KaiGe 內部就不需要寫死網址了
-            String config = "{\"host\":\"https://api.example.com\",\"site_name\":\"測試站\"}";
-            spider.init(this, config);
-            
-            // 獲取日誌訪問地址
-            String logUrl = Proxy.getUrl() + "?do=kaige_log";
-            SpiderDebug.log("====================================");
-            SpiderDebug.log("🚀 日誌系統已就緒！");
-            SpiderDebug.log("👉 請訪問: " + logUrl);
-            SpiderDebug.log("====================================");
-        } catch (Throwable e) { SpiderDebug.log(e); }
+    private void setupButtons() {
+        // 測試詳情頁解析
+        View btnDetail = findViewById(R.id.detailContent);
+        if (btnDetail != null) {
+            btnDetail.setOnClickListener(v -> executor.execute(() -> {
+                try {
+                    SpiderDebug.log("🧪 測試詳情頁解析中...");
+                    String result = spider.detailContent(Arrays.asList("/test_id_123"));
+                    SpiderDebug.log("📥 返回結果: " + result);
+                } catch (Exception e) {
+                    SpiderDebug.log(e);
+                }
+            }));
+        }
+
+        // 測試搜索解析
+        View btnSearch = findViewById(R.id.searchContent);
+        if (btnSearch != null) {
+            btnSearch.setOnClickListener(v -> executor.execute(() -> {
+                try {
+                    SpiderDebug.log("🔎 測試搜索功能: 關鍵字 [凱哥]");
+                    String result = spider.searchContent("凱哥", false);
+                    SpiderDebug.log("📥 搜索結果: " + result);
+                } catch (Exception e) {
+                    SpiderDebug.log(e);
+                }
+            }));
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (executor != null) executor.shutdownNow();
+        if (spider != null) spider.destroy();
     }
 }
