@@ -19,15 +19,20 @@ import java.util.regex.Pattern;
 public class KG extends Spider {
     private JSONObject rule = new JSONObject();
 
+    // 日志输出（兼容 TVBox 环境）
+    private void log(String msg) {
+        System.out.println("[KG] " + msg);
+    }
+
     @Override
     public void init(Context context, String extend) {
         try {
-            Proxy.log("🎬 [KG] 引擎初始化啟動...");
+            log("引擎初始化启动...");
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
-            Proxy.log("✅ [KG] 規則加載成功: " + rule.optString("site_name"));
+            log("规则加载成功: " + rule.optString("site_name", "未知站点"));
         } catch (Exception e) {
-            Proxy.log("🚨 [KG] 初始化失敗: " + e.getMessage());
+            log("初始化失败: " + e.getMessage());
         }
     }
 
@@ -126,8 +131,7 @@ public class KG extends Spider {
     private String processBfjxStep(String ruleLine, String currentHtml, Map<String, String> vars) throws Exception {
         String line = ruleLine.trim();
         String processed = line;
-        Proxy.log("⚡ [bfjx 處理中]: " + line);
-        
+        log("bfjx 处理规则: " + line);
         Pattern extractPattern = Pattern.compile("([^+&]*?[+&]?[a-zA-Z0-9_*]*?&&[^+&]*)");
         Matcher m = extractPattern.matcher(processed);
         while (m.find()) {
@@ -139,7 +143,7 @@ public class KG extends Spider {
         processed = replaceVars(processed, vars);
 
         Map<String, String> headers = new HashMap<>();
-        String headerPattern = "\\[請求頭:(.*?)\\]";
+        String headerPattern = "\\[请求头:(.*?)\\]";
         Matcher hm = Pattern.compile(headerPattern).matcher(processed);
         if (hm.find()) {
             String headerStr = hm.group(1);
@@ -161,7 +165,7 @@ public class KG extends Spider {
         }
 
         String response = "";
-        Proxy.log("📡 [bfjx 請求] " + method.toUpperCase() + ": " + url);
+        log("bfjx 请求: " + method.toUpperCase() + " " + url);
         if (method.equals("get")) {
             response = OkHttp.string(url, headers.isEmpty() ? getHeaders(null, vars) : headers);
         } else {
@@ -171,22 +175,20 @@ public class KG extends Spider {
                 if (kv.length > 1) params.put(kv[0], kv[1]);
                 else if (kv.length == 1) params.put(kv[0], "");
             }
-            // 修正這裡的返回值類型
             response = OkHttp.post(url, params, headers).getBody();
         }
 
         if (ruleLine.contains("[base64]")) {
             response = decodeBase64(response);
-            Proxy.log("🔓 [bfjx 解碼 Base64]");
+            log("bfjx 响应已 base64 解码");
         }
-
         return response;
     }
 
     @Override
     public String homeContent(boolean filter) {
         try {
-            Proxy.log("🏠 [KG] 首頁加載");
+            log("首页加载");
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
             if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
@@ -199,7 +201,7 @@ public class KG extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
-            Proxy.log("📂 [KG] 分類 tid=" + tid + " pg=" + pg);
+            log("分类请求: tid=" + tid + ", pg=" + pg);
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
             if (extend != null) {
@@ -208,11 +210,12 @@ public class KG extends Spider {
                 }
             }
             url = url.replaceAll("\\{[^}]+\\}", "");
-            Proxy.log("📡 [KG 分類請求]: " + url);
-            String html = getHtml(url, null);
+            log("分类URL: " + url);
+            String html = getHtmlWithLog(url, null);
             if (TextUtils.isEmpty(html)) return "";
             return parseList(html, pg, false);
         } catch (Exception e) {
+            log("分类异常: " + e.getMessage());
             return "";
         }
     }
@@ -220,12 +223,12 @@ public class KG extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
-            Proxy.log("🔍 [KG 搜索]: " + key);
+            log("搜索: " + key);
             Map<String, String> vars = new HashMap<>();
             vars.put("wd", key);
             vars.put("pg", "1");
             String url = buildUrl(rule.optString("search_url"), vars);
-            String html = getHtml(url, null);
+            String html = getHtmlWithLog(url, null);
             return parseList(html, "1", true);
         } catch (Exception e) {
             return "";
@@ -237,8 +240,8 @@ public class KG extends Spider {
             Document doc = Jsoup.parse(html);
             String itemRule = isSearch ? rule.optString("sc_item", rule.optString("cate_item")) : rule.optString("cate_item");
             Elements items = doc.select(itemRule);
+            log("列表解析: 找到 " + items.size() + " 项");
             JSONArray list = new JSONArray();
-            Proxy.log("📦 [KG 列表] 數量: " + items.size());
             for (Element item : items) {
                 String idRule = isSearch ? rule.optString("sc_id", rule.optString("cate_id")) : rule.optString("cate_id");
                 String nameRule = isSearch ? rule.optString("sc_name", rule.optString("cate_name")) : rule.optString("cate_name");
@@ -263,9 +266,10 @@ public class KG extends Spider {
             }
             JSONObject result = new JSONObject();
             result.put("list", list);
-            result.put("page", pg);
+            result.put("pagecount", pg);
             return result.toString();
         } catch (Exception e) {
+            log("列表解析异常: " + e.getMessage());
             return "";
         }
     }
@@ -275,8 +279,8 @@ public class KG extends Spider {
         try {
             String id = ids.get(0);
             String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
-            Proxy.log("📝 [KG 詳情]: " + url);
-            Document doc = Jsoup.parse(getHtml(url, null));
+            log("详情请求: " + url);
+            Document doc = Jsoup.parse(getHtmlWithLog(url, null));
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
             vod.put("vod_name", extract(doc, rule.optString("dt_name")));
@@ -310,12 +314,12 @@ public class KG extends Spider {
             vod.put("vod_play_from", TextUtils.join("$$$", validFrom));
             vod.put("vod_play_url", TextUtils.join("$$$", validUrl));
 
-            Proxy.log("✅ [KG 詳情解析成功]: " + vod.optString("vod_name"));
+            log("详情解析成功: " + vod.optString("vod_name"));
             JSONObject result = new JSONObject();
             result.put("list", new JSONArray().put(vod));
             return result.toString();
         } catch (Exception e) {
-            Proxy.log("🚨 [KG 詳情出錯]: " + e.getMessage());
+            log("详情异常: " + e.getMessage());
             return "";
         }
     }
@@ -325,43 +329,58 @@ public class KG extends Spider {
         Map<String, String> vars = new HashMap<>();
         vars.put("play_id", id);
         vars.put("flag", flag);
+        log("播放解析开始: flag=" + flag + ", id=" + id);
+
         try {
-            Proxy.log("▶️ [KG 播放解析啟動] flag=" + flag + " id=" + id);
             JSONObject playRule = rule.optJSONObject("play");
             if (playRule == null) {
-                return new JSONObject().put("parse", 0).put("url", id).toString();
+                log("无播放规则，返回 parse=1 让壳子处理");
+                return buildFallbackResponse(id);
             }
 
+            // 尝试 bfjx 模式
             List<String> bfjxList = new ArrayList<>();
             for (int i = 1; i <= 10; i++) {
                 if (playRule.has("bfjx" + i)) bfjxList.add(playRule.getString("bfjx" + i));
             }
-            
             if (!bfjxList.isEmpty()) {
-                Proxy.log("🔍 [KG] 檢測到 bfjx 模式，步驟數: " + bfjxList.size());
-                String currentHtml = getHtml(id, getHeaders(null, vars));
+                log("使用 bfjx 模式，步骤数: " + bfjxList.size());
+                Map<String, String> headers = getHeaders(null, vars);
+                headers.put("Referer", rule.optString("host"));
+                String currentHtml = getHtmlWithLog(id, headers);
+                if (TextUtils.isEmpty(currentHtml)) {
+                    log("bfjx 第一步获取 HTML 为空，回退");
+                    return buildFallbackResponse(id);
+                }
                 String lastResult = currentHtml;
                 for (String bfjx : bfjxList) {
                     lastResult = processBfjxStep(bfjx, lastResult, vars);
                     vars.put("bfjx_tmp", lastResult);
                 }
                 String finalUrl = lastResult;
-                Proxy.log("🏁 [KG bfjx 最終結果]: " + finalUrl);
-                if (finalUrl != null && finalUrl.startsWith("http")) {
+                if (!TextUtils.isEmpty(finalUrl) && finalUrl.startsWith("http")) {
+                    log("bfjx 成功获取视频地址: " + finalUrl);
                     JSONObject result = new JSONObject();
                     result.put("parse", 0);
                     result.put("url", finalUrl);
-                    if (playRule.has("play_headers")) result.put("header", playRule.optJSONObject("play_headers").toString());
+                    if (playRule.has("play_headers"))
+                        result.put("header", playRule.optJSONObject("play_headers").toString());
                     return result.toString();
-                } else if (finalUrl != null) {
+                } else if (!TextUtils.isEmpty(finalUrl)) {
                     finalUrl = decodeBase64(finalUrl);
-                    return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
+                    if (finalUrl.startsWith("http")) {
+                        log("bfjx 解码后地址: " + finalUrl);
+                        return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
+                    }
                 }
+                log("bfjx 未能提取有效地址，回退");
+                return buildFallbackResponse(id);
             }
 
+            // 尝试 steps 模式
             if (playRule.has("steps")) {
+                log("使用 steps 模式");
                 JSONArray steps = playRule.getJSONArray("steps");
-                Proxy.log("🔍 [KG] 檢測到 steps 模式，總步數: " + steps.length());
                 String currentHtml = null;
                 String currentUrl = id;
                 for (int i = 0; i < steps.length(); i++) {
@@ -369,18 +388,21 @@ public class KG extends Spider {
                     String method = step.optString("method", "get").toLowerCase();
                     if (method.equals("get") || method.equals("post")) {
                         String stepUrl = buildUrl(step.optString("url", currentUrl), vars);
-                        Proxy.log("🎬 [Step " + (i + 1) + "] " + method.toUpperCase() + ": " + stepUrl);
                         Map<String, String> headers = getHeaders(step.optJSONObject("headers"), vars);
                         if (method.equals("get")) {
-                            currentHtml = getHtml(stepUrl, headers);
+                            currentHtml = getHtmlWithLog(stepUrl, headers);
                         } else {
                             String body = buildUrl(step.optString("body", ""), vars);
-                            currentHtml = postHtml(stepUrl, body, headers);
+                            currentHtml = postHtmlWithLog(stepUrl, body, headers);
                         }
                         currentUrl = stepUrl;
                         vars.put("step" + (i + 1) + "_url", stepUrl);
                     } else if (method.equals("extract")) {
-                        if (currentHtml == null && i == 0) currentHtml = getHtml(id, getHeaders(null, vars));
+                        if (currentHtml == null && i == 0) {
+                            Map<String, String> headers = getHeaders(null, vars);
+                            headers.put("Referer", rule.optString("host"));
+                            currentHtml = getHtmlWithLog(id, headers);
+                        }
                         JSONObject extractVars = step.optJSONObject("vars");
                         if (extractVars != null) {
                             Iterator<String> keys = extractVars.keys();
@@ -392,31 +414,108 @@ public class KG extends Spider {
                                     value = new JSONObject(currentHtml).optString(vRule.substring(5));
                                 } else if (vRule.startsWith("base64:")) {
                                     String inner = vRule.substring(7);
-                                    for (Map.Entry<String, String> entry : vars.entrySet()) inner = inner.replace("{" + entry.getKey() + "}", entry.getValue());
+                                    for (Map.Entry<String, String> entry : vars.entrySet())
+                                        inner = inner.replace("{" + entry.getKey() + "}", entry.getValue());
                                     value = decodeBase64(inner);
                                 } else {
                                     value = extract(currentHtml, vRule);
                                 }
                                 vars.put(key, value);
-                                Proxy.log("💎 [變量提取] " + key + " = " + value);
+                                log("提取变量 " + key + " = " + (value == null ? "null" : value.substring(0, Math.min(50, value.length()))));
                             }
                         }
                     }
                 }
                 String finalUrl = buildUrl(rule.optString("final_output", "{final_url}"), vars);
-                Proxy.log("🏁 [KG Steps 最終輸出]: " + finalUrl);
-                JSONObject result = new JSONObject();
-                result.put("parse", 0);
-                result.put("url", finalUrl);
-                if (playRule.has("play_headers")) result.put("header", playRule.optJSONObject("play_headers").toString());
-                return result.toString();
+                if (!TextUtils.isEmpty(finalUrl) && finalUrl.startsWith("http")) {
+                    log("steps 成功获取视频地址: " + finalUrl);
+                    JSONObject result = new JSONObject();
+                    result.put("parse", 0);
+                    result.put("url", finalUrl);
+                    if (playRule.has("play_headers"))
+                        result.put("header", playRule.optJSONObject("play_headers").toString());
+                    return result.toString();
+                }
+                log("steps 未能提取有效地址，回退");
+                return buildFallbackResponse(id);
             }
 
-            return new JSONObject().put("parse", 0).put("url", id).toString();
+            // 没有规则，直接回退
+            log("无有效播放规则，回退");
+            return buildFallbackResponse(id);
         } catch (Exception e) {
-            Proxy.log("🚨 [KG 播放解析異常]: " + e.getMessage());
-            return "";
+            log("播放解析异常: " + e.getMessage());
+            return buildFallbackResponse(id);
         }
+    }
+
+    // 构建回退响应（parse=1，带上请求头）
+    private String buildFallbackResponse(String url) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("parse", 1);
+            result.put("url", url);
+            // 添加必要的请求头，帮助壳子解析
+            JSONObject headers = new JSONObject();
+            headers.put("User-Agent", rule.optString("ua", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"));
+            headers.put("Referer", rule.optString("host"));
+            // 如果有全局 headers，也合并进去
+            JSONObject globalHeaders = rule.optJSONObject("headers");
+            if (globalHeaders != null) {
+                Iterator<String> it = globalHeaders.keys();
+                while (it.hasNext()) {
+                    String key = it.next();
+                    headers.put(key, globalHeaders.optString(key));
+                }
+            }
+            result.put("header", headers.toString());
+            log("返回回退响应: parse=1, url=" + url);
+            return result.toString();
+        } catch (Exception e) {
+            return "{\"parse\":1,\"url\":\"" + url + "\"}";
+        }
+    }
+
+    // 带日志的 GET 请求
+    private String getHtmlWithLog(String url, Map<String, String> headers) throws Exception {
+        if (headers == null) headers = getHeaders(null, null);
+        log("GET 请求: " + url);
+        if (headers != null && !headers.isEmpty()) {
+            log("请求头: " + headers);
+        }
+        String result = OkHttp.string(url, headers);
+        if (result == null) {
+            log("GET 响应: 空内容");
+        } else {
+            log("GET 响应长度: " + result.length());
+            int previewLen = Math.min(300, result.length());
+            log("响应预览: " + result.substring(0, previewLen).replace("\n", " "));
+        }
+        return result;
+    }
+
+    // 带日志的 POST 请求
+    private String postHtmlWithLog(String url, String body, Map<String, String> headers) throws Exception {
+        log("POST 请求: " + url);
+        log("POST body: " + body);
+        if (headers != null && !headers.isEmpty()) {
+            log("请求头: " + headers);
+        }
+        Map<String, String> params = new HashMap<>();
+        for (String pair : body.split("&")) {
+            String[] kv = pair.split("=", 2);
+            if (kv.length > 1) params.put(kv[0], kv[1]);
+            else if (kv.length == 1) params.put(kv[0], "");
+        }
+        String result = OkHttp.post(url, params, headers).getBody();
+        if (result == null) {
+            log("POST 响应: 空内容");
+        } else {
+            log("POST 响应长度: " + result.length());
+            int previewLen = Math.min(300, result.length());
+            log("响应预览: " + result.substring(0, previewLen).replace("\n", " "));
+        }
+        return result;
     }
 
     private Map<String, String> getHeaders(JSONObject customHd, Map<String, String> vars) {
@@ -432,21 +531,6 @@ public class KG extends Spider {
             }
         }
         return header;
-    }
-
-    private String getHtml(String url, Map<String, String> headers) throws Exception {
-        if (headers == null) headers = getHeaders(null, null);
-        return OkHttp.string(url, headers);
-    }
-
-    private String postHtml(String url, String body, Map<String, String> headers) throws Exception {
-        Map<String, String> params = new HashMap<>();
-        for (String pair : body.split("&")) {
-            String[] kv = pair.split("=", 2);
-            if (kv.length > 1) params.put(kv[0], kv[1]);
-            else if (kv.length == 1) params.put(kv[0], "");
-        }
-        return OkHttp.post(url, params, headers).getBody();
     }
 
     private String getPicUrl(String pic) {
