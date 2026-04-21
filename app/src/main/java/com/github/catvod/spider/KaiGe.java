@@ -34,7 +34,7 @@ public class KaiGe extends Spider {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-            // 支持 A.lazyload@href 格式
+            // 支持 a.lazyload@href 格式
             if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
                 String[] parts = ruleStr.split("@");
                 String selector = parts[0].trim();
