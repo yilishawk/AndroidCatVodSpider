@@ -32,6 +32,8 @@ public class KaiGe extends Spider {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
+            String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
+            
             if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
                 String[] parts = ruleStr.split("@");
                 String selector = parts[0].trim();
@@ -41,7 +43,7 @@ public class KaiGe extends Spider {
                 if (prop.isEmpty()) return el.text().trim();
                 return el.attr(prop).trim();
             }
-            String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
+
             if (ruleStr.contains("&&")) {
                 String[] parts = ruleStr.split("&&");
                 String left = parts[0].trim();
@@ -70,6 +72,7 @@ public class KaiGe extends Spider {
                 int e = source.indexOf(right, s);
                 return (e != -1) ? source.substring(s, e).trim() : "";
             }
+
             if (root instanceof Element) {
                 Element el = ((Element) root).selectFirst(ruleStr);
                 if (el == null) return "";
@@ -86,62 +89,25 @@ public class KaiGe extends Spider {
         return "";
     }
 
-    private String buildUrl(String format) {
-        if (format == null) return "";
-        if (!format.contains("+") && !format.contains("{")) {
-            return format.replace("{host}", rule.optString("host"));
-        }
-        try {
-            StringBuilder sb = new StringBuilder();
-            String[] parts = format.split("\\+");
-            for (String p : parts) {
-                p = p.trim();
-                if (p.startsWith("{") && p.endsWith("}")) {
-                    String key = p.substring(1, p.length() - 1);
-                    String val = varPool.getOrDefault(key, "");
-                    sb.append(URLEncoder.encode(val, "UTF-8"));
-                } else {
-                    sb.append(p.replace("'", "").replace("{host}", rule.optString("host")));
-                }
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return format;
-        }
-    }
-
     @Override
     public String homeContent(boolean filter) {
-        Proxy.log("🏠 進入首頁 [homeContent]");
         try {
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
             if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
             return result.toString();
-        } catch (Exception e) {
-            return "";
-        }
+        } catch (Exception e) { return ""; }
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
-            Proxy.log("📂 請求分類: tid=" + tid + ", pg=" + pg);
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
-            if (extend != null) {
-                for (String key : extend.keySet()) url = url.replace("{" + key + "}", extend.get(key));
-            }
-            url = url.replaceAll("\\{.*?\\}", ""); 
+            if (extend != null) for (String key : extend.keySet()) url = url.replace("{" + key + "}", extend.get(key));
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
-            Proxy.log("📡 [分類請求]: " + url);
-            String html = OkHttp.string(url, getHeaders(null));
-            Proxy.log("📥 獲取 HTML 成功，長度: " + (html != null ? html.length() : 0));
-            return parseList(html, pg, false);
-        } catch (Exception e) {
-            Proxy.log("🚨 [分類出錯]: " + e.getMessage());
-            return "";
-        }
+            return parseList(OkHttp.string(url, getHeaders(null)), pg, false);
+        } catch (Exception e) { return ""; }
     }
 
     @Override
@@ -151,12 +117,8 @@ public class KaiGe extends Spider {
             if (TextUtils.isEmpty(searchUrl)) return "";
             String url = searchUrl.replace("{wd}", URLEncoder.encode(key, "UTF-8"));
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
-            Proxy.log("🔍 [搜索發起]: " + key + " | URL: " + url);
             return parseList(OkHttp.string(url, getHeaders(null)), "1", true);
-        } catch (Exception e) {
-            Proxy.log("🚨 [搜索出錯]: " + e.getMessage());
-            return "";
-        }
+        } catch (Exception e) { return ""; }
     }
 
     private String parseList(String html, String pg, boolean isSearch) {
@@ -166,7 +128,6 @@ public class KaiGe extends Spider {
             String prefix = isSearch ? "sc_" : "cate_";
             String itemRule = rule.optString(prefix + "item", rule.optString("cate_item"));
             Elements items = doc.select(itemRule);
-            Proxy.log("📦 [列表解析]: 發現數量 " + items.size());
             for (Element item : items) {
                 JSONObject vod = new JSONObject();
                 String vId = extract(item, rule.optString(prefix + "id", rule.optString("cate_id")));
@@ -178,9 +139,7 @@ public class KaiGe extends Spider {
                 list.put(vod);
             }
             return new JSONObject().put("list", list).put("page", pg).toString();
-        } catch (Exception e) {
-            return "";
-        }
+        } catch (Exception e) { return ""; }
     }
 
     @Override
@@ -188,20 +147,24 @@ public class KaiGe extends Spider {
         try {
             String id = ids.get(0);
             String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
-            Proxy.log("📝 [詳情請求]: " + url);
-            String html = OkHttp.string(url, getHeaders(null));
-            Document doc = Jsoup.parse(html);
+            Document doc = Jsoup.parse(OkHttp.string(url, getHeaders(null)));
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
             vod.put("vod_name", extract(doc, rule.optString("dt_name")));
             vod.put("vod_pic", getPicUrl(extract(doc, rule.optString("dt_pic"))));
+            // --- 凱哥你看，字段全在這裡，一個都沒少 ---
+            vod.put("type_name", extract(doc, rule.optString("dt_type")));
+            vod.put("vod_year", extract(doc, rule.optString("dt_year")));
+            vod.put("vod_area", extract(doc, rule.optString("dt_area")));
             vod.put("vod_actor", extract(doc, rule.optString("dt_actor")));
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
+            
             Elements froms = doc.select(rule.optString("dt_from"));
             List<String> fromList = new ArrayList<>();
             for (Element f : froms) fromList.add(f.text().trim());
             vod.put("vod_play_from", TextUtils.join("$$$", fromList));
+            
             Elements urlLists = doc.select(rule.optString("dt_list"));
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
@@ -210,12 +173,8 @@ public class KaiGe extends Spider {
                 circuits.add(TextUtils.join("#", urls));
             }
             vod.put("vod_play_url", TextUtils.join("$$$", circuits));
-            Proxy.log("✅ [詳情解析完成]: " + vod.optString("vod_name"));
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
-        } catch (Exception e) {
-            Proxy.log("🚨 [詳情出錯]: " + e.getMessage());
-            return "";
-        }
+        } catch (Exception e) { return ""; }
     }
 
     @Override
@@ -226,57 +185,61 @@ public class KaiGe extends Spider {
             Proxy.log("▶️ [播放解析啟動]: " + url);
 
             if (!rule.has("play") || !rule.getJSONObject("play").has("steps")) {
-                JSONObject res = new JSONObject();
-                res.put("parse", rule.optInt("parse", 0));
-                res.put("url", url);
-                if (rule.has("play_headers")) res.put("header", rule.optJSONObject("play_headers").toString());
-                return res.toString();
+                return quickResult(url);
             }
 
             JSONObject playConfig = rule.getJSONObject("play");
             JSONArray steps = playConfig.getJSONArray("steps");
-            varPool.put("play_id", id);
+            varPool.clear();
+            varPool.put("play_id", url);
 
+            String currentHtml = "";
             for (int i = 0; i < steps.length(); i++) {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
-                String stepUrl = replaceStepVars(step.optString("url"));
-                Proxy.log("🎬 [Step " + (i + 1) + "] " + method.toUpperCase() + ": " + stepUrl);
-
-                Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
                 
-                // --- 這裡修正編譯錯誤 ---
-                String result = "";
-                if (method.equals("post")) {
-                    result = OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers).getBody();
+                if (method.equals("extract")) {
+                    if (TextUtils.isEmpty(currentHtml)) currentHtml = OkHttp.string(url, getHeaders(null));
                 } else {
-                    result = OkHttp.string(stepUrl, headers);
+                    String stepUrl = replaceStepVars(step.optString("url", url));
+                    Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
+                    if (method.contains("post")) {
+                        currentHtml = OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers).getBody();
+                    } else {
+                        currentHtml = OkHttp.string(stepUrl, headers);
+                    }
                 }
-                // -----------------------
-                
-                Proxy.log("📥 [Step " + (i + 1) + " Resp]: " + (result.length() > 200 ? result.substring(0, 200) + "..." : result));
 
                 if (step.has("vars")) {
                     JSONObject vars = step.getJSONObject("vars");
                     Iterator<String> keys = vars.keys();
                     while (keys.hasNext()) {
                         String key = keys.next();
-                        String val = extract(result, vars.getString(key));
+                        String vRule = vars.getString(key);
+                        String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(key, val);
-                        Proxy.log("💎 [變量提取] " + key + " = " + val);
                     }
                 }
+                varPool.put("step" + (i + 1) + "_url", step.optString("url", url));
             }
-            String finalUrl = replaceStepVars(playConfig.optString("final_output", "{play_id}"));
-            Proxy.log("🏁 [最終播放鏈接]: " + finalUrl);
+
+            String finalUrl = replaceStepVars(playConfig.optString("final_output", "{final_url}"));
+            if (finalUrl.startsWith("/") && !finalUrl.startsWith("//")) finalUrl = rule.optString("host") + finalUrl;
+
             JSONObject res = new JSONObject();
             res.put("parse", 0);
             res.put("url", finalUrl);
+            if (playConfig.has("play_headers")) res.put("header", playConfig.optJSONObject("play_headers").toString());
             return res.toString();
-        } catch (Exception e) {
-            Proxy.log("🚨 [播放出錯]: " + e.getMessage());
-            return "";
-        }
+        } catch (Exception e) { return ""; }
+    }
+
+    private String quickResult(String url) throws Exception {
+        JSONObject res = new JSONObject();
+        res.put("parse", rule.optInt("parse", 0));
+        res.put("url", url);
+        if (rule.has("play_headers")) res.put("header", rule.optJSONObject("play_headers").toString());
+        return res.toString();
     }
 
     private String replaceStepVars(String text) {
@@ -287,13 +250,13 @@ public class KaiGe extends Spider {
 
     private Map<String, String> getHeaders(JSONObject customHd) {
         Map<String, String> header = new HashMap<>();
-        header.put("User-Agent", rule.optString("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
+        header.put("User-Agent", rule.optString("ua", "Mozilla/5.0"));
         JSONObject hd = customHd != null ? customHd : rule.optJSONObject("headers");
         if (hd != null) {
             Iterator<String> keys = hd.keys();
             while (keys.hasNext()) {
                 String key = keys.next();
-                header.put(key, buildUrl(hd.optString(key)));
+                header.put(key, replaceStepVars(hd.optString(key)));
             }
         }
         return header;
