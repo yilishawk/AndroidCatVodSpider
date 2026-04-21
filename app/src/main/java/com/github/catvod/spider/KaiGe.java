@@ -22,7 +22,7 @@ public class KaiGe extends Spider {
     public void init(Context context, String extend) {
         try {
             SpiderDebug.log("🛠️ KaiGe 引擎啟動...");
-            // 支持傳入本地 JSON 配置或遠程 URL
+            // 支持傳入本地 JSON 配置和遠程 URL
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
             SpiderDebug.log("✅ 規則加載成功，站點: " + rule.optString("site_name", "通用引擎"));
