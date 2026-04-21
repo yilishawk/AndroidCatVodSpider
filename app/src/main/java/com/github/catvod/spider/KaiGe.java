@@ -17,7 +17,8 @@ public class KaiGe extends Spider {
     private Map<String, String> varPool = new HashMap<>();
 
     private void logger(String msg) {
-        Proxy.log("[KG] " + msg); // 始終保持綠色實時輸出
+        // 確保每一條日誌都帶着綠色的標識，實時推送到你的調試頁面
+        Proxy.log("[KG] " + msg);
     }
 
     @Override
@@ -25,7 +26,7 @@ public class KaiGe extends Spider {
         try {
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
-            logger("🚀 [初始化] 引擎啟動，站點: " + rule.optString("site_name"));
+            logger("🚀 [初始化] 站點引擎已就緒: " + rule.optString("site_name"));
         } catch (Exception e) {
             logger("🚨 [初始化失敗]: " + e.getMessage());
         }
@@ -50,11 +51,9 @@ public class KaiGe extends Spider {
             if (extend != null) for (String key : extend.keySet()) url = url.replace("{" + key + "}", extend.get(key));
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
             
-            logger("📂 [動作] 分類請求: " + url); // 實時顯示分類動作
+            logger("📂 [動作] 分類請求: " + url);
             String html = OkHttp.string(url, getHeaders(null));
-            String result = parseList(html, pg, false);
-            logger("📦 [結果] 分類解析完成，數量: " + new JSONObject(result).optJSONArray("list").length());
-            return result;
+            return parseList(html, pg, false);
         } catch (Exception e) { return ""; }
     }
 
@@ -63,14 +62,14 @@ public class KaiGe extends Spider {
         try {
             String id = ids.get(0);
             String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
-            logger("📝 [動作] 詳情請求: " + url);
+            logger("📝 [動作] 進入詳情頁: " + url);
             
             String html = OkHttp.string(url, getHeaders(null));
             Document doc = Jsoup.parse(html);
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
             
-            // 全字段抓取，不精簡
+            // --- 逐行提取並打印日誌，不精簡字段 ---
             String name = extract(doc, rule.optString("dt_name"));
             String actor = extract(doc, rule.optString("dt_actor"));
             String director = extract(doc, rule.optString("dt_director"));
@@ -86,6 +85,9 @@ public class KaiGe extends Spider {
             vod.put("vod_actor", actor);
             vod.put("vod_director", director);
             vod.put("vod_content", content);
+            vod.put("vod_remarks", extract(doc, rule.optString("dt_remarks")));
+            vod.put("vod_area", extract(doc, rule.optString("dt_area")));
+            vod.put("vod_year", extract(doc, rule.optString("dt_year")));
             
             Elements froms = doc.select(rule.optString("dt_from"));
             List<String> fromList = new ArrayList<>();
@@ -96,7 +98,9 @@ public class KaiGe extends Spider {
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
                 List<String> urls = new ArrayList<>();
-                for (Element a : list.select("a")) urls.add(a.text().trim() + "$" + a.attr("href"));
+                for (Element a : list.select("a")) {
+                    urls.add(a.text().trim() + "$" + a.attr("href"));
+                }
                 circuits.add(TextUtils.join("#", urls));
             }
             vod.put("vod_play_url", TextUtils.join("$$$", circuits));
@@ -106,16 +110,16 @@ public class KaiGe extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        // --- 核心攔截：防止日誌地址跳轉 ---
+        // --- 🛡️ 凱哥，這是最關鍵的「死命令」攔截，防止日誌地址跳轉 ---
         if (id != null && id.contains("kaige_debug")) {
-            logger("🛠️ [系統] 檢測到日誌查看指令，攔截成功，禁止跳轉。");
-            return "{\"parse\":0,\"url\":\"" + id + "\"}";
+            logger("🛠️ [系統] 攔截日誌請求，強制靜態返回，已終結跳轉。");
+            return "{\"parse\":0,\"url\":\"\",\"js\":\"\"}";
         }
 
         try {
             String url = id;
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
-            logger("🎬 [動作] 啟動播放解析: " + url);
+            logger("🎬 [動作] 播放解析: " + url);
 
             if (!rule.has("play") || !rule.getJSONObject("play").has("steps")) return quickResult(url, 0);
 
@@ -153,7 +157,7 @@ public class KaiGe extends Spider {
                         String vRule = vars.getString(key);
                         String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(key, val);
-                        logger((TextUtils.isEmpty(val) ? "❌ [變量提取失敗]: " : "💎 [變量提取成功]: ") + key + " = " + val);
+                        logger((TextUtils.isEmpty(val) ? "❌ [提取失敗]: " : "💎 [提取成功]: ") + key + " = " + val);
                     }
                 }
             }
@@ -162,23 +166,23 @@ public class KaiGe extends Spider {
             if (TextUtils.isEmpty(finalUrl) || finalUrl.contains("{")) return quickResult(url, 1);
             if (finalUrl.startsWith("/") && !finalUrl.startsWith("//")) finalUrl = rule.optString("host") + finalUrl;
 
-            logger("🏁 [最終播放地址]: " + finalUrl);
+            logger("🏁 [最終地址]: " + finalUrl);
             return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
         } catch (Exception e) { return quickResult(id, 1); }
     }
 
-    // 搜索也要顯示日誌
     @Override
     public String searchContent(String key, boolean quick) {
         try {
             String url = rule.optString("search_url").replace("{wd}", key);
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
-            logger("🔍 [動作] 搜索請求: " + url + " (關鍵詞: " + key + ")");
+            logger("🔍 [動作] 搜索關鍵詞: " + key);
             String html = OkHttp.string(url, getHeaders(null));
             return parseList(html, "1", true);
         } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
+    // --- 核心提取算法，支持 @ 和 && ---
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
@@ -244,7 +248,7 @@ public class KaiGe extends Spider {
     }
 
     private String quickResult(String url, int p) {
-        logger("⚠️ [結果] 快速返回: parse=" + p + " | URL=" + url);
+        logger("⚠️ [結果] parse=" + p + " | URL=" + url);
         try { return new JSONObject().put("parse", p).put("url", url).toString(); } catch (Exception e) { return ""; }
     }
 
