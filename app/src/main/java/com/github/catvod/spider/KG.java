@@ -22,10 +22,12 @@ public class KG extends Spider {
     @Override
     public void init(Context context, String extend) {
         try {
+            Proxy.log("🎬 [KG] 引擎初始化啟動...");
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
+            Proxy.log("✅ [KG] 規則加載成功: " + rule.optString("site_name"));
         } catch (Exception e) {
-            e.printStackTrace();
+            Proxy.log("🚨 [KG] 初始化失敗: " + e.getMessage());
         }
     }
 
@@ -40,7 +42,6 @@ public class KG extends Spider {
             }
             return root.toString().trim();
         } catch (Exception e) {
-            e.printStackTrace();
             return "";
         }
     }
@@ -125,6 +126,8 @@ public class KG extends Spider {
     private String processBfjxStep(String ruleLine, String currentHtml, Map<String, String> vars) throws Exception {
         String line = ruleLine.trim();
         String processed = line;
+        Proxy.log("⚡ [bfjx 處理中]: " + line);
+        
         Pattern extractPattern = Pattern.compile("([^+&]*?[+&]?[a-zA-Z0-9_*]*?&&[^+&]*)");
         Matcher m = extractPattern.matcher(processed);
         while (m.find()) {
@@ -136,7 +139,7 @@ public class KG extends Spider {
         processed = replaceVars(processed, vars);
 
         Map<String, String> headers = new HashMap<>();
-        String headerPattern = "\\[请求头:(.*?)\\]";
+        String headerPattern = "\\[請求頭:(.*?)\\]";
         Matcher hm = Pattern.compile(headerPattern).matcher(processed);
         if (hm.find()) {
             String headerStr = hm.group(1);
@@ -158,6 +161,7 @@ public class KG extends Spider {
         }
 
         String response = "";
+        Proxy.log("📡 [bfjx 請求] " + method.toUpperCase() + ": " + url);
         if (method.equals("get")) {
             response = OkHttp.string(url, headers.isEmpty() ? getHeaders(null, vars) : headers);
         } else {
@@ -167,11 +171,13 @@ public class KG extends Spider {
                 if (kv.length > 1) params.put(kv[0], kv[1]);
                 else if (kv.length == 1) params.put(kv[0], "");
             }
+            // 修正這裡的返回值類型
             response = OkHttp.post(url, params, headers).getBody();
         }
 
         if (ruleLine.contains("[base64]")) {
             response = decodeBase64(response);
+            Proxy.log("🔓 [bfjx 解碼 Base64]");
         }
 
         return response;
@@ -180,12 +186,12 @@ public class KG extends Spider {
     @Override
     public String homeContent(boolean filter) {
         try {
+            Proxy.log("🏠 [KG] 首頁加載");
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
             if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
             return result.toString();
         } catch (Exception e) {
-            e.printStackTrace();
             return "";
         }
     }
@@ -193,6 +199,7 @@ public class KG extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            Proxy.log("📂 [KG] 分類 tid=" + tid + " pg=" + pg);
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
             if (extend != null) {
@@ -201,11 +208,11 @@ public class KG extends Spider {
                 }
             }
             url = url.replaceAll("\\{[^}]+\\}", "");
+            Proxy.log("📡 [KG 分類請求]: " + url);
             String html = getHtml(url, null);
             if (TextUtils.isEmpty(html)) return "";
             return parseList(html, pg, false);
         } catch (Exception e) {
-            e.printStackTrace();
             return "";
         }
     }
@@ -213,6 +220,7 @@ public class KG extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
+            Proxy.log("🔍 [KG 搜索]: " + key);
             Map<String, String> vars = new HashMap<>();
             vars.put("wd", key);
             vars.put("pg", "1");
@@ -220,7 +228,6 @@ public class KG extends Spider {
             String html = getHtml(url, null);
             return parseList(html, "1", true);
         } catch (Exception e) {
-            e.printStackTrace();
             return "";
         }
     }
@@ -231,6 +238,7 @@ public class KG extends Spider {
             String itemRule = isSearch ? rule.optString("sc_item", rule.optString("cate_item")) : rule.optString("cate_item");
             Elements items = doc.select(itemRule);
             JSONArray list = new JSONArray();
+            Proxy.log("📦 [KG 列表] 數量: " + items.size());
             for (Element item : items) {
                 String idRule = isSearch ? rule.optString("sc_id", rule.optString("cate_id")) : rule.optString("cate_id");
                 String nameRule = isSearch ? rule.optString("sc_name", rule.optString("cate_name")) : rule.optString("cate_name");
@@ -242,9 +250,8 @@ public class KG extends Spider {
                 String pic = extract(item, picRule);
                 String remark = extract(item, remarkRule);
 
-                // 关键：补全相对路径为完整URL
                 if (!id.startsWith("http")) {
-                    id = rule.optString("host") + id;
+                    id = rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
                 }
 
                 JSONObject vod = new JSONObject();
@@ -259,7 +266,6 @@ public class KG extends Spider {
             result.put("page", pg);
             return result.toString();
         } catch (Exception e) {
-            e.printStackTrace();
             return "";
         }
     }
@@ -267,11 +273,12 @@ public class KG extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         try {
-            String url = ids.get(0);
-            if (!url.startsWith("http")) url = rule.optString("host") + url;
+            String id = ids.get(0);
+            String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
+            Proxy.log("📝 [KG 詳情]: " + url);
             Document doc = Jsoup.parse(getHtml(url, null));
             JSONObject vod = new JSONObject();
-            vod.put("vod_id", ids.get(0));
+            vod.put("vod_id", id);
             vod.put("vod_name", extract(doc, rule.optString("dt_name")));
             vod.put("vod_pic", getPicUrl(extract(doc, rule.optString("dt_pic"))));
             vod.put("type_name", extract(doc, rule.optString("dt_type")));
@@ -303,11 +310,12 @@ public class KG extends Spider {
             vod.put("vod_play_from", TextUtils.join("$$$", validFrom));
             vod.put("vod_play_url", TextUtils.join("$$$", validUrl));
 
+            Proxy.log("✅ [KG 詳情解析成功]: " + vod.optString("vod_name"));
             JSONObject result = new JSONObject();
             result.put("list", new JSONArray().put(vod));
             return result.toString();
         } catch (Exception e) {
-            e.printStackTrace();
+            Proxy.log("🚨 [KG 詳情出錯]: " + e.getMessage());
             return "";
         }
     }
@@ -318,17 +326,19 @@ public class KG extends Spider {
         vars.put("play_id", id);
         vars.put("flag", flag);
         try {
+            Proxy.log("▶️ [KG 播放解析啟動] flag=" + flag + " id=" + id);
             JSONObject playRule = rule.optJSONObject("play");
             if (playRule == null) {
                 return new JSONObject().put("parse", 0).put("url", id).toString();
             }
 
-            // 优先使用 bfjx 简写
             List<String> bfjxList = new ArrayList<>();
             for (int i = 1; i <= 10; i++) {
                 if (playRule.has("bfjx" + i)) bfjxList.add(playRule.getString("bfjx" + i));
             }
+            
             if (!bfjxList.isEmpty()) {
+                Proxy.log("🔍 [KG] 檢測到 bfjx 模式，步驟數: " + bfjxList.size());
                 String currentHtml = getHtml(id, getHeaders(null, vars));
                 String lastResult = currentHtml;
                 for (String bfjx : bfjxList) {
@@ -336,81 +346,75 @@ public class KG extends Spider {
                     vars.put("bfjx_tmp", lastResult);
                 }
                 String finalUrl = lastResult;
+                Proxy.log("🏁 [KG bfjx 最終結果]: " + finalUrl);
                 if (finalUrl != null && finalUrl.startsWith("http")) {
                     JSONObject result = new JSONObject();
                     result.put("parse", 0);
                     result.put("url", finalUrl);
-                    if (playRule.has("play_headers")) {
-                        result.put("header", playRule.optJSONObject("play_headers").toString());
-                    }
+                    if (playRule.has("play_headers")) result.put("header", playRule.optJSONObject("play_headers").toString());
                     return result.toString();
                 } else if (finalUrl != null) {
                     finalUrl = decodeBase64(finalUrl);
                     return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
-                } else {
-                    return new JSONObject().put("parse", 0).put("url", id).toString();
                 }
             }
 
-            // 使用 steps 模式
-            if (!playRule.has("steps")) {
-                return new JSONObject().put("parse", 0).put("url", id).toString();
-            }
-            JSONArray steps = playRule.getJSONArray("steps");
-            String currentHtml = null;
-            String currentUrl = id;
-            for (int i = 0; i < steps.length(); i++) {
-                JSONObject step = steps.getJSONObject(i);
-                String method = step.optString("method", "get").toLowerCase();
-                if (method.equals("get") || method.equals("post")) {
-                    String stepUrl = buildUrl(step.optString("url", currentUrl), vars);
-                    Map<String, String> headers = getHeaders(step.optJSONObject("headers"), vars);
-                    if (method.equals("get")) {
-                        currentHtml = getHtml(stepUrl, headers);
-                    } else {
-                        String body = buildUrl(step.optString("body", ""), vars);
-                        currentHtml = postHtml(stepUrl, body, headers);
-                    }
-                    currentUrl = stepUrl;
-                    vars.put("step" + (i + 1) + "_url", stepUrl);
-                } else if (method.equals("extract")) {
-                    if (currentHtml == null && i == 0) {
-                        currentHtml = getHtml(id, getHeaders(null, vars));
-                    }
-                    JSONObject extractVars = step.optJSONObject("vars");
-                    if (extractVars != null) {
-                        Iterator<String> keys = extractVars.keys();
-                        while (keys.hasNext()) {
-                            String key = keys.next();
-                            String vRule = extractVars.getString(key);
-                            String value;
-                            if (vRule.startsWith("json:")) {
-                                String jsonPath = vRule.substring(5);
-                                value = new JSONObject(currentHtml).optString(jsonPath);
-                            } else if (vRule.startsWith("base64:")) {
-                                String inner = vRule.substring(7);
-                                for (Map.Entry<String, String> entry : vars.entrySet()) {
-                                    inner = inner.replace("{" + entry.getKey() + "}", entry.getValue());
+            if (playRule.has("steps")) {
+                JSONArray steps = playRule.getJSONArray("steps");
+                Proxy.log("🔍 [KG] 檢測到 steps 模式，總步數: " + steps.length());
+                String currentHtml = null;
+                String currentUrl = id;
+                for (int i = 0; i < steps.length(); i++) {
+                    JSONObject step = steps.getJSONObject(i);
+                    String method = step.optString("method", "get").toLowerCase();
+                    if (method.equals("get") || method.equals("post")) {
+                        String stepUrl = buildUrl(step.optString("url", currentUrl), vars);
+                        Proxy.log("🎬 [Step " + (i + 1) + "] " + method.toUpperCase() + ": " + stepUrl);
+                        Map<String, String> headers = getHeaders(step.optJSONObject("headers"), vars);
+                        if (method.equals("get")) {
+                            currentHtml = getHtml(stepUrl, headers);
+                        } else {
+                            String body = buildUrl(step.optString("body", ""), vars);
+                            currentHtml = postHtml(stepUrl, body, headers);
+                        }
+                        currentUrl = stepUrl;
+                        vars.put("step" + (i + 1) + "_url", stepUrl);
+                    } else if (method.equals("extract")) {
+                        if (currentHtml == null && i == 0) currentHtml = getHtml(id, getHeaders(null, vars));
+                        JSONObject extractVars = step.optJSONObject("vars");
+                        if (extractVars != null) {
+                            Iterator<String> keys = extractVars.keys();
+                            while (keys.hasNext()) {
+                                String key = keys.next();
+                                String vRule = extractVars.getString(key);
+                                String value;
+                                if (vRule.startsWith("json:")) {
+                                    value = new JSONObject(currentHtml).optString(vRule.substring(5));
+                                } else if (vRule.startsWith("base64:")) {
+                                    String inner = vRule.substring(7);
+                                    for (Map.Entry<String, String> entry : vars.entrySet()) inner = inner.replace("{" + entry.getKey() + "}", entry.getValue());
+                                    value = decodeBase64(inner);
+                                } else {
+                                    value = extract(currentHtml, vRule);
                                 }
-                                value = decodeBase64(inner);
-                            } else {
-                                value = extract(currentHtml, vRule);
+                                vars.put(key, value);
+                                Proxy.log("💎 [變量提取] " + key + " = " + value);
                             }
-                            vars.put(key, value);
                         }
                     }
                 }
+                String finalUrl = buildUrl(rule.optString("final_output", "{final_url}"), vars);
+                Proxy.log("🏁 [KG Steps 最終輸出]: " + finalUrl);
+                JSONObject result = new JSONObject();
+                result.put("parse", 0);
+                result.put("url", finalUrl);
+                if (playRule.has("play_headers")) result.put("header", playRule.optJSONObject("play_headers").toString());
+                return result.toString();
             }
-            String finalUrl = buildUrl(rule.optString("final_output", "{final_url}"), vars);
-            JSONObject result = new JSONObject();
-            result.put("parse", 0);
-            result.put("url", finalUrl);
-            if (playRule.has("play_headers")) {
-                result.put("header", playRule.optJSONObject("play_headers").toString());
-            }
-            return result.toString();
+
+            return new JSONObject().put("parse", 0).put("url", id).toString();
         } catch (Exception e) {
-            e.printStackTrace();
+            Proxy.log("🚨 [KG 播放解析異常]: " + e.getMessage());
             return "";
         }
     }
