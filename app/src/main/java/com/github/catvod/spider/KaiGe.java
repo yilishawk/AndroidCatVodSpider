@@ -32,8 +32,8 @@ public class KaiGe extends Spider {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-            String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
             
+            // --- 強化：支持 @ 屬性提取 ---
             if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
                 String[] parts = ruleStr.split("@");
                 String selector = parts[0].trim();
@@ -44,21 +44,28 @@ public class KaiGe extends Spider {
                 return el.attr(prop).trim();
             }
 
+            String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
+            
             if (ruleStr.contains("&&")) {
                 String[] parts = ruleStr.split("&&");
                 String left = parts[0].trim();
                 String right = parts.length > 1 ? parts[1].trim() : "";
+
+                // --- 核心修改：支持 * 星號模糊匹配 ---
                 if (left.contains("*")) {
                     String[] anchors = left.split("\\*");
                     int pos = 0;
                     for (String a : anchors) {
+                        if (a.isEmpty()) continue;
                         int i = source.indexOf(a.trim(), pos);
-                        if (i == -1) return "";
+                        if (i == -1) return ""; // 沒找到錨點直接返回
                         pos = i + a.trim().length();
                     }
+                    // 截取到 right 標識符之前
                     int end = source.indexOf(right.replace("[text]", "").trim(), pos);
                     return (end != -1) ? source.substring(pos, end).trim() : "";
                 }
+
                 if (!left.isEmpty() && root instanceof Element) {
                     Element el = ((Element) root).selectFirst(left);
                     if (el == null) return "";
@@ -66,6 +73,7 @@ public class KaiGe extends Spider {
                     if (right.equals("html")) return el.html().trim();
                     return el.attr(right).trim();
                 }
+                
                 int s = source.indexOf(left);
                 if (s == -1) return "";
                 s += left.length();
@@ -89,6 +97,30 @@ public class KaiGe extends Spider {
         return "";
     }
 
+    private String buildUrl(String format) {
+        if (format == null) return "";
+        if (!format.contains("+") && !format.contains("{")) {
+            return format.replace("{host}", rule.optString("host"));
+        }
+        try {
+            StringBuilder sb = new StringBuilder();
+            String[] parts = format.split("\\+");
+            for (String p : parts) {
+                p = p.trim();
+                if (p.startsWith("{") && p.endsWith("}")) {
+                    String key = p.substring(1, p.length() - 1);
+                    String val = varPool.getOrDefault(key, "");
+                    sb.append(URLEncoder.encode(val, "UTF-8"));
+                } else {
+                    sb.append(p.replace("'", "").replace("{host}", rule.optString("host")));
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return format;
+        }
+    }
+
     @Override
     public String homeContent(boolean filter) {
         try {
@@ -105,6 +137,7 @@ public class KaiGe extends Spider {
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
             if (extend != null) for (String key : extend.keySet()) url = url.replace("{" + key + "}", extend.get(key));
+            url = url.replaceAll("\\{.*?\\}", ""); 
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
             return parseList(OkHttp.string(url, getHeaders(null)), pg, false);
         } catch (Exception e) { return ""; }
@@ -152,19 +185,13 @@ public class KaiGe extends Spider {
             vod.put("vod_id", id);
             vod.put("vod_name", extract(doc, rule.optString("dt_name")));
             vod.put("vod_pic", getPicUrl(extract(doc, rule.optString("dt_pic"))));
-            // --- 凱哥你看，字段全在這裡，一個都沒少 ---
-            vod.put("type_name", extract(doc, rule.optString("dt_type")));
-            vod.put("vod_year", extract(doc, rule.optString("dt_year")));
-            vod.put("vod_area", extract(doc, rule.optString("dt_area")));
             vod.put("vod_actor", extract(doc, rule.optString("dt_actor")));
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
-            
             Elements froms = doc.select(rule.optString("dt_from"));
             List<String> fromList = new ArrayList<>();
             for (Element f : froms) fromList.add(f.text().trim());
             vod.put("vod_play_from", TextUtils.join("$$$", fromList));
-            
             Elements urlLists = doc.select(rule.optString("dt_list"));
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
@@ -198,6 +225,7 @@ public class KaiGe extends Spider {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
                 
+                // --- 強化：如果第一步是 extract，自動獲取網頁 HTML ---
                 if (method.equals("extract")) {
                     if (TextUtils.isEmpty(currentHtml)) currentHtml = OkHttp.string(url, getHeaders(null));
                 } else {
@@ -216,30 +244,46 @@ public class KaiGe extends Spider {
                     while (keys.hasNext()) {
                         String key = keys.next();
                         String vRule = vars.getString(key);
+                        // 支持 json: 格式提取
                         String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(key, val);
+                        Proxy.log("💎 [變量提取] " + key + " = " + val);
                     }
                 }
                 varPool.put("step" + (i + 1) + "_url", step.optString("url", url));
             }
 
             String finalUrl = replaceStepVars(playConfig.optString("final_output", "{final_url}"));
-            if (finalUrl.startsWith("/") && !finalUrl.startsWith("//")) finalUrl = rule.optString("host") + finalUrl;
+            
+            // --- 核心修改：域名自動補全 ---
+            if (finalUrl.startsWith("/") && !finalUrl.startsWith("//")) {
+                finalUrl = rule.optString("host") + finalUrl;
+            } else if (!finalUrl.startsWith("http")) {
+                // 如果解析失敗只剩下路徑或空，嘗試補全 play_id
+                if (TextUtils.isEmpty(finalUrl) || finalUrl.equals("{final_url}")) finalUrl = url;
+            }
 
+            Proxy.log("🏁 [最終播放鏈接]: " + finalUrl);
             JSONObject res = new JSONObject();
             res.put("parse", 0);
             res.put("url", finalUrl);
             if (playConfig.has("play_headers")) res.put("header", playConfig.optJSONObject("play_headers").toString());
             return res.toString();
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) {
+            Proxy.log("🚨 [播放出錯]: " + e.getMessage());
+            return quickResult(id); // 失敗後傳回原始鏈接
+        }
     }
 
-    private String quickResult(String url) throws Exception {
-        JSONObject res = new JSONObject();
-        res.put("parse", rule.optInt("parse", 0));
-        res.put("url", url);
-        if (rule.has("play_headers")) res.put("header", rule.optJSONObject("play_headers").toString());
-        return res.toString();
+    private String quickResult(String url) {
+        try {
+            if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
+            JSONObject res = new JSONObject();
+            res.put("parse", rule.optInt("parse", 0));
+            res.put("url", url);
+            if (rule.has("play_headers")) res.put("header", rule.optJSONObject("play_headers").toString());
+            return res.toString();
+        } catch (Exception e) { return ""; }
     }
 
     private String replaceStepVars(String text) {
