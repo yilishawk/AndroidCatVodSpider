@@ -14,8 +14,15 @@ public class Proxy extends Spider {
     private static int port = -1;
 
     /**
-     * 外部調用的關鍵方法：獲取當前代理端口
-     * 解決 ProxyVideo.java:38 報錯的關鍵就在這裡
+     * 解決 AliYun、QuarkApi、UCApi 的 11 個報錯關鍵
+     * 返回完整的代理基礎 URL
+     */
+    public static String getUrl() {
+        return "http://127.0.0.1:" + getPort() + "/proxy";
+    }
+
+    /**
+     * 獲取端口號
      */
     public static int getPort() {
         adjustPort();
@@ -53,18 +60,21 @@ public class Proxy extends Spider {
 
     private static Object[] commonProxy(Map<String, String> params) throws Exception {
         String url = Util.base64Decode(params.get("url"));
-        Map<String, String> header = new Gson().fromJson(Util.base64Decode(params.get("header")), Map.class);
-        if (header == null) header = new HashMap<>();
+        String headerStr = params.get("header");
+        Map<String, String> header = new HashMap<>();
+        if (headerStr != null) {
+            header = new Gson().fromJson(Util.base64Decode(headerStr), Map.class);
+        }
         return ProxyVideo.proxyMultiThread(url, header);
     }
 
-    // 自動偵測並鎖定可用端口
+    // 自動偵測可用端口
     static void adjustPort() {
         if (Proxy.port > 0) return;
         int p = 9978;
         while (p < 10000) {
             try {
-                // 測試本地端口是否通暢
+                // 注意：這裡直接使用 127.0.0.1 測試
                 String resp = OkHttp.string("http://127.0.0.1:" + p + "/proxy?do=ck", null);
                 if ("ok".equals(resp)) {
                     Proxy.port = p;
@@ -73,7 +83,6 @@ public class Proxy extends Spider {
             } catch (Exception ignored) {}
             p++;
         }
-        // 如果都沒找到，給個默認值防止報錯
         if (Proxy.port == -1) Proxy.port = 9978;
     }
 }
