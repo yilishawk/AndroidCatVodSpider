@@ -8,12 +8,17 @@ public class Proxy extends Spider {
     // 凱哥日誌緩衝區
     private static StringBuilder sb = new StringBuilder("--- 凱哥全流程日誌系統啟動 ---<br>");
 
-    // 1. 補回丟失的核心方法：獲取本地代理 URL
+    // 1. 補回丟失的 getPort() 方法 (MainActivity.java 需要它)
+    public static int getPort() {
+        return 9978;
+    }
+
+    // 2. 補回 getUrl() 方法 (Bili/Ali 等插件需要它)
     public static String getUrl() {
         return "http://127.0.0.1:9978/proxy";
     }
 
-    // 2. 凱哥專屬日誌接口
+    // 3. 凱哥專屬日誌接口
     public static void log(String msg) {
         synchronized (sb) {
             if (sb.length() > 100000) sb.setLength(0);
@@ -22,7 +27,10 @@ public class Proxy extends Spider {
         }
     }
 
-    @Override
+    /**
+     * 核心代理入口
+     * 注意：static 方法絕對不能加 @Override 標籤，否則會報錯
+     */
     public static Object[] proxy(Map<String, String> params) throws Exception {
         try {
             if (params == null) return null;
@@ -38,7 +46,7 @@ public class Proxy extends Spider {
                 return new Object[]{200, "text/html; charset=utf-8", new ByteArrayInputStream(html.getBytes("UTF-8"))};
             }
             
-            // 這裡可以根據需要擴展其他的 do 邏輯（如 bili, ali 等）
+            // 這裡可以根據需要擴展其他的 do 邏輯
             
         } catch (Throwable t) {
             return new Object[]{200, "text/plain", new ByteArrayInputStream(t.toString().getBytes())};
