@@ -3,6 +3,7 @@ package com.github.catvod.spider;
 import android.content.Context;
 import android.text.TextUtils;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -16,9 +17,6 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * 凱哥全能解析引擎 - 支持 bfjx 简写格式
- */
 public class KG extends Spider {
     private JSONObject rule = new JSONObject();
 
@@ -27,14 +25,15 @@ public class KG extends Spider {
         try {
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
+            // 根据规则中的开关决定是否启用日志服务器（默认启用）
+            boolean logEnabled = rule.optBoolean("log_server_enabled", true);
+            SpiderDebug.init(logEnabled);
+            SpiderDebug.log("Rule loaded: " + this.rule.toString());
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
         }
     }
 
-    // ==========================================
-    // 核心提取逻辑 (CSS + 字符串截取)
-    // ==========================================
     private String extract(Object root, String ruleStr) {
         if (TextUtils.isEmpty(ruleStr) || root == null) return "";
         try {
@@ -46,7 +45,7 @@ public class KG extends Spider {
             }
             return root.toString().trim();
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
@@ -87,9 +86,6 @@ public class KG extends Spider {
         return (e != -1) ? source.substring(s, e).trim() : "";
     }
 
-    // ==========================================
-    // 变量拼接
-    // ==========================================
     private String buildUrl(String format, Map<String, String> vars) {
         if (TextUtils.isEmpty(format)) return "";
         if (!format.contains("+")) {
@@ -122,9 +118,6 @@ public class KG extends Spider {
         return str.replace("{host}", rule.optString("host"));
     }
 
-    // ==========================================
-    // Base64 解码
-    // ==========================================
     private String decodeBase64(String str) {
         if (TextUtils.isEmpty(str)) return "";
         try {
@@ -134,12 +127,8 @@ public class KG extends Spider {
         }
     }
 
-    // ==========================================
-    // 核心：处理 bfjx 简写规则
-    // ==========================================
     private String processBfjxStep(String ruleLine, String currentHtml, Map<String, String> vars) throws Exception {
         String line = ruleLine.trim();
-        // 1. 先执行所有嵌入的提取表达式 (xxx&&yyy 或 xxx*yyy)
         String processed = line;
         Pattern extractPattern = Pattern.compile("([^+&]*?[+&]?[a-zA-Z0-9_*]*?&&[^+&]*)");
         Matcher m = extractPattern.matcher(processed);
@@ -149,10 +138,8 @@ public class KG extends Spider {
             processed = processed.replace(expr, extracted);
         }
 
-        // 2. 替换变量
         processed = replaceVars(processed, vars);
 
-        // 3. 解析请求头 (如果有 [请求头:...])
         Map<String, String> headers = new HashMap<>();
         String headerPattern = "\\[请求头:(.*?)\\]";
         Matcher hm = Pattern.compile(headerPattern).matcher(processed);
@@ -165,7 +152,6 @@ public class KG extends Spider {
             processed = processed.replace(hm.group(0), "");
         }
 
-        // 4. 判断请求方法
         String method = "get";
         String url = processed;
         String body = "";
@@ -176,7 +162,6 @@ public class KG extends Spider {
             body = parts.length > 1 ? parts[1].trim() : "";
         }
 
-        // 5. 发起请求
         String response = "";
         if (method.equals("get")) {
             response = OkHttp.string(url, headers.isEmpty() ? getHeaders(null, vars) : headers);
@@ -190,7 +175,6 @@ public class KG extends Spider {
             response = OkHttp.post(url, params, headers).getBody();
         }
 
-        // 6. 如果规则中包含 [base64]，则解码响应
         if (ruleLine.contains("[base64]")) {
             response = decodeBase64(response);
         }
@@ -198,18 +182,17 @@ public class KG extends Spider {
         return response;
     }
 
-    // ==========================================
-    // CatVod 接口实现
-    // ==========================================
     @Override
     public String homeContent(boolean filter) {
         try {
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
             if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
-            return result.toString();
+            String out = result.toString();
+            SpiderDebug.log("homeContent result: " + out);
+            return out;
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
@@ -217,6 +200,7 @@ public class KG extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            SpiderDebug.log("categoryContent: tid=" + tid + ", pg=" + pg + ", filter=" + filter + ", extend=" + extend);
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
             if (extend != null) {
@@ -225,10 +209,16 @@ public class KG extends Spider {
                 }
             }
             url = url.replaceAll("\\{[^}]+\\}", "");
+            SpiderDebug.log("category URL: " + url);
             String html = getHtml(url, null);
+            if (html == null || html.isEmpty()) {
+                SpiderDebug.log("category HTML is empty!");
+                return "";
+            }
+            SpiderDebug.log("category HTML length: " + html.length());
             return parseList(html, pg, false);
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
@@ -236,14 +226,16 @@ public class KG extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
+            SpiderDebug.log("searchContent: key=" + key + ", quick=" + quick);
             Map<String, String> vars = new HashMap<>();
             vars.put("wd", key);
             vars.put("pg", "1");
             String url = buildUrl(rule.optString("search_url"), vars);
+            SpiderDebug.log("search URL: " + url);
             String html = getHtml(url, null);
             return parseList(html, "1", true);
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
@@ -251,27 +243,44 @@ public class KG extends Spider {
     private String parseList(String html, String pg, boolean isSearch) {
         try {
             Document doc = Jsoup.parse(html);
-            JSONArray list = new JSONArray();
+            SpiderDebug.log("parseList: title=" + doc.title() + ", isSearch=" + isSearch);
             String itemRule = isSearch ? rule.optString("sc_item", rule.optString("cate_item")) : rule.optString("cate_item");
-            for (Element item : doc.select(itemRule)) {
-                JSONObject vod = new JSONObject();
+            Elements items = doc.select(itemRule);
+            SpiderDebug.log("items count: " + items.size());
+            JSONArray list = new JSONArray();
+            for (Element item : items) {
                 String idRule = isSearch ? rule.optString("sc_id", rule.optString("cate_id")) : rule.optString("cate_id");
                 String nameRule = isSearch ? rule.optString("sc_name", rule.optString("cate_name")) : rule.optString("cate_name");
                 String picRule = isSearch ? rule.optString("sc_pic", rule.optString("cate_pic")) : rule.optString("cate_pic");
                 String remarkRule = isSearch ? rule.optString("sc_remarks", rule.optString("cate_remarks")) : rule.optString("cate_remarks");
 
-                vod.put("vod_id", extract(item, idRule));
-                vod.put("vod_name", extract(item, nameRule));
-                vod.put("vod_pic", getPicUrl(extract(item, picRule)));
-                vod.put("vod_remarks", extract(item, remarkRule));
+                String id = extract(item, idRule);
+                String name = extract(item, nameRule);
+                String pic = extract(item, picRule);
+                String remark = extract(item, remarkRule);
+
+                // 关键修复：补全相对路径为完整URL
+                if (!id.startsWith("http")) {
+                    id = rule.optString("host") + id;
+                }
+
+                SpiderDebug.log("item: id=" + id + ", name=" + name + ", pic=" + pic + ", remark=" + remark);
+
+                JSONObject vod = new JSONObject();
+                vod.put("vod_id", id);
+                vod.put("vod_name", name);
+                vod.put("vod_pic", getPicUrl(pic));
+                vod.put("vod_remarks", remark);
                 list.put(vod);
             }
             JSONObject result = new JSONObject();
             result.put("list", list);
             result.put("page", pg);
-            return result.toString();
+            String out = result.toString();
+            SpiderDebug.log("parseList result: " + out);
+            return out;
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
@@ -279,9 +288,18 @@ public class KG extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         try {
+            SpiderDebug.log("detailContent ids: " + ids);
             String url = ids.get(0);
             if (!url.startsWith("http")) url = rule.optString("host") + url;
-            Document doc = Jsoup.parse(getHtml(url, null));
+            SpiderDebug.log("detail URL: " + url);
+            String html = getHtml(url, null);
+            if (html == null || html.isEmpty()) {
+                SpiderDebug.log("detail HTML is empty!");
+                return "";
+            }
+            Document doc = Jsoup.parse(html);
+            SpiderDebug.log("detail page title: " + doc.title());
+
             JSONObject vod = new JSONObject();
             vod.put("vod_id", ids.get(0));
             vod.put("vod_name", extract(doc, rule.optString("dt_name")));
@@ -294,10 +312,12 @@ public class KG extends Spider {
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
 
             Elements froms = doc.select(rule.optString("dt_from"));
+            SpiderDebug.log("dt_from count: " + froms.size());
             List<String> fromList = new ArrayList<>();
             for (Element f : froms) fromList.add(f.text().trim());
 
             Elements urlLists = doc.select(rule.optString("dt_list"));
+            SpiderDebug.log("dt_list count: " + urlLists.size());
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
                 List<String> urls = new ArrayList<>();
@@ -314,80 +334,103 @@ public class KG extends Spider {
             List<String> validUrl = circuits.subList(0, minSize);
             vod.put("vod_play_from", TextUtils.join("$$$", validFrom));
             vod.put("vod_play_url", TextUtils.join("$$$", validUrl));
+            SpiderDebug.log("play_from: " + vod.optString("vod_play_from"));
+            SpiderDebug.log("play_url: " + vod.optString("vod_play_url"));
 
             JSONObject result = new JSONObject();
             result.put("list", new JSONArray().put(vod));
-            return result.toString();
+            String out = result.toString();
+            SpiderDebug.log("detailContent result: " + out);
+            return out;
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+        SpiderDebug.log("playerContent flag=" + flag + ", id=" + id);
         Map<String, String> vars = new HashMap<>();
         vars.put("play_id", id);
         vars.put("flag", flag);
         try {
             JSONObject playRule = rule.optJSONObject("play");
             if (playRule == null) {
+                SpiderDebug.log("No play rule, return original id");
                 return new JSONObject().put("parse", 0).put("url", id).toString();
             }
 
-            // 优先使用 bfjx 简写格式
             List<String> bfjxList = new ArrayList<>();
             for (int i = 1; i <= 10; i++) {
                 if (playRule.has("bfjx" + i)) bfjxList.add(playRule.getString("bfjx" + i));
             }
             if (!bfjxList.isEmpty()) {
+                SpiderDebug.log("Using bfjx mode, steps=" + bfjxList.size());
                 String currentHtml = getHtml(id, getHeaders(null, vars));
+                SpiderDebug.log("Initial HTML length: " + (currentHtml == null ? 0 : currentHtml.length()));
                 String lastResult = currentHtml;
-                for (String bfjx : bfjxList) {
+                for (int i = 0; i < bfjxList.size(); i++) {
+                    String bfjx = bfjxList.get(i);
+                    SpiderDebug.log("bfjx step " + (i+1) + ": " + bfjx);
                     lastResult = processBfjxStep(bfjx, lastResult, vars);
                     vars.put("bfjx_tmp", lastResult);
+                    if (lastResult != null && lastResult.length() > 200) {
+                        SpiderDebug.log("step result preview: " + lastResult.substring(0, 200));
+                    } else {
+                        SpiderDebug.log("step result: " + lastResult);
+                    }
                 }
-                // 最后一步的结果作为最终播放地址
                 String finalUrl = lastResult;
-                if (finalUrl.startsWith("http")) {
+                if (finalUrl != null && finalUrl.startsWith("http")) {
                     JSONObject result = new JSONObject();
                     result.put("parse", 0);
                     result.put("url", finalUrl);
                     if (playRule.has("play_headers")) {
                         result.put("header", playRule.optJSONObject("play_headers").toString());
                     }
+                    SpiderDebug.log("final url: " + finalUrl);
                     return result.toString();
-                } else {
-                    // 可能是提取出来的字段，再尝试解码
+                } else if (finalUrl != null) {
                     finalUrl = decodeBase64(finalUrl);
+                    SpiderDebug.log("decoded url: " + finalUrl);
                     return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
+                } else {
+                    SpiderDebug.log("finalUrl is null");
+                    return new JSONObject().put("parse", 0).put("url", id).toString();
                 }
             }
 
-            // 原有的 steps 逻辑（兼容）
             if (!playRule.has("steps")) {
+                SpiderDebug.log("No steps, return original id");
                 return new JSONObject().put("parse", 0).put("url", id).toString();
             }
+            SpiderDebug.log("Using steps mode");
             JSONArray steps = playRule.getJSONArray("steps");
             String currentHtml = null;
             String currentUrl = id;
             for (int i = 0; i < steps.length(); i++) {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
+                SpiderDebug.log("Step " + (i+1) + ": method=" + method);
                 if (method.equals("get") || method.equals("post")) {
                     String stepUrl = buildUrl(step.optString("url", currentUrl), vars);
                     Map<String, String> headers = getHeaders(step.optJSONObject("headers"), vars);
+                    SpiderDebug.log("Step URL: " + stepUrl);
                     if (method.equals("get")) {
                         currentHtml = getHtml(stepUrl, headers);
                     } else {
                         String body = buildUrl(step.optString("body", ""), vars);
+                        SpiderDebug.log("POST body: " + body);
                         currentHtml = postHtml(stepUrl, body, headers);
                     }
                     currentUrl = stepUrl;
                     vars.put("step" + (i + 1) + "_url", stepUrl);
+                    SpiderDebug.log("Step response length: " + (currentHtml == null ? 0 : currentHtml.length()));
                 } else if (method.equals("extract")) {
                     if (currentHtml == null && i == 0) {
                         currentHtml = getHtml(id, getHeaders(null, vars));
+                        SpiderDebug.log("Extract step: fetched initial HTML");
                     }
                     JSONObject extractVars = step.optJSONObject("vars");
                     if (extractVars != null) {
@@ -409,11 +452,13 @@ public class KG extends Spider {
                                 value = extract(currentHtml, vRule);
                             }
                             vars.put(key, value);
+                            SpiderDebug.log("Extracted var " + key + " = " + value);
                         }
                     }
                 }
             }
             String finalUrl = buildUrl(rule.optString("final_output", "{final_url}"), vars);
+            SpiderDebug.log("Final url: " + finalUrl);
             JSONObject result = new JSONObject();
             result.put("parse", 0);
             result.put("url", finalUrl);
@@ -422,7 +467,7 @@ public class KG extends Spider {
             }
             return result.toString();
         } catch (Exception e) {
-            e.printStackTrace();
+            SpiderDebug.log(e);
             return "";
         }
     }
