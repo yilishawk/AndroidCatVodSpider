@@ -3,7 +3,6 @@ package com.github.catvod.spider;
 import android.content.Context;
 import android.text.TextUtils;
 import com.github.catvod.crawler.Spider;
-import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,22 +20,34 @@ public class KaiGe extends Spider {
     @Override
     public void init(Context context, String extend) {
         try {
-            SpiderDebug.log("🛠️ KaiGe 引擎啟動...");
+            Proxy.log("🎬 KaiGe 引擎啟動...");
             // 支持傳入本地 JSON 配置和遠程 URL
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
-            SpiderDebug.log("✅ 規則加載成功，站點: " + rule.optString("site_name", "通用引擎"));
+            Proxy.log("✅ 規則加載成功，站點: " + rule.optString("site_name", "通用引擎"));
         } catch (Exception e) {
-            SpiderDebug.log("🚨 初始化異常: " + e.getMessage());
+            Proxy.log("🚨 初始化異常: " + e.getMessage());
         }
     }
 
     /**
-     * 核心解析算法：支持 CSS 選擇、&& 萬能截取、* 模糊匹配
+     * 核心解析算法：支持 CSS 選擇、&& 萬能截取、* 模糊匹配、@屬性提取
      */
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
+            
+            // --- 新增：支持 @ 屬性提取語法 (如 a@href) ---
+            if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
+                String[] parts = ruleStr.split("@");
+                String selector = parts[0].trim();
+                String prop = parts.length > 1 ? parts[1].trim() : "";
+                Element el = selector.isEmpty() ? (Element) root : ((Element) root).selectFirst(selector);
+                if (el == null) return "";
+                if (prop.isEmpty()) return el.text().trim();
+                return el.attr(prop).trim();
+            }
+
             String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
             
             if (ruleStr.contains("&&")) {
@@ -86,7 +97,7 @@ public class KaiGe extends Spider {
                 return el.text().trim();
             }
         } catch (Exception e) {
-            SpiderDebug.log("⚠️ 解析片段出錯: " + ruleStr);
+            Proxy.log("⚠️ 解析片段出錯: " + ruleStr);
         }
         return "";
     }
@@ -120,12 +131,14 @@ public class KaiGe extends Spider {
 
     @Override
     public String homeContent(boolean filter) {
+        Proxy.log("🏠 進入首頁 [homeContent]");
         try {
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
             if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
             return result.toString();
         } catch (Exception e) {
+            Proxy.log("🚨 首頁報錯: " + e.getMessage());
             return "";
         }
     }
@@ -133,16 +146,21 @@ public class KaiGe extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            Proxy.log("📂 請求分類: tid=" + tid + ", pg=" + pg);
             String cateUrl = pg.equals("1") && rule.has("cate_page_1") ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
             if (extend != null) {
                 for (String key : extend.keySet()) url = url.replace("{" + key + "}", extend.get(key));
             }
             url = url.replaceAll("\\{.*?\\}", ""); 
-            SpiderDebug.log("📡 [分類請求]: " + url);
-            return parseList(OkHttp.string(url, getHeaders(null)), pg, false);
+            if (url.startsWith("/")) url = rule.optString("host") + url;
+            
+            Proxy.log("📡 [分類請求]: " + url);
+            String html = OkHttp.string(url, getHeaders(null));
+            Proxy.log("📥 獲取 HTML 成功，長度: " + (html != null ? html.length() : 0));
+            return parseList(html, pg, false);
         } catch (Exception e) {
-            SpiderDebug.log("🚨 [分類出錯]: " + e.getMessage());
+            Proxy.log("🚨 [分類出錯]: " + e.getMessage());
             return "";
         }
     }
@@ -153,10 +171,12 @@ public class KaiGe extends Spider {
             String searchUrl = rule.optString("search_url");
             if (TextUtils.isEmpty(searchUrl)) return "";
             String url = searchUrl.replace("{wd}", URLEncoder.encode(key, "UTF-8"));
-            SpiderDebug.log("🔍 [搜索發起]: " + key + " | URL: " + url);
+            if (url.startsWith("/")) url = rule.optString("host") + url;
+            
+            Proxy.log("🔍 [搜索發起]: " + key + " | URL: " + url);
             return parseList(OkHttp.string(url, getHeaders(null)), "1", true);
         } catch (Exception e) {
-            SpiderDebug.log("🚨 [搜索出錯]: " + e.getMessage());
+            Proxy.log("🚨 [搜索出錯]: " + e.getMessage());
             return "";
         }
     }
@@ -168,11 +188,14 @@ public class KaiGe extends Spider {
             String prefix = isSearch ? "sc_" : "cate_";
             String itemRule = rule.optString(prefix + "item", rule.optString("cate_item"));
             Elements items = doc.select(itemRule);
-            SpiderDebug.log("📦 [列表解析]: 發現數量 " + items.size());
+            Proxy.log("📦 [列表解析]: 發現數量 " + items.size());
 
             for (Element item : items) {
                 JSONObject vod = new JSONObject();
-                vod.put("vod_id", extract(item, rule.optString(prefix + "id", rule.optString("cate_id"))));
+                String vId = extract(item, rule.optString(prefix + "id", rule.optString("cate_id")));
+                if (!vId.startsWith("http")) vId = rule.optString("host") + vId;
+                
+                vod.put("vod_id", vId);
                 vod.put("vod_name", extract(item, rule.optString(prefix + "name", rule.optString("cate_name"))));
                 vod.put("vod_pic", getPicUrl(extract(item, rule.optString(prefix + "pic", rule.optString("cate_pic")))));
                 vod.put("vod_remarks", extract(item, rule.optString(prefix + "remarks", rule.optString("cate_remarks"))));
@@ -180,6 +203,7 @@ public class KaiGe extends Spider {
             }
             return new JSONObject().put("list", list).put("page", pg).toString();
         } catch (Exception e) {
+            Proxy.log("🚨 [解析列表出錯]: " + e.getMessage());
             return "";
         }
     }
@@ -189,7 +213,7 @@ public class KaiGe extends Spider {
         try {
             String id = ids.get(0);
             String url = id.startsWith("http") ? id : rule.optString("host") + id;
-            SpiderDebug.log("📝 [詳情請求]: " + url);
+            Proxy.log("📝 [詳情請求]: " + url);
             String html = OkHttp.string(url, getHeaders(null));
             
             Document doc = Jsoup.parse(html);
@@ -222,10 +246,10 @@ public class KaiGe extends Spider {
             }
             vod.put("vod_play_url", TextUtils.join("$$$", circuits));
             
-            SpiderDebug.log("✅ [詳情解析完成]: " + vod.optString("vod_name"));
+            Proxy.log("✅ [詳情解析完成]: " + vod.optString("vod_name"));
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
         } catch (Exception e) {
-            SpiderDebug.log("🚨 [詳情出錯]: " + e.getMessage());
+            Proxy.log("🚨 [詳情出錯]: " + e.getMessage());
             return "";
         }
     }
@@ -233,7 +257,7 @@ public class KaiGe extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            SpiderDebug.log("🎬 [播放請求]: " + id);
+            Proxy.log("▶️ [播放請求]: " + id);
             JSONObject result = new JSONObject();
             result.put("parse", rule.optInt("parse", 0));
             result.put("url", id);
@@ -242,6 +266,7 @@ public class KaiGe extends Spider {
             }
             return result.toString();
         } catch (Exception e) {
+            Proxy.log("🚨 [播放出錯]: " + e.getMessage());
             return "";
         }
     }
