@@ -32,8 +32,6 @@ public class KaiGe extends Spider {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-            
-            // 優先支持 @ 屬性語法
             if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
                 String[] parts = ruleStr.split("@");
                 String selector = parts[0].trim();
@@ -43,7 +41,6 @@ public class KaiGe extends Spider {
                 if (prop.isEmpty()) return el.text().trim();
                 return el.attr(prop).trim();
             }
-
             String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
             if (ruleStr.contains("&&")) {
                 String[] parts = ruleStr.split("&&");
@@ -247,7 +244,15 @@ public class KaiGe extends Spider {
                 Proxy.log("🎬 [Step " + (i + 1) + "] " + method.toUpperCase() + ": " + stepUrl);
 
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
-                String result = method.equals("post") ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers) : OkHttp.string(stepUrl, headers);
+                
+                // --- 這裡修正編譯錯誤 ---
+                String result = "";
+                if (method.equals("post")) {
+                    result = OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers).getBody();
+                } else {
+                    result = OkHttp.string(stepUrl, headers);
+                }
+                // -----------------------
                 
                 Proxy.log("📥 [Step " + (i + 1) + " Resp]: " + (result.length() > 200 ? result.substring(0, 200) + "..." : result));
 
