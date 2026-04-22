@@ -40,11 +40,21 @@ public class KaiGe extends Spider {
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
             
             logger("📂 [分類動作] URL: " + url);
-            logger("📑 [請求頭]: " + new JSONObject(getHeaders(null)).toString());
-
             String html = OkHttp.string(url, getHeaders(null));
-            return parseList(html, pg, false);
-        } catch (Exception e) { return ""; }
+            
+            // 狀態與長度日誌
+            boolean success = !TextUtils.isEmpty(html);
+            logger("🌐 [網絡請求] 狀態: " + (success ? "成功" : "失敗") + " | 長度: " + (success ? html.length() : 0));
+
+            String result = parseList(html, pg, false);
+            int count = new JSONObject(result).optJSONArray("list").length();
+            logger("📊 [解析列表] 發現數量: " + count);
+            
+            return result;
+        } catch (Exception e) { 
+            logger("🚨 [分類異常]: " + e.getMessage());
+            return "{\"list\":[]}"; 
+        }
     }
 
     @Override
@@ -54,11 +64,20 @@ public class KaiGe extends Spider {
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
             
             logger("🔍 [搜索動作] 關鍵詞: " + key + " | URL: " + url);
-            logger("📑 [請求頭]: " + new JSONObject(getHeaders(null)).toString());
-
             String html = OkHttp.string(url, getHeaders(null));
-            return parseList(html, "1", true);
-        } catch (Exception e) { return ""; }
+            
+            boolean success = !TextUtils.isEmpty(html);
+            logger("🌐 [網絡請求] 狀態: " + (success ? "成功" : "失敗") + " | 長度: " + (success ? html.length() : 0));
+
+            String result = parseList(html, "1", true);
+            int count = new JSONObject(result).optJSONArray("list").length();
+            logger("📊 [解析列表] 發現數量: " + count);
+
+            return result;
+        } catch (Exception e) { 
+            logger("🚨 [搜索異常]: " + e.getMessage());
+            return "{\"list\":[]}"; 
+        }
     }
 
     @Override
@@ -69,16 +88,18 @@ public class KaiGe extends Spider {
 
             String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
             logger("📝 [詳情動作] URL: " + url);
-            logger("📑 [請求頭]: " + new JSONObject(getHeaders(null)).toString());
 
             String html = OkHttp.string(url, getHeaders(null));
+            boolean success = !TextUtils.isEmpty(html);
+            logger("🌐 [網絡請求] 狀態: " + (success ? "成功" : "失敗") + " | 長度: " + (success ? html.length() : 0));
+
             Document doc = Jsoup.parse(html);
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
             
-            // 詳情只打印關鍵字段提取結果，不打印 HTML
             String name = extract(doc, rule.optString("dt_name"));
-            logger("💎 標題: " + name);
+            logger("💎 標題: " + (TextUtils.isEmpty(name) ? "提取失敗" : name));
+            
             vod.put("vod_name", name);
             vod.put("vod_actor", extract(doc, rule.optString("dt_actor")));
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
@@ -88,6 +109,7 @@ public class KaiGe extends Spider {
             List<String> fromList = new ArrayList<>();
             for (Element f : froms) fromList.add(f.text().trim());
             vod.put("vod_play_from", TextUtils.join("$$$", fromList));
+            logger("📺 [播放源] 數量: " + fromList.size());
 
             Elements urlLists = doc.select(rule.optString("dt_list"));
             List<String> circuits = new ArrayList<>();
@@ -99,16 +121,19 @@ public class KaiGe extends Spider {
             vod.put("vod_play_url", TextUtils.join("$$$", circuits));
 
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) { 
+            logger("🚨 [詳情異常]: " + e.getMessage());
+            return ""; 
+        }
     }
 
+    // playerContent 保持不變，保留 Step 響應打印...
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         if (id != null && id.contains("kaige_debug")) {
             logger("🛠️ [日誌請求] 攔截成功，已切斷 WebView 重定向。");
             return "{\"parse\":0,\"url\":\"\"}";
         }
-
         try {
             String url = id;
             if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
@@ -129,8 +154,7 @@ public class KaiGe extends Spider {
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
                 logger("🎬 [Step " + (i + 1) + "] " + method.toUpperCase() + " URL: " + stepUrl);
-                logger("📑 [請求頭]: " + new JSONObject(headers).toString());
-
+                
                 if (method.contains("post")) {
                     String body = replaceStepVars(step.optString("body"));
                     logger("📤 [POST Body]: " + body);
@@ -139,7 +163,6 @@ public class KaiGe extends Spider {
                     currentHtml = OkHttp.string(stepUrl, headers);
                 }
 
-                // 🌟 播放解析這裏保留 300 字響應，因為這裏最需要看源碼調試參數
                 String preview = currentHtml.length() > 300 ? currentHtml.substring(0, 300) : currentHtml;
                 logger("📥 [Step響應]: " + preview.replace("\n", " "));
 
@@ -155,14 +178,13 @@ public class KaiGe extends Spider {
                     }
                 }
             }
-
             String finalUrl = replaceStepVars(playConfig.optString("final_output", "{final_url}"));
             logger("🏁 [最終播放地址]: " + finalUrl);
             return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
         } catch (Exception e) { return quickResult(id); }
     }
 
-    // --- 輔助解析邏輯 ---
+    // 其餘輔助函數 (extract, parseList, getHeaders 等) 與之前一致...
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
@@ -259,7 +281,6 @@ public class KaiGe extends Spider {
         try {
             JSONObject result = new JSONObject();
             result.put("class", rule.optJSONArray("classes"));
-            if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
             return result.toString();
         } catch (Exception e) { return ""; }
     }
