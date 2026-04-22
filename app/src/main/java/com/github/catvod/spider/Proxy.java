@@ -8,7 +8,7 @@ import java.net.Socket;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuffer sb = new StringBuffer("<div style='color:#00FF00;'>--- 凱哥綠色監聽系統啟動成功 ---</div><br>");
+    private static StringBuffer sb = new StringBuffer("<div style='color:#00FF00;'>--- 凱哥綠色監聽系統已啟動 ---</div><br>");
     private static boolean isServerRunning = false;
     private static final int MY_LOG_PORT = 10086; 
 
@@ -22,10 +22,9 @@ public class Proxy extends Spider {
 
     public static void log(String msg) {
         if (msg == null) return;
-        // 內存守護：防止日誌過長導致手機瀏覽器崩潰
         if (sb.length() > 120000) {
             sb.delete(0, 60000); 
-            sb.insert(0, "<div style='color:#008800;'>[系統] 歷史日誌已清理，保持流暢度...</div><br>");
+            sb.insert(0, "<div style='color:#008800;'>[系統] 歷史日誌已清理...</div><br>");
         }
         String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
         sb.append("<div style='border-bottom:1px solid #1a1a1a;padding:5px;'>")
@@ -43,31 +42,30 @@ public class Proxy extends Spider {
         new Thread(() -> {
             try {
                 ServerSocket server = new ServerSocket(MY_LOG_PORT);
+                server.setReuseAddress(true); // 🚀 關鍵：允許端口快速重用
                 isServerRunning = true;
                 while (true) {
-                    Socket client = server.accept();
+                    final Socket client = server.accept();
+                    client.setSoTimeout(1500); // 🚀 防止死連接佔用
                     new Thread(() -> {
-                        try {
-                            OutputStream out = client.getOutputStream();
-                            String content = sb.toString();
-                            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n" +
+                        try (client; OutputStream out = client.getOutputStream()) {
+                            String response = "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Connection: close\r\n\r\n" +
                                     "<html><head><meta charset='utf-8'>" +
                                     "<title>凱哥 Matrix Log</title>" +
                                     "<meta http-equiv='refresh' content='1'>" + 
                                     "<style>" +
-                                    "body{background:#000000;color:#00FF00;font-family:'Courier New',monospace;padding:10px;font-size:13px;line-height:1.4;}" +
+                                    "body{background:#000000;color:#00FF00;font-family:monospace;padding:10px;font-size:12px;line-height:1.4;}" +
                                     ".log-box{background:#000000;padding:12px;border:1px solid #004400;word-wrap:break-word;}" +
-                                    "b{color:#55FF55;text-shadow: 0 0 5px #00FF00;} " +
-                                    "small{color:#008800;} " +
+                                    "b{color:#55FF55;text-shadow: 0 0 3px #00FF00;} " +
                                     "</style></head>" +
                                     "<body>" +
-                                    "<h3 style='color:#00FF00;border-left:4px solid #00FF00;padding-left:10px;'>📟 凱哥實時監聽 (Port: " + MY_LOG_PORT + ")</h3>" +
-                                    "<div class='log-box'>" + content + "</div>" +
+                                    "<h3 style='color:#00FF00;'>📟 凱哥綠色實時監聽 (Port: " + MY_LOG_PORT + ")</h3>" +
+                                    "<div class='log-box'>" + sb.toString() + "</div>" +
                                     "</body></html>";
-                            
                             out.write(response.getBytes("UTF-8"));
                             out.flush();
-                            client.close();
                         } catch (Exception ignored) {}
                     }).start();
                 }
@@ -81,7 +79,7 @@ public class Proxy extends Spider {
         if (params == null) return null;
         Object action = params.get("do");
         if ("kaige_debug".equals(action)) {
-            String html = "<html><body style='background:#000;color:#00FF00;'>已切換綠色端口：<a href='http://127.0.0.1:10086' style='color:#00FF00;'>進入</a></body></html>";
+            String html = "<html><body style='background:#000;color:#00FF00;'>端口：<a href='http://127.0.0.1:10086' style='color:#00FF00;'>10086</a></body></html>";
             return new Object[]{200, "text/html; charset=utf-8", new ByteArrayInputStream(html.getBytes("UTF-8"))};
         }
         return null;
