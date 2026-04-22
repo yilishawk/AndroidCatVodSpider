@@ -42,7 +42,7 @@ public class KaiGe extends Spider {
     public void init(Context context, String extend) {
         try {
             logger("------------------------------------------");
-            logger("🚀 <b>凱哥全能獨立引擎啟動 (Full Power)...</b>");
+            logger("🚀❤️ <b>凱哥全能獨立引擎啟動 (Full Power)...</b>");
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
