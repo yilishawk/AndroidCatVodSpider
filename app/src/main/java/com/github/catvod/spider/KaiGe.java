@@ -19,7 +19,6 @@ public class KaiGe extends Spider {
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
 
-    // 🌟 凱哥日誌出口：絕對完整對接 10086
     private void logger(String msg) {
         Proxy.log(msg);
     }
@@ -28,14 +27,9 @@ public class KaiGe extends Spider {
     public void init(Context context, String extend) {
         try {
             logger("🛠️ [初始化] 正在讀取配置...");
-            String json = "";
-            if (extend.startsWith("http")) {
-                json = OkHttp.string(extend, null);
-            } else {
-                json = extend;
-            }
+            String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
-            logger("✅ [初始化成功] 站點名稱: " + rule.optString("site_name"));
+            logger("✅ [初始化成功] 站點: " + rule.optString("site_name"));
         } catch (Exception e) {
             logger("🚨 [初始化失敗]: " + e.getMessage());
         }
@@ -44,224 +38,136 @@ public class KaiGe extends Spider {
     @Override
     public String homeContent(boolean filter) {
         try {
-            logger("🏠 [首頁] 載入分類...");
             JSONObject result = new JSONObject();
-            JSONArray classes = rule.optJSONArray("classes");
-            result.put("class", classes);
-            if (rule.has("filter")) {
-                result.put("filters", rule.optJSONObject("filter"));
-            }
+            result.put("class", rule.optJSONArray("classes"));
+            if (rule.has("filter")) result.put("filters", rule.optJSONObject("filter"));
             return result.toString();
-        } catch (Exception e) {
-            logger("🚨 [首頁異常]: " + e.getMessage());
-            return "";
-        }
+        } catch (Exception e) { return ""; }
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
-            String cateUrl = rule.optString("cate_url");
-            if (pg.equals("1") && rule.has("cate_page_1")) {
-                cateUrl = rule.optString("cate_page_1");
-            }
+            String cateUrl = (pg.equals("1") && rule.has("cate_page_1")) ? rule.optString("cate_page_1") : rule.optString("cate_url");
             String url = cateUrl.replace("{tid}", tid).replace("{pg}", pg);
-            if (url.startsWith("/") && !url.startsWith("//")) {
-                url = rule.optString("host") + url;
-            }
-
-            logger("📂 [分類請求] ID: " + tid + " | Page: " + pg + " | URL: " + url);
+            if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
+            logger("📂 [分類] URL: " + url);
             String html = OkHttp.string(url, getHeaders(null));
-            if (TextUtils.isEmpty(html)) {
-                logger("❌ [分類響應] HTML 為空");
-                return "{\"list\":[]}";
-            }
             return parseList(html, pg, false);
-        } catch (Exception e) {
-            logger("🚨 [分類異常]: " + e.getMessage());
-            return "{\"list\":[]}";
-        }
+        } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
     @Override
     public String searchContent(String key, boolean quick) {
         try {
-            logger("🔍 [搜索] 關鍵字: " + key);
-            String searchUrl = rule.optString("search_url");
-            String url = searchUrl.replace("{wd}", URLEncoder.encode(key, "UTF-8"));
-            if (url.startsWith("/") && !url.startsWith("//")) {
-                url = rule.optString("host") + url;
-            }
-
+            String url = rule.optString("search_url").replace("{wd}", URLEncoder.encode(key, "UTF-8"));
+            if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
             String html = OkHttp.string(url, getHeaders(null));
             return parseList(html, "1", true);
-        } catch (Exception e) {
-            logger("🚨 [搜索異常]: " + e.getMessage());
-            return "{\"list\":[]}";
-        }
+        } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
     @Override
     public String detailContent(List<String> ids) {
         try {
             String id = ids.get(0);
-            String url = id;
-            if (!id.startsWith("http")) {
-                url = rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
-            }
-            logger("📝 [詳情請求] 目標: " + url);
-
+            String url = id.startsWith("http") ? id : rule.optString("host") + (id.startsWith("/") ? "" : "/") + id;
             String html = OkHttp.string(url, getHeaders(null));
             Document doc = Jsoup.parse(html);
-            
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
-            
-            String name = extract(doc, rule.optString("dt_name"));
-            logger("💎 [詳情提取] 標題: " + name);
-            vod.put("vod_name", name);
+            vod.put("vod_name", extract(doc, rule.optString("dt_name")));
             vod.put("vod_pic", extract(doc, rule.optString("dt_pic")));
             vod.put("vod_actor", extract(doc, rule.optString("dt_actor")));
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
 
-            // --- 播放源解析 ---
             Elements froms = doc.select(rule.optString("dt_from"));
             List<String> fromList = new ArrayList<>();
-            for (Element f : froms) {
-                fromList.add(f.text().trim());
-            }
+            for (Element f : froms) fromList.add(f.text().trim());
             vod.put("vod_play_from", TextUtils.join("$$$", fromList));
 
-            // --- 播放連結解析 ---
             Elements urlLists = doc.select(rule.optString("dt_list"));
             List<String> circuits = new ArrayList<>();
             for (Element list : urlLists) {
                 List<String> urls = new ArrayList<>();
-                Elements links = list.select("a");
-                for (Element a : links) {
-                    urls.add(a.text().trim() + "$" + a.attr("href"));
-                }
+                for (Element a : list.select("a")) urls.add(a.text().trim() + "$" + a.attr("href"));
                 circuits.add(TextUtils.join("#", urls));
             }
             vod.put("vod_play_url", TextUtils.join("$$$", circuits));
-
-            JSONArray list = new JSONArray();
-            list.put(vod);
-            return new JSONObject().put("list", list).toString();
-        } catch (Exception e) {
-            logger("🚨 [詳情異常]: " + e.getMessage());
-            return "";
-        }
+            return new JSONObject().put("list", new JSONArray().put(vod)).toString();
+        } catch (Exception e) { return ""; }
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            String url = id;
-            if (url.startsWith("/") && !url.startsWith("//")) {
-                url = rule.optString("host") + url;
-            }
-            
-            logger("<br>🚀 <b>[播放路徑解析]</b>");
-            logger("📍 起始地址: " + url);
-
-            if (!rule.has("play")) {
-                logger("⚠️ 配置無 play 字段，直接返回原始地址");
-                return "{\"parse\":0,\"url\":\"" + url + "\"}";
-            }
-
+            String url = id.startsWith("/") && !id.startsWith("//") ? rule.optString("host") + id : id;
+            logger("<br>🚀 <b>[播放解析啟動]</b>: " + url);
+            if (!rule.has("play")) return "{\"parse\":0,\"url\":\"" + url + "\"}";
             JSONObject playConfig = rule.getJSONObject("play");
             JSONArray steps = playConfig.optJSONArray("steps");
             varPool.clear();
             varPool.put("play_id", url);
-
             String currentHtml = "";
             for (int i = 0; i < (steps != null ? steps.length() : 0); i++) {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
                 String stepUrl = replaceStepVars(step.optString("url", url));
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
-
                 logger("<b>Step " + (i + 1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
-
                 OkResult result;
                 if (method.equals("post")) {
-                    String body = replaceStepVars(step.optString("body"));
-                    logger("📤 POST 提交數據: " + body);
-                    result = OkHttp.post(stepUrl, body, headers);
+                    result = OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers);
                 } else {
-                    // 🌟 凱哥看這裡：修正後的 OkHttp 調用，防止編譯報錯
                     result = OkHttp.get(stepUrl, null, headers); 
                 }
-                
                 currentHtml = result.getBody();
-                if (TextUtils.isEmpty(currentHtml)) {
-                    logger("❌ <span style='color:red;'>Step " + (i + 1) + " 響應為空</span>");
-                    return "{\"parse\":0,\"url\":\"\"}";
-                }
-
-                // 日誌預覽，絕不精簡
-                String snap = currentHtml.length() > 300 ? currentHtml.substring(0, 300) : currentHtml;
-                logger("📥 響應預覽: <small>" + snap.replace("<", "&lt;").replace(">", "&gt;") + "...</small>");
-
-                // 變量提取池
+                if (TextUtils.isEmpty(currentHtml)) return "{\"parse\":0,\"url\":\"\"}";
+                logger("📥 響應預覽: <small>" + (currentHtml.length() > 200 ? currentHtml.substring(0, 200) : currentHtml).replace("<", "&lt;") + "...</small>");
                 if (step.has("vars")) {
                     JSONObject vars = step.getJSONObject("vars");
                     Iterator<String> keys = vars.keys();
                     while (keys.hasNext()) {
                         String key = keys.next();
                         String vRule = vars.getString(key);
-                        String val = "";
-                        if (vRule.startsWith("json:")) {
-                            val = new JSONObject(currentHtml).optString(vRule.substring(5));
-                        } else {
-                            val = extract(currentHtml, vRule);
-                        }
+                        String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(key, val);
-                        logger("💡 提取變量 [<b>" + key + "</b>] = " + val);
+                        logger("💡 變量 [<b>" + key + "</b>] = " + val);
                     }
                 }
             }
-
             String finalUrl = replaceStepVars(playConfig.optString("final_output", "{final_url}"));
-            logger("🏁 <b>[解析成功]</b> 最終播放地址: <a href='" + finalUrl + "'>" + finalUrl + "</a>");
-            
-            JSONObject result = new JSONObject();
-            result.put("parse", 0);
-            result.put("url", finalUrl);
-            return result.toString();
-
-        } catch (Exception e) {
-            logger("🚨 [解析過程出錯]: " + e.getMessage());
-            return "{\"parse\":0,\"url\":\"\"}";
-        }
+            logger("🏁 <b>[解析完成]</b>: " + finalUrl);
+            return new JSONObject().put("parse", 0).put("url", finalUrl).toString();
+        } catch (Exception e) { return "{\"parse\":0,\"url\":\"\"}"; }
     }
 
-    // --- 凱哥專用：完全不精簡解析工具集 ---
-
+    // --- 凱哥專用：絕對不改的元素定位邏輯 ---
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
             
-            // Jsoup 鏈式提取 @attr
+            // 1. 處理 Jsoup 屬性提取 (例如: .title@text 或 a@href)
             if (ruleStr.contains("@") && !ruleStr.contains("&&") && root instanceof Element) {
                 String[] parts = ruleStr.split("@");
                 String selector = parts[0].trim();
                 String attr = parts.length > 1 ? parts[1].trim() : "";
                 Element el = selector.isEmpty() ? (Element) root : ((Element) root).selectFirst(selector);
                 if (el == null) return "";
-                return attr.isEmpty() ? el.text().trim() : el.attr(attr).trim();
+                if (attr.equals("text")) return el.text().trim();
+                if (attr.isEmpty()) return el.text().trim();
+                return el.attr(attr).trim();
             }
 
-            // 字符串截取 &&
+            // 2. 處理字符串截取 (&& 模式)
             String source = (root instanceof Element) ? ((Element) root).outerHtml() : root.toString();
             if (ruleStr.contains("&&")) {
                 String[] parts = ruleStr.split("&&");
                 String left = parts[0].trim();
                 String right = parts.length > 1 ? parts[1].trim() : "";
                 
-                // 支持多級跳躍 *
+                // 凱哥，這裡是你最核心的 * 號多級跳躍邏輯
                 if (left.contains("*")) {
                     String[] anchors = left.split("\\*");
                     int pos = 0;
@@ -274,7 +180,7 @@ public class KaiGe extends Spider {
                     return (end != -1) ? source.substring(pos, end).trim() : "";
                 }
                 
-                // 普通前後截取
+                // 標準前後截取
                 int start = source.indexOf(left);
                 if (start == -1) return "";
                 start += left.length();
@@ -282,7 +188,7 @@ public class KaiGe extends Spider {
                 return (end != -1) ? source.substring(start, end).trim() : "";
             }
 
-            // CSS 選擇器文本
+            // 3. 標準 CSS 選擇器提取 Text
             if (root instanceof Element) {
                 Element el = ((Element) root).selectFirst(ruleStr);
                 return el != null ? el.text().trim() : "";
@@ -296,45 +202,30 @@ public class KaiGe extends Spider {
             Document doc = Jsoup.parse(html);
             JSONArray list = new JSONArray();
             String prefix = isSearch ? "sc_" : "cate_";
-            
             String itemRule = rule.optString(prefix + "item", rule.optString("cate_item"));
             Elements items = doc.select(itemRule);
-            
             for (Element item : items) {
                 JSONObject vod = new JSONObject();
                 String vId = extract(item, rule.optString(prefix + "id", rule.optString("cate_id")));
-                if (!vId.startsWith("http") && !vId.startsWith("//")) {
-                    vId = rule.optString("host") + (vId.startsWith("/") ? "" : "/") + vId;
-                }
+                if (!vId.startsWith("http") && !vId.startsWith("//")) vId = rule.optString("host") + (vId.startsWith("/") ? "" : "/") + vId;
                 vod.put("vod_id", vId);
                 vod.put("vod_name", extract(item, rule.optString(prefix + "name", rule.optString("cate_name"))));
                 vod.put("vod_pic", extract(item, rule.optString(prefix + "pic", rule.optString("cate_pic"))));
                 list.put(vod);
             }
-            
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            result.put("page", pg);
-            return result.toString();
-        } catch (Exception e) {
-            return "{\"list\":[]}";
-        }
+            return new JSONObject().put("list", list).put("page", pg).toString();
+        } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
     private String replaceStepVars(String text) {
         if (text == null) return "";
-        String result = text;
-        for (Map.Entry<String, String> entry : varPool.entrySet()) {
-            result = result.replace("{" + entry.getKey() + "}", entry.getValue());
-        }
-        result = result.replace("{host}", rule.optString("host"));
-        return result;
+        for (Map.Entry<String, String> entry : varPool.entrySet()) text = text.replace("{" + entry.getKey() + "}", entry.getValue());
+        return text.replace("{host}", rule.optString("host"));
     }
 
     private Map<String, String> getHeaders(JSONObject customHd) {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", rule.optString("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
-        
+        headers.put("User-Agent", rule.optString("ua", "Mozilla/5.0"));
         JSONObject hd = (customHd != null) ? customHd : rule.optJSONObject("headers");
         if (hd != null) {
             Iterator<String> keys = hd.keys();
