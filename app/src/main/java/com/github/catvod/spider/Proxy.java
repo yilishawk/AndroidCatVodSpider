@@ -9,7 +9,7 @@ import java.net.Socket;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuilder sb = new StringBuilder("<div style='color:#666;'>--- 凱哥實時監聽系統啟動 ---</div><br>");
+    private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥實時監聽已啟動 ---</div>");
     private static boolean isServerRunning = false;
     private static final int MY_LOG_PORT = 10086;
 
@@ -20,10 +20,8 @@ public class Proxy extends Spider {
         if (msg == null) return;
         if (sb.length() > 200000) sb.delete(0, 100000);
         String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-        sb.append("<div class='line'>")
-          .append("<span class='time'>[").append(time).append("]</span> ")
-          .append("<span class='msg'>").append(msg).append("</span>")
-          .append("</div>");
+        sb.append("<div class='line'><span class='time'>[").append(time).append("]</span> ")
+          .append("<span class='msg'>").append(msg).append("</span></div>");
         if (!isServerRunning) startLegacyServer();
     }
 
@@ -35,45 +33,44 @@ public class Proxy extends Spider {
                 isServerRunning = true;
                 while (true) {
                     try (Socket client = server.accept()) {
-                        // 🚀 讀取請求，攔截清空指令
                         BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-                        String line = in.readLine();
-                        if (line != null && line.contains("/?clean")) {
+                        String req = in.readLine();
+                        if (req != null && req.contains("/?clean")) {
                             sb.setLength(0);
-                            sb.append("<div style='color:#f00;'>--- 日誌已清空 ---</div><br>");
+                            sb.append("<div style='color:red;'>--- 日誌已手動清空 ---</div>");
                         }
 
                         try (OutputStream out = client.getOutputStream()) {
-                            String content = sb.toString();
-                            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n" +
-                                    "<html><head><meta charset='utf-8'><title>KaiGe Debug</title>" +
-                                    "<style>" +
-                                    "body{background:#fff;color:#000;font-family:sans-serif;font-size:13px;margin:0;padding:10px;line-height:1.6;}" +
-                                    ".time{color:#888;font-family:monospace;margin-right:8px;}" +
-                                    ".line{border-bottom:1px solid #eee;padding:4px 0;word-break:break-all;}" +
-                                    ".header{position:sticky;top:0;background:#fff;padding:10px 0;border-bottom:2px solid #000;display:flex;justify-content:space-between;align-items:center;z-index:99;}" +
-                                    "button{background:#000;color:#fff;border:none;padding:6px 12px;font-size:12px;cursor:pointer;border-radius:4px;}" +
+                            String logData = sb.toString();
+                            String html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n" +
+                                    "<html><head><meta charset='utf-8'><style>" +
+                                    "body{background:#fff;color:#000;font-family:monospace;font-size:12px;margin:0;padding:10px;}" +
+                                    ".header{position:sticky;top:0;background:#fff;padding:5px;border-bottom:1px solid #000;display:flex;justify-content:space-between;z-index:9;}" +
+                                    ".time{color:#888;margin-right:5px;}.line{border-bottom:1px solid #eee;padding:2px 0;}" +
+                                    "button{background:#000;color:#fff;border:none;padding:4px 8px;border-radius:3px;}" +
                                     "</style></head><body>" +
-                                    "<div class='header'>" +
-                                    "<b>📟 凱哥實時監聽</b>" +
-                                    "<button onclick='fetch(\"/?clean\").then(()=>location.reload())'>🧹 清空日誌</button>" +
-                                    "</div>" +
-                                    "<div id='log-container'>" + content + "</div>" +
+                                    "<div class='header'><b>📟 凱哥監聽</b><button onclick='clr()'>🧹 清空</button></div>" +
+                                    "<div id='kaige_logs'>" + logData + "</div>" +
                                     "<script>" +
-                                    "let lastHtml = '';" +
+                                    "function clr(){fetch('/?clean').then(()=>location.reload());}" +
+                                    "let last = '';" +
                                     "setInterval(() => {" +
-                                    "  fetch(location.href).then(r => r.text()).then(html => {" +
-                                    "    if(html.indexOf('log-container') === -1) return;" +
-                                    "    let newHtml = html.split('id=\"log-container\">')[1].split('</div>')[0];" +
-                                    "    if(newHtml !== lastHtml) {" +
-                                    "      document.getElementById('log-container').innerHTML = newHtml;" +
-                                    "      lastHtml = newHtml;" +
-                                    "      window.scrollTo(0, document.body.scrollHeight);" + // 🚀 自動滾動
+                                    "  fetch(location.href).then(r=>r.text()).then(txt=>{" +
+                                    "    let startTag = '<div id=\"kaige_logs\">';" +
+                                    "    let endTag = '</div><script>';" + // 🚀 關鍵：精確截取，避開腳本內容
+                                    "    let parts = txt.split(startTag);" +
+                                    "    if(parts.length > 1) {" +
+                                    "      let newLogs = parts[1].split(endTag)[0];" +
+                                    "      if(newLogs !== last) {" +
+                                    "        document.getElementById('kaige_logs').innerHTML = newLogs;" +
+                                    "        last = newLogs;" +
+                                    "        window.scrollTo(0,document.body.scrollHeight);" +
+                                    "      }" +
                                     "    }" +
                                     "  });" +
                                     "}, 1000);" +
                                     "</script></body></html>";
-                            out.write(response.getBytes("UTF-8"));
+                            out.write(html.getBytes("UTF-8"));
                             out.flush();
                         }
                     } catch (Exception ignored) {}
@@ -82,7 +79,5 @@ public class Proxy extends Spider {
         }).start();
     }
 
-    public Object[] proxy(Map<String, String> params) {
-        return null;
-    }
+    public Object[] proxy(Map<String, String> params) { return null; }
 }
