@@ -8,36 +8,36 @@ import java.net.Socket;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuilder sb = new StringBuilder("--- 凱哥獨立端口日誌系統已啟動 ---<br>");
+    private static StringBuffer sb = new StringBuffer("<div style='color:#00FF00;'>--- 凱哥綠色監聽系統啟動成功 ---</div><br>");
     private static boolean isServerRunning = false;
-    
-    // 🚀 凱哥，這裡改你想要的端口
     private static final int MY_LOG_PORT = 10086; 
 
     public static int getPort() {
-        return 9978; // 殼子原有的代理端口保持不變，兼容其他功能
+        return 9978;
     }
 
     public static String getUrl() {
         return "http://127.0.0.1:9978/proxy";
     }
 
-    // 統一日誌出口
     public static void log(String msg) {
-        synchronized (sb) {
-            if (sb.length() > 150000) sb.setLength(0);
-            String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-            sb.append("<div style='border-bottom:1px solid #333;padding:3px;'>")
-              .append("<span style='color:#888;'>[").append(time).append("]</span> ")
-              .append(msg).append("</div>");
+        if (msg == null) return;
+        // 內存守護：防止日誌過長導致手機瀏覽器崩潰
+        if (sb.length() > 120000) {
+            sb.delete(0, 60000); 
+            sb.insert(0, "<div style='color:#008800;'>[系統] 歷史日誌已清理，保持流暢度...</div><br>");
         }
-        // 第一次調用 log 時，如果伺服器沒開，就啟動它
+        String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
+        sb.append("<div style='border-bottom:1px solid #1a1a1a;padding:5px;'>")
+          .append("<span style='color:#008800;'>[").append(time).append("]</span> ")
+          .append("<span style='color:#00FF00;'>").append(msg).append("</span>")
+          .append("</div>");
+        
         if (!isServerRunning) {
             startLegacyServer();
         }
     }
 
-    // 🛠️ 另起爐灶：在獨立端口開啟 HTTP 服務
     private static void startLegacyServer() {
         if (isServerRunning) return;
         new Thread(() -> {
@@ -49,12 +49,22 @@ public class Proxy extends Spider {
                     new Thread(() -> {
                         try {
                             OutputStream out = client.getOutputStream();
-                            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
-                                    "<html><head><meta charset='utf-8'><meta http-equiv='refresh' content='2'>" +
-                                    "<style>body{background:#0d1117;color:#58a6ff;font-family:monospace;padding:20px;line-height:1.4;}</style></head>" +
-                                    "<body><h2 style='color:#fff;'>🚀 凱哥獨立監聽端 (Port: " + MY_LOG_PORT + ")</h2>" +
-                                    "<div style='background:#161b22;padding:15px;border-radius:6px;border:1px solid #30363d;'>" + sb.toString() + "</div>" +
-                                    "<script>window.scrollTo(0,document.body.scrollHeight);</script></body></html>";
+                            String content = sb.toString();
+                            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n" +
+                                    "<html><head><meta charset='utf-8'>" +
+                                    "<title>凱哥 Matrix Log</title>" +
+                                    "<meta http-equiv='refresh' content='1'>" + 
+                                    "<style>" +
+                                    "body{background:#000000;color:#00FF00;font-family:'Courier New',monospace;padding:10px;font-size:13px;line-height:1.4;}" +
+                                    ".log-box{background:#000000;padding:12px;border:1px solid #004400;word-wrap:break-word;}" +
+                                    "b{color:#55FF55;text-shadow: 0 0 5px #00FF00;} " +
+                                    "small{color:#008800;} " +
+                                    "</style></head>" +
+                                    "<body>" +
+                                    "<h3 style='color:#00FF00;border-left:4px solid #00FF00;padding-left:10px;'>📟 凱哥實時監聽 (Port: " + MY_LOG_PORT + ")</h3>" +
+                                    "<div class='log-box'>" + content + "</div>" +
+                                    "</body></html>";
+                            
                             out.write(response.getBytes("UTF-8"));
                             out.flush();
                             client.close();
@@ -68,13 +78,10 @@ public class Proxy extends Spider {
     }
 
     public static Object[] proxy(Map<String, String> params) throws Exception {
-        // 原有的 proxy 邏輯保持不變，作為備用
         if (params == null) return null;
-        Object doObj = params.get("do");
-        String action = (doObj instanceof String[]) ? ((String[]) doObj)[0] : String.valueOf(doObj);
-
+        Object action = params.get("do");
         if ("kaige_debug".equals(action)) {
-            String html = "<html><head><meta charset='utf-8'></head><body>使用新端口查看：http://127.0.0.1:" + MY_LOG_PORT + "</body></html>";
+            String html = "<html><body style='background:#000;color:#00FF00;'>已切換綠色端口：<a href='http://127.0.0.1:10086' style='color:#00FF00;'>進入</a></body></html>";
             return new Object[]{200, "text/html; charset=utf-8", new ByteArrayInputStream(html.getBytes("UTF-8"))};
         }
         return null;
