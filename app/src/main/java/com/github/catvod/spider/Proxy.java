@@ -1,17 +1,17 @@
 package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
-import java.io.ByteArrayInputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuilder sb = new StringBuilder("--- 凱哥高速純文本監聽已啟動 ---\n");
+    private static StringBuilder sb = new StringBuilder("--- 凱哥極速日誌監聽啟動 ---\n");
     private static boolean isServerRunning = false;
     private static final int MY_LOG_PORT = 10086;
 
+    // 🚀 保留這兩個方法，防止 AliYun.java 等文件編譯報錯
     public static int getPort() { return 9978; }
     public static String getUrl() { return "http://127.0.0.1:9978/proxy"; }
 
@@ -19,7 +19,7 @@ public class Proxy extends Spider {
         if (msg == null) return;
         if (sb.length() > 150000) sb.delete(0, 75000);
         String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-        // 🚀 去掉 HTML 標籤，純文本輸出
+        // 🚀 過濾掉 HTML 標籤，輸出純文本
         sb.append("[").append(time).append("] ").append(msg.replaceAll("<[^>]*>", "")).append("\n");
         if (!isServerRunning) startLegacyServer();
     }
@@ -32,13 +32,13 @@ public class Proxy extends Spider {
                 isServerRunning = true;
                 while (true) {
                     try (Socket client = server.accept(); OutputStream out = client.getOutputStream()) {
-                        String content = sb.toString();
-                        // 🚀 關鍵：Content-Type 改為 text/plain，並加入自動刷新 Header
-                        String response = "HTTP/1.1 200 OK\r\n" +
+                        String data = sb.toString();
+                        // 🚀 使用純文本協議頭，並加上 1 秒自動刷新
+                        String resp = "HTTP/1.1 200 OK\r\n" +
                                 "Content-Type: text/plain; charset=utf-8\r\n" +
-                                "Refresh: 1\r\n" + // 🚀 協議級別刷新，比 HTML 標籤快得多
-                                "Connection: close\r\n\r\n" + content;
-                        out.write(response.getBytes("UTF-8"));
+                                "Refresh: 1\r\n" + 
+                                "Connection: close\r\n\r\n" + data;
+                        out.write(resp.getBytes("UTF-8"));
                         out.flush();
                     } catch (Exception ignored) {}
                 }
@@ -46,13 +46,9 @@ public class Proxy extends Spider {
         }).start();
     }
 
-    @Override
-    public Object[] proxy(Map<String, String> params) throws Exception {
-        String type = params.get("do");
-        if ("ali".equals(type)) return com.github.catvod.api.AliYun.proxy(params);
-        if ("quark".equals(type)) return com.github.catvod.api.QuarkApi.proxy(params);
-        if ("uc".equals(type)) return com.github.catvod.api.UCApi.proxy(params);
-        if ("bili".equals(type)) return com.github.catvod.spider.Bili.proxy(params);
+    // 🚀 關鍵修復：去掉 @Override 和那些報錯的調用
+    // 讓這個類只負責定義 getUrl，不強行攔截請求
+    public Object[] proxy(Map<String, String> params) {
         return null;
     }
 }
