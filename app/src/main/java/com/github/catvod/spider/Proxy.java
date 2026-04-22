@@ -1,26 +1,28 @@
 package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
+import java.io.ByteArrayInputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuilder sb = new StringBuilder("--- 凱哥極速日誌監聽啟動 ---\n");
+    private static StringBuilder sb = new StringBuilder("<div style='color:#00FF00;'>--- 凱哥實時矩陣監聽系統啟動 ---</div><br>");
     private static boolean isServerRunning = false;
     private static final int MY_LOG_PORT = 10086;
 
-    // 🚀 保留這兩個方法，防止 AliYun.java 等文件編譯報錯
     public static int getPort() { return 9978; }
     public static String getUrl() { return "http://127.0.0.1:9978/proxy"; }
 
     public static void log(String msg) {
         if (msg == null) return;
-        if (sb.length() > 150000) sb.delete(0, 75000);
+        if (sb.length() > 200000) sb.delete(0, 100000);
         String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-        // 🚀 過濾掉 HTML 標籤，輸出純文本
-        sb.append("[").append(time).append("] ").append(msg.replaceAll("<[^>]*>", "")).append("\n");
+        sb.append("<div class='line'>")
+          .append("<span class='time'>[").append(time).append("]</span> ")
+          .append("<span class='msg'>").append(msg).append("</span>")
+          .append("</div>");
         if (!isServerRunning) startLegacyServer();
     }
 
@@ -32,13 +34,33 @@ public class Proxy extends Spider {
                 isServerRunning = true;
                 while (true) {
                     try (Socket client = server.accept(); OutputStream out = client.getOutputStream()) {
-                        String data = sb.toString();
-                        // 🚀 使用純文本協議頭，並加上 1 秒自動刷新
-                        String resp = "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: text/plain; charset=utf-8\r\n" +
-                                "Refresh: 1\r\n" + 
-                                "Connection: close\r\n\r\n" + data;
-                        out.write(resp.getBytes("UTF-8"));
+                        String content = sb.toString();
+                        String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n" +
+                                "<html><head><meta charset='utf-8'><title>KaiGe Debugger</title>" +
+                                "<style>" +
+                                "body{background:#000;color:#00FF00;font-family:monospace;font-size:12px;margin:0;padding:10px;line-height:1.5;}" +
+                                ".time{color:#008800;margin-right:8px;}" +
+                                ".line{border-bottom:1px solid #111;padding:2px 0;word-break:break-all;}" +
+                                "h3{position:sticky;top:0;background:#000;margin:0;padding:10px 0;border-bottom:2px solid #00FF00;}" +
+                                "</style></head><body>" +
+                                "<h3>📟 凱哥實時監聽 (自動更新中...)</h3>" +
+                                "<div id='log-container'>" + content + "</div>" +
+                                "<script>" +
+                                "let lastHtml = '';" +
+                                "setInterval(() => {" +
+                                "  fetch(location.href).then(r => r.text()).then(html => {" +
+                                "    let parser = new DOMParser();" +
+                                "    let doc = parser.parseFromString(html, 'text/html');" +
+                                "    let newHtml = doc.getElementById('log-container').innerHTML;" +
+                                "    if(newHtml !== lastHtml) {" +
+                                "      document.getElementById('log-container').innerHTML = newHtml;" +
+                                "      lastHtml = newHtml;" +
+                                "      window.scrollTo(0, document.body.scrollHeight);" + // 🚀 自動滾動到底部
+                                "    }" +
+                                "  });" +
+                                "}, 1000);" +
+                                "</script></body></html>";
+                        out.write(response.getBytes("UTF-8"));
                         out.flush();
                     } catch (Exception ignored) {}
                 }
@@ -46,8 +68,6 @@ public class Proxy extends Spider {
         }).start();
     }
 
-    // 🚀 關鍵修復：去掉 @Override 和那些報錯的調用
-    // 讓這個類只負責定義 getUrl，不強行攔截請求
     public Object[] proxy(Map<String, String> params) {
         return null;
     }
