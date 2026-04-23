@@ -201,6 +201,7 @@ public class KaiGe extends Spider {
                         logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
                     }
                 }
+            }
 
              // --- 🚀 最終返回邏輯（凱哥嚴格精準版） ---
             String finalUrl = varPool.get("final_url");
