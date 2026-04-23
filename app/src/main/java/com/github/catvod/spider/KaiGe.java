@@ -254,7 +254,6 @@ public class KaiGe extends Spider {
             // 🏁 成功日誌（0 還是 1 一目了然）
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
-        } // 🚀 這個 } 閉合的是 else
 
     } catch (Exception e) { // 🚀 這個 } 閉合的是 try，必須緊貼在 catch 前面
 
