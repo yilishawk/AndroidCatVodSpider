@@ -17,6 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class KaiGe extends Spider {
+    private String siteUrl = ""; // 🚀 全局域名變量
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
     private final ExecutorService logExecutor = Executors.newSingleThreadExecutor();
@@ -38,14 +39,19 @@ public class KaiGe extends Spider {
         }
     }
 
-    @Override
+@Override
     public void init(Context context, String extend) {
         try {
             logger("------------------------------------------");
             logger("🚀❤️ <b>凱哥全能獨立引擎啟動 (Full Power)...</b>");
             String json = extend.startsWith("http") ? OkHttp.string(extend, null) : extend;
             this.rule = new JSONObject(json);
+            
+            // 🚀 從配置中自動提取域名，適配所有網站
+            this.siteUrl = rule.optString("site_url", rule.optString("host", ""));
+            
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
+            logger("🌐 [系統] 域名自動綁定: " + this.siteUrl);
         } catch (Exception e) {
             logger("🚨 [系統] 初始化失敗: " + e.getMessage());
         }
@@ -202,25 +208,21 @@ public class KaiGe extends Spider {
             return result;
 
 } catch (Exception e) {
-            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動補全
+            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 siteUrl 補全
             String finalId = id;
-            if (!id.startsWith("http")) {
-                // 在 Java 蜘蛛類裡，域名變量通常是 siteUrl 或 host
-                // 我們直接調用類內部的變量
-                String baseUrl = siteUrl; 
-                
-                // 安全檢查：如果 baseUrl 還是空的，嘗試用 host
-                if (baseUrl == null || baseUrl.isEmpty()) baseUrl = ""; 
-
-                // 去掉 baseUrl 末尾的斜槓
-                if (baseUrl.endsWith("/")) {
-                    baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+            if (id != null && !id.startsWith("http")) {
+                String baseUrl = this.siteUrl;
+                if (baseUrl != null && !baseUrl.isEmpty()) {
+                    // 去掉 baseUrl 末尾的斜槓
+                    if (baseUrl.endsWith("/")) {
+                        baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+                    }
+                    // 確保 id 開頭有斜槓，然後拼接
+                    finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
                 }
-                // 確保 id 開頭有斜槓，然後拼接
-                finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
             }
 
-            // 🚀 2. 封裝標準的失敗返回格式
+            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）
             String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\"}}";
 
             // 🚀 3. 輸出強化日誌
