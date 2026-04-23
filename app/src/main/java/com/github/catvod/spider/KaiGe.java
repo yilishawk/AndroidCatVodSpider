@@ -203,33 +203,56 @@ public class KaiGe extends Spider {
                 }
             }
 
-            // --- 🚀 智能判斷返回邏輯 ---
+            // --- 🚀 最終返回邏輯（凱哥全場景日誌版） ---
             String finalUrl = varPool.get("final_url");
-            boolean isDirect = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
             
+            // 1. 檢測是否為直連格式 (m3u8, mp4, flv)
+            boolean isDirect = finalUrl.toLowerCase().contains(".m3u8") || 
+                               finalUrl.toLowerCase().contains(".mp4") || 
+                               finalUrl.toLowerCase().contains(".flv");
+
+            // 2. 檢測解析是否有效 (地址是否變化)
+            boolean isParseValid = !finalUrl.equals(url);
+
             String resultTemplate = play.optString("final_output", "");
             String result;
 
             if (!resultTemplate.isEmpty()) {
-                // 1. 優先聽 JSON 規則的（支持自定義 parse）
+                // 優先級 A：聽從 JSON 裡的死指令
                 result = replaceStepVars(resultTemplate);
             } else {
-                // 2. 自動判斷：有步驟或直連則 parse:0，否則 parse:1 (嗅探)
+                // 優先級 B：自動智能判斷
+                int pValue;
+                if (isDirect) {
+                    pValue = 0; // 直連流，直接播
+                } else if (stepCount > 0 && isParseValid) {
+                    pValue = 0; // 解析成功，拿到新地址
+                } else {
+                    pValue = 1; // 沒解析、解析失敗或網頁地址，走嗅探
+                    if (stepCount > 0 && !isParseValid) {
+                        logger("  ⚠️ <span style='color:#e67e22;'>[解析提示] 提取結果與原地址一致，已自動切換為嗅探模式</span>");
+                    }
+                }
+
                 JSONObject resJson = new JSONObject();
-                resJson.put("parse", (stepCount > 0 || isDirect) ? 0 : 1);
+                resJson.put("parse", pValue);
                 resJson.put("url", finalUrl);
                 
                 JSONObject headJson = play.optJSONObject("play_headers");
                 if (headJson == null) {
                     headJson = new JSONObject();
                     headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                    headJson.put("Referer", this.siteUrl + "/");
+                    headJson.put("Origin", this.siteUrl);
                 }
                 resJson.put("header", headJson);
                 result = resJson.toString();
             }
 
+            // 🏁 不管是 0 還是 1，這行日誌絕對會噴出來
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
+
 
 } catch (Exception e) {
             // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 siteUrl 補全
