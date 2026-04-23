@@ -162,7 +162,6 @@ public class KaiGe extends Spider {
             varPool.put("final_url", url); // 默認初始值
 
             // --- 🚀 步驟解析循環 ---
-            JSONArray steps = play.optJSONArray("steps");
             int stepCount = (steps != null ? steps.length() : 0);
             String currentHtml = "";
 
