@@ -244,8 +244,9 @@ public class KaiGe extends Spider {
                 }
             }
 
-            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）
-            String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\"}}";
+            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）              
+            // 🚀 失敗保底返回：加入了 Referer 和 Origin
+            String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\",\"Referer\":\"" + this.siteUrl + "/\",\"Origin\":\"" + this.siteUrl + "\"}}";
 
             // 🚀 3. 輸出強化日誌
             logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常/失敗兜底]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
