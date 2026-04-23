@@ -201,14 +201,26 @@ public class KaiGe extends Spider {
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
 
-       } catch (Exception e) { 
-            // 這裡做個小判斷：如果 id 不帶 http，就手動給它拼上當前的域名
-            String finalId = id.startsWith("http") ? id : (self.host + id);
-            
+} catch (Exception e) {
+            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 self.host 補全
+            String finalId = id;
+            if (!id.startsWith("http")) {
+                String baseUrl = self.host;
+                // 去掉 baseUrl 末尾的斜槓（如果有）
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+                }
+                // 確保 id 開頭有斜槓，然後拼接
+                finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
+            }
+
+            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）
             String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\"}}";
-            
+
+            // 🚀 3. 輸出強化日誌
             logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常/失敗兜底]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
-            return errorResult; 
+            
+            return errorResult;
         }
     }
 
