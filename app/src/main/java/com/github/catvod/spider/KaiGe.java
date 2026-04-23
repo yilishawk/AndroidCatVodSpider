@@ -159,20 +159,22 @@ public class KaiGe extends Spider {
             JSONArray steps = play.optJSONArray("steps");
             varPool.clear();
             varPool.put("play_id", url);
-            
+            varPool.put("final_url", url); // 默認初始值
+
+            // --- 🚀 步驟解析循環 ---
+            JSONArray steps = play.optJSONArray("steps");
+            int stepCount = (steps != null ? steps.length() : 0);
             String currentHtml = "";
-            for (int i = 0; i < (steps != null ? steps.length() : 0); i++) {
+
+            for (int i = 0; i < stepCount; i++) {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
                 String stepUrl = replaceStepVars(step.optString("url", url));
-                
-                // 🚀 第一步：準備並獲取最終 Headers
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
-                
-                // 🚀 第二步：打印當前步驟標題與網址
+
                 logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
 
-                // 🚀 第三步：打印詳細請求頭（摺疊顯示）
+                // 打印請求頭摺疊日誌
                 StringBuilder hdLog = new StringBuilder("<details style='margin:5px 0;'><summary style='color:#0077ff;font-size:11px;cursor:pointer;'>📤 點擊查看請求頭 (Headers)</summary><div style='color:#666;font-size:10px;padding:5px;background:#f9f9f9;border-left:2px solid #0077ff;margin-top:5px;'>");
                 for (Map.Entry<String, String> entry : headers.entrySet()) {
                     hdLog.append("<b>").append(entry.getKey()).append(":</b> ").append(entry.getValue()).append("<br>");
@@ -180,7 +182,6 @@ public class KaiGe extends Spider {
                 hdLog.append("</div></details>");
                 logger(hdLog.toString());
                 
-                // 🚀 第四步：執行請求
                 OkResult res = method.equals("post") 
                     ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
                     : OkHttp.get(stepUrl, null, headers);
@@ -196,36 +197,38 @@ public class KaiGe extends Spider {
                         String vRule = vars.getString(k);
                         String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(k, val);
+                        // 🚀 關鍵：如果是最終地址，自動更新
+                        if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
                         logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
                     }
                 }
-            }            // 🚀 [替換開始] -----------------------------------------------------------
-            String finalUrl = replaceStepVars(play.optString("final_output", "{play_id}"));
+            }
+
+            // --- 🚀 智能判斷返回邏輯 ---
+            String finalUrl = varPool.get("final_url");
+            boolean isDirect = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
             
+            String resultTemplate = play.optString("final_output", "");
             String result;
-            // 🚀 1. 判斷 JSON 是否已經自定義了完整的返回格式（包含 header 或 parse）
-            if (finalUrl.trim().startsWith("{") && (finalUrl.contains("\"header\"") || finalUrl.contains("\"parse\""))) {
-                result = finalUrl;
+
+            if (!resultTemplate.isEmpty()) {
+                // 1. 優先聽 JSON 規則的（支持自定義 parse）
+                result = replaceStepVars(resultTemplate);
             } else {
-                // 🚀 2. 如果只是純網址，自動封裝，但優先讀取 JSON 裡的 play_headers
+                // 2. 自動判斷：有步驟或直連則 parse:0，否則 parse:1 (嗅探)
                 JSONObject resJson = new JSONObject();
-                resJson.put("parse", 0);
+                resJson.put("parse", (stepCount > 0 || isDirect) ? 0 : 1);
                 resJson.put("url", finalUrl);
                 
-                // 優先使用 JSON 裡的 play_headers，實現真正的「JSON 優先」
                 JSONObject headJson = play.optJSONObject("play_headers");
                 if (headJson == null) {
-                    // 如果 JSON 沒寫頭部，才用這個默認 UA 保底
                     headJson = new JSONObject();
                     headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
                 }
                 resJson.put("header", headJson);
-                
                 result = resJson.toString();
             }
-            // 🚀 [替換結束] -----------------------------------------------------------
 
-            // 📢 強化日誌輸出：綠色表示成功
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
 
