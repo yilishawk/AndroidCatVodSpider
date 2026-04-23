@@ -70,16 +70,32 @@ public class KaiGe extends Spider {
         } catch (Exception ex) { return "{\"list\":[]}"; }
     }
 
-    @Override
+@Override
     public String searchContent(String key, boolean quick) {
         try {
             String url = rule.optString("search_url").replace("{wd}", URLEncoder.encode(key, "UTF-8"));
-            if (url.startsWith("/") && !url.startsWith("//")) url = rule.optString("host") + url;
+            
+            if (url.contains("{host}")) {
+                url = url.replace("{host}", this.siteUrl);
+            } 
+            else if (url.startsWith("/") && !url.startsWith("//") && !url.contains("http")) {
+                String baseUrl = this.siteUrl;
+                if (baseUrl.endsWith("/")) {
+                    baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+                }
+                url = baseUrl + url;
+            }
+
             logger("🔍 [搜索] 關鍵字: " + key + " | 網址: " + url);
+            
             OkResult res = OkHttp.get(url, null, getHeaders(null));
             logCheck("搜索", res.getBody(), false);
+            
             return parseList(res.getBody(), "1", true);
-        } catch (Exception e) { return "{\"list\":[]}"; }
+        } catch (Exception e) { 
+            logger("🚨 [搜索異常]: " + e.getMessage());
+            return "{\"list\":[]}"; 
+        }
     }
 
     @Override
