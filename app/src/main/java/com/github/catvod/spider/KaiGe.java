@@ -254,7 +254,7 @@ public class KaiGe extends Spider {
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
 
-
+    }
 
 } catch (Exception e) {
             // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 siteUrl 補全
