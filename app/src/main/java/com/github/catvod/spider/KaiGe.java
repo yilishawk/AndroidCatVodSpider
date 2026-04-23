@@ -201,43 +201,44 @@ public class KaiGe extends Spider {
                         logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
                     }
                 }
-            }
 
-            // --- 🚀 最終返回邏輯（凱哥全場景日誌版） ---
+             // --- 🚀 最終返回邏輯（凱哥嚴格精準版） ---
             String finalUrl = varPool.get("final_url");
             
-            // 1. 檢測是否為直連格式 (m3u8, mp4, flv)
-            boolean isDirect = finalUrl.toLowerCase().contains(".m3u8") || 
-                               finalUrl.toLowerCase().contains(".mp4") || 
-                               finalUrl.toLowerCase().contains(".flv");
+            // 1. 檢測是否為直連格式 (明顯後綴)
+            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || 
+                                   finalUrl.toLowerCase().contains(".mp4") || 
+                                   finalUrl.toLowerCase().contains(".flv");
 
-            // 2. 檢測解析是否有效 (地址是否變化)
-            boolean isParseValid = !finalUrl.equals(url);
+            // 2. 檢測地址是否被解析「有效變更」
+            // 只有 finalUrl 不等於原始 id，說明 steps 真的提取到了新東西
+            boolean isUrlChanged = !finalUrl.equals(url) && !finalUrl.equals(id);
 
             String resultTemplate = play.optString("final_output", "");
             String result;
 
             if (!resultTemplate.isEmpty()) {
-                // 優先級 A：聽從 JSON 裡的死指令
                 result = replaceStepVars(resultTemplate);
             } else {
-                // 優先級 B：自動智能判斷
                 int pValue;
-                if (isDirect) {
-                    pValue = 0; // 直連流，直接播
-                } else if (stepCount > 0 && isParseValid) {
-                    pValue = 0; // 解析成功，拿到新地址
+                
+                // 🚀 凱哥邏輯核心判斷
+                if (hasStreamExt) {
+                    // 如果地址長得像流（有 m3u8），直接播
+                    pValue = 0;
+                } else if (stepCount > 0 && isUrlChanged) {
+                    // 如果有步驟且地址變了（解析成功），哪怕沒後綴也直接播
+                    pValue = 0;
                 } else {
-                    pValue = 1; // 沒解析、解析失敗或網頁地址，走嗅探
-                    if (stepCount > 0 && !isParseValid) {
-                        logger("  ⚠️ <span style='color:#e67e22;'>[解析提示] 提取結果與原地址一致，已自動切換為嗅探模式</span>");
-                    }
+                    // 沒寫步驟、解析沒動、且沒後綴（即原始網頁），強制嗅探！
+                    pValue = 1;
                 }
 
                 JSONObject resJson = new JSONObject();
                 resJson.put("parse", pValue);
                 resJson.put("url", finalUrl);
                 
+                // 確保嗅探時帶上 Headers
                 JSONObject headJson = play.optJSONObject("play_headers");
                 if (headJson == null) {
                     headJson = new JSONObject();
@@ -249,9 +250,10 @@ public class KaiGe extends Spider {
                 result = resJson.toString();
             }
 
-            // 🏁 不管是 0 還是 1，這行日誌絕對會噴出來
+            // 🏁 成功日誌（0 還是 1 一目了然）
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
             return result;
+
 
 
 } catch (Exception e) {
