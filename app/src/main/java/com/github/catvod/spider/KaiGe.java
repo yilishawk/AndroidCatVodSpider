@@ -202,11 +202,17 @@ public class KaiGe extends Spider {
             return result;
 
 } catch (Exception e) {
-            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 self.host 補全
+            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動補全
             String finalId = id;
             if (!id.startsWith("http")) {
-                String baseUrl = self.host;
-                // 去掉 baseUrl 末尾的斜槓（如果有）
+                // 在 Java 蜘蛛類裡，域名變量通常是 siteUrl 或 host
+                // 我們直接調用類內部的變量
+                String baseUrl = siteUrl; 
+                
+                // 安全檢查：如果 baseUrl 還是空的，嘗試用 host
+                if (baseUrl == null || baseUrl.isEmpty()) baseUrl = ""; 
+
+                // 去掉 baseUrl 末尾的斜槓
                 if (baseUrl.endsWith("/")) {
                     baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
                 }
@@ -214,7 +220,7 @@ public class KaiGe extends Spider {
                 finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
             }
 
-            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）
+            // 🚀 2. 封裝標準的失敗返回格式
             String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\"}}";
 
             // 🚀 3. 輸出強化日誌
