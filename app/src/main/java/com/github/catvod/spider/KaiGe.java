@@ -199,25 +199,31 @@ public class KaiGe extends Spider {
                         logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
                     }
                 }
-            }
-            String finalUrl = replaceStepVars(play.optString("final_output", "{final_url}"));
+            }            // 🚀 [替換開始] -----------------------------------------------------------
+            String finalUrl = replaceStepVars(play.optString("final_output", "{play_id}"));
             
             String result;
-            // 🚀 1. 判斷 JSON 是否已經自定義了完整的返回格式
-            if (finalUrl.trim().startsWith("{") && finalUrl.contains("\"parse\"")) {
+            // 🚀 1. 判斷 JSON 是否已經自定義了完整的返回格式（包含 header 或 parse）
+            if (finalUrl.trim().startsWith("{") && (finalUrl.contains("\"header\"") || finalUrl.contains("\"parse\""))) {
                 result = finalUrl;
             } else {
-                // 🚀 2. 如果只是純網址，自動封裝標準格式
+                // 🚀 2. 如果只是純網址，自動封裝，但優先讀取 JSON 裡的 play_headers
                 JSONObject resJson = new JSONObject();
                 resJson.put("parse", 0);
                 resJson.put("url", finalUrl);
                 
-                JSONObject headJson = new JSONObject();
-                headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                // 優先使用 JSON 裡的 play_headers，實現真正的「JSON 優先」
+                JSONObject headJson = play.optJSONObject("play_headers");
+                if (headJson == null) {
+                    // 如果 JSON 沒寫頭部，才用這個默認 UA 保底
+                    headJson = new JSONObject();
+                    headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                }
                 resJson.put("header", headJson);
                 
                 result = resJson.toString();
             }
+            // 🚀 [替換結束] -----------------------------------------------------------
 
             // 📢 強化日誌輸出：綠色表示成功
             logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
