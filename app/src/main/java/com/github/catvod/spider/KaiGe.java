@@ -150,14 +150,17 @@ public class KaiGe extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        try {
+try {
             String url = id.startsWith("/") && !id.startsWith("//") ? rule.optString("host") + id : id;
             logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
-            if (!rule.has("play")) return "{\"parse\":0,\"url\":\"" + url + "\"}";
-            
-            JSONObject play = rule.getJSONObject("play");
+
+            // ❌ 注意：原代碼這行 if (!rule.has("play")) ... 必須刪掉或註釋掉，否則會直接返回 parse:0 導致後面的邏輯跑不到
+            // if (!rule.has("play")) return "{\"parse\":0,\"url\":\"" + url + "\"}";
+
+            JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
             JSONArray steps = play.optJSONArray("steps");
-// --- 🚀 凱哥分流邏輯：沒 Step 直接回嗅探，有 Step 才跑解析 ---
+
+            // --- 🚀 凱哥分流邏輯：沒 Step 直接回嗅探，有 Step 才跑解析 ---
             int stepCount = (steps != null ? steps.length() : 0);
             boolean isStream = url.toLowerCase().contains(".m3u8") || url.toLowerCase().contains(".mp4") || url.toLowerCase().contains(".flv");
 
@@ -167,15 +170,15 @@ public class KaiGe extends Spider {
                 JSONObject res = new JSONObject();
                 res.put("parse", pValue);
                 res.put("url", url);
-                res.put("header", getPlayHeaders(play)); // 調用下面的輔助方法
+                res.put("header", getPlayHeaders(play)); 
                 String result = res.toString();
-                
+
                 logger("<br><span style='color:#e67e22;'>🏁 <b>[無步驟模式]</b></span>" +
-                       "<br><b>判定原因:</b> 規則無 Steps" +
-                       "<br><b>返回類型:</b> " + (pValue == 0 ? "直連" : "嗅探") +
-                       "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
+                        "<br><b>判定原因:</b> 規則無 Steps" +
+                        "<br><b>返回類型:</b> " + (pValue == 0 ? "直連" : "嗅探") +
+                        "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
                 return result;
-            }
+            } // <--- 這裡就是你說的原代碼最後那個括號，執行到這就 return 了
 
             // --- 🚀 第二關：有 Step 的情況下，初始化並執行解析 ---
             varPool.clear();
