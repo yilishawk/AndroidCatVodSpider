@@ -203,43 +203,44 @@ public class KaiGe extends Spider {
                 }
             }
 
-             // --- 🚀 最終返回邏輯（凱哥嚴格精準版） ---
+            // --- 🚀 最終返回邏輯（凱哥透明診斷版 - 完整替換內容） ---
             String finalUrl = varPool.get("final_url");
-            
+
             // 1. 檢測是否為直連格式 (明顯後綴)
             boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || 
                                    finalUrl.toLowerCase().contains(".mp4") || 
                                    finalUrl.toLowerCase().contains(".flv");
 
             // 2. 檢測地址是否被解析「有效變更」
-            // 只有 finalUrl 不等於原始 id，說明 steps 真的提取到了新東西
             boolean isUrlChanged = !finalUrl.equals(url) && !finalUrl.equals(id);
 
             String resultTemplate = play.optString("final_output", "");
             String result;
+            String reason = "";
+            int pValue = 1;
 
             if (!resultTemplate.isEmpty()) {
+                // 優先使用自定義模板
                 result = replaceStepVars(resultTemplate);
+                reason = "使用 JSON 規則中的 final_output 模板";
             } else {
-                int pValue;
-                
-                // 🚀 凱哥邏輯核心判斷
+                // 🚀 凱哥診斷核心邏輯
                 if (hasStreamExt) {
-                    // 如果地址長得像流（有 m3u8），直接播
                     pValue = 0;
+                    reason = "命中視頻後綴 (.m3u8/.mp4/...)";
                 } else if (stepCount > 0 && isUrlChanged) {
-                    // 如果有步驟且地址變了（解析成功），哪怕沒後綴也直接播
                     pValue = 0;
+                    reason = "執行了 Step 步驟且地址發生變更";
                 } else {
-                    // 沒寫步驟、解析沒動、且沒後綴（即原始網頁），強制嗅探！
                     pValue = 1;
+                    reason = "無步驟、解析未動或無視頻後綴，走嗅探";
                 }
 
                 JSONObject resJson = new JSONObject();
                 resJson.put("parse", pValue);
                 resJson.put("url", finalUrl);
-                
-                // 確保嗅探時帶上 Headers
+
+                // 確保頭部信息（Headers）
                 JSONObject headJson = play.optJSONObject("play_headers");
                 if (headJson == null) {
                     headJson = new JSONObject();
@@ -251,34 +252,14 @@ public class KaiGe extends Spider {
                 result = resJson.toString();
             }
 
-            // 🏁 成功日誌（0 還是 1 一目了然）
-            logger("<br><span style='color:#16a085;'>🏁 <b>[解析成功返回殼子]</b></span><br><code style='color:#2980b9;'>" + result + "</code>");
+            // 🏁 最終診斷日誌：把判斷依據全部印出來（0用綠色，1用橙色）
+            String logColor = (result.contains("\"parse\":0")) ? "#16a085" : "#e67e22";
+            logger("<br><span style='color:" + logColor + ";'>🏁 <b>[解析返回診斷]</b></span>" +
+                   "<br><b>判定原因:</b> " + reason +
+                   "<br><b>判定詳情:</b> 含有後綴=" + hasStreamExt + " | 步驟數=" + stepCount + " | 地址變更=" + isUrlChanged +
+                   "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
+
             return result;
-
-    } catch (Exception e) { // 🚀 這個 } 閉合的是 try，必須緊貼在 catch 前面
-
-            // 🚀 1. 智能補全域名：如果 id 不帶 http，自動利用 siteUrl 補全
-            String finalId = id;
-            if (id != null && !id.startsWith("http")) {
-                String baseUrl = this.siteUrl;
-                if (baseUrl != null && !baseUrl.isEmpty()) {
-                    // 去掉 baseUrl 末尾的斜槓
-                    if (baseUrl.endsWith("/")) {
-                        baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-                    }
-                    // 確保 id 開頭有斜槓，然後拼接
-                    finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
-                }
-            }
-
-            // 🚀 2. 封裝標準的失敗返回格式（parse: 1）              
-            // 🚀 失敗保底返回：加入了 Referer 和 Origin
-            String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\",\"Referer\":\"" + this.siteUrl + "/\",\"Origin\":\"" + this.siteUrl + "\"}}";
-
-            // 🚀 3. 輸出強化日誌
-            logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常/失敗兜底]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
-            
-            return errorResult;
         }
     }
 
