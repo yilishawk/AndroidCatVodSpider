@@ -315,19 +315,28 @@ try {
 
     private String extractString(String content, String ruleStr) {
         try {
-            // 1. 基礎檢查：源碼為空或者規則沒寫 && 就不玩了
             if (content == null || !ruleStr.contains("&&")) return "";
             
-            // 2. 切割規則，拿到 [起點] 和 [終點]
             String[] p = ruleStr.split("&&");
+            String start = p[0].trim();
+            String end = p[1].trim();
+
+            // 🚀 核心調用
+            String result = com.github.catvod.utils.Util.cut(content, start, end);
             
-            // 3. 🚀 核心：直接調用 Util 類裡我們剛寫好的那個 cut 方法
-            // 注意：這裡直接傳入 p[0].trim() 和 p[1].trim()
-            return com.github.catvod.utils.Util.cut(content, p[0].trim(), p[1].trim());
+            // 💡 凱哥專用調試日誌：如果提取是空的，我們就打印原因
+            if (result.isEmpty()) {
+                if (!content.contains(start)) {
+                    logger("⚠️ [匹配失敗] 源碼中找不到起點: " + start);
+                } else {
+                    logger("⚠️ [匹配失敗] 找到起點但找不到終點: " + end);
+                }
+            }
+            
+            return result;
             
         } catch (Exception e) { 
-            // 出錯了打印一下日誌，方便調試
-            // logger("❌ 提取變量出錯: " + e.getMessage());
+            logger("❌ [提取崩潰]: " + e.getMessage());
             return ""; 
         }
     }
