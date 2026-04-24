@@ -34,7 +34,7 @@ public class KaiGe extends Spider {
         int len = html.length();
         logger("📥 [" + title + "] 成功 | 長度: " + len + " 字節");
         if (showSource) {
-            String preview = (len > 3000 ? html.substring(0, 3000) : html).trim().replace("\n", " ");
+            String preview = (len > 7000 ? html.substring(0, 7000) : html).trim().replace("\n", " ");
             logger("📄 [源碼預覽]: " + preview.replace("<", "&lt;").replace(">", "&gt;") + "...");
         }
     }
