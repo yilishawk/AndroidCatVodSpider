@@ -248,9 +248,11 @@ public class Util {
         return uri.getHost();
     }
 
-        public static String cut(String text, String start, String end) {
+         // 🚀 使用這段代碼替換，它不依賴外部庫，最穩！
+    public static String cut(String text, String start, String end) {
         try {
-            if (TextUtils.isEmpty(text) || TextUtils.isEmpty(start)) return "";
+            // 直接判斷字符串是否為空，不用 TextUtils
+            if (text == null || text.length() == 0 || start == null || start.length() == 0) return "";
             int s = text.indexOf(start);
             if (s > -1) {
                 s += start.length();
@@ -258,7 +260,7 @@ public class Util {
                 if (e > -1) return text.substring(s, e).trim();
             }
         } catch (Exception e) {
-            // 靜默處理
+            // 忽略錯誤
         }
         return "";
     }
