@@ -286,27 +286,77 @@ try {
         } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
-    private String extract(Object root, String ruleStr) {
-        try {
-            if (TextUtils.isEmpty(ruleStr) || root == null) return "";
+private String extract(Object root, String ruleStr) {
+    try {
+        if (TextUtils.isEmpty(ruleStr) || root == null) {
+            return "";
+        }
+
+        // 🚀 【新增邏輯】處理純源碼字符串（Step 2 的關鍵）
+        if (root instanceof String) {
+            String content = (String) root;
             String workRule = ruleStr.replace("@", "&&");
+            
             if (workRule.contains("&&")) {
-                String[] parts = workRule.split("&&");
-                Element target = (root instanceof Document) ? ((Document) root).selectFirst(parts[0].trim()) : ((Element) root).selectFirst(parts[0].trim());
-                if (target != null) {
-                    String second = parts[1].trim();
-                    if (isAttr(second)) return target.attr(second).trim();
-                    if (second.equals("text") || second.isEmpty()) return target.text().trim();
-                    return extractString(target.outerHtml(), second);
+                String result = extractString(content, workRule);
+                // 💡 日誌：監控字符串截取結果
+                if (result.isEmpty()) {
+                    String start = workRule.split("&&")[0].trim();
+                    if (!content.contains(start)) {
+                        logger("⚠️ [提取失敗] 源碼中完全找不到起點關鍵詞: " + start);
+                    } else {
+                        logger("⚠️ [提取失敗] 找到起點但未找到匹配的終點，規則: " + workRule);
+                    }
+                } else {
+                    logger("✅ [提取成功] 規則: " + workRule + " -> 提取值: " + result);
                 }
+                return result;
+            } else {
+                // CSS 選擇器日誌
+                Document doc = Jsoup.parse(content);
+                Element el = doc.selectFirst(workRule);
+                String res = el != null ? el.text().trim() : "";
+                logger("🔍 [CSS提取] 規則: " + workRule + " -> 結果: " + res);
+                return res;
             }
-            if (root instanceof Element) {
-                Element el = ((Element) root).selectFirst(workRule);
-                return el != null ? el.text().trim() : "";
+        }
+
+        // 🚀 【原有邏輯】處理 Document / Element 對象
+        String workRule = ruleStr.replace("@", "&&");
+        if (workRule.contains("&&")) {
+            String[] parts = workRule.split("&&");
+            String selector = parts[0].trim();
+            String second = parts[1].trim();
+
+            Element target = (root instanceof Document)
+                    ? ((Document) root).selectFirst(selector)
+                    : ((Element) root).selectFirst(selector);
+
+            if (target != null) {
+                String res = "";
+                if (isAttr(second)) {
+                    res = target.attr(second).trim();
+                } else if (second.equals("text") || second.isEmpty()) {
+                    res = target.text().trim();
+                } else {
+                    res = extractString(target.outerHtml(), second);
+                }
+                logger("✅ [對象提取] 選擇器: " + selector + " -> 結果: " + res);
+                return res;
+            } else {
+                logger("❌ [對象提取] 找不到選擇器節點: " + selector);
             }
-        } catch (Exception e) {}
-        return "";
+        }
+
+        if (root instanceof Element) {
+            Element el = ((Element) root).selectFirst(workRule);
+            return el != null ? el.text().trim() : "";
+        }
+    } catch (Exception e) {
+        logger("🚨 [提取崩潰] 錯誤原因: " + e.getMessage());
     }
+    return "";
+}
 
     private boolean isAttr(String s) {
         String t = s.toLowerCase();
