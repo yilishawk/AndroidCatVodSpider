@@ -203,15 +203,9 @@ public class KaiGe extends Spider {
                 }
             }
 
-            // --- 🚀 最終返回邏輯（凱哥透明診斷版 - 完整替換內容） ---
+            // --- 🚀 最終返回邏輯（診斷版核心） ---
             String finalUrl = varPool.get("final_url");
-
-            // 1. 檢測是否為直連格式 (明顯後綴)
-            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || 
-                                   finalUrl.toLowerCase().contains(".mp4") || 
-                                   finalUrl.toLowerCase().contains(".flv");
-
-            // 2. 檢測地址是否被解析「有效變更」
+            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4") || finalUrl.toLowerCase().contains(".flv");
             boolean isUrlChanged = !finalUrl.equals(url) && !finalUrl.equals(id);
 
             String resultTemplate = play.optString("final_output", "");
@@ -220,11 +214,9 @@ public class KaiGe extends Spider {
             int pValue = 1;
 
             if (!resultTemplate.isEmpty()) {
-                // 優先使用自定義模板
                 result = replaceStepVars(resultTemplate);
                 reason = "使用 JSON 規則中的 final_output 模板";
             } else {
-                // 🚀 凱哥診斷核心邏輯
                 if (hasStreamExt) {
                     pValue = 0;
                     reason = "命中視頻後綴 (.m3u8/.mp4/...)";
@@ -239,8 +231,6 @@ public class KaiGe extends Spider {
                 JSONObject resJson = new JSONObject();
                 resJson.put("parse", pValue);
                 resJson.put("url", finalUrl);
-
-                // 確保頭部信息（Headers）
                 JSONObject headJson = play.optJSONObject("play_headers");
                 if (headJson == null) {
                     headJson = new JSONObject();
@@ -252,7 +242,6 @@ public class KaiGe extends Spider {
                 result = resJson.toString();
             }
 
-            // 🏁 最終診斷日誌：把判斷依據全部印出來（0用綠色，1用橙色）
             String logColor = (result.contains("\"parse\":0")) ? "#16a085" : "#e67e22";
             logger("<br><span style='color:" + logColor + ";'>🏁 <b>[解析返回診斷]</b></span>" +
                    "<br><b>判定原因:</b> " + reason +
@@ -260,6 +249,19 @@ public class KaiGe extends Spider {
                    "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
 
             return result;
+
+        } catch (Exception e) { 
+            String finalId = id;
+            if (id != null && !id.startsWith("http")) {
+                String baseUrl = this.siteUrl;
+                if (baseUrl != null && !baseUrl.isEmpty()) {
+                    if (baseUrl.endsWith("/")) baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+                    finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
+                }
+            }
+            String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\",\"Referer\":\"" + this.siteUrl + "/\",\"Origin\":\"" + this.siteUrl + "\"}}";
+            logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常拋給殼子]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
+            return errorResult;
         }
     }
 
