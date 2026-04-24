@@ -248,7 +248,21 @@ public class Util {
         return uri.getHost();
     }
 
-
+    public static String cut(String text, String start, String end) {
+        try {
+            if (TextUtils.isEmpty(text) || TextUtils.isEmpty(start)) return "";
+            int s = text.indexOf(start);
+            if (s > -1) {
+                s += start.length();
+                int e = text.indexOf(end, s);
+                if (e > -1) return text.substring(s, e).trim();
+            }
+        } catch (Exception e) {
+            // 靜默處理
+        }
+        return "";
+    }
+ 
     public static String findByRegex(String regex, String content, Integer groupCount) {
         // 创建 Pattern 对象
         Pattern r = Pattern.compile(regex);
