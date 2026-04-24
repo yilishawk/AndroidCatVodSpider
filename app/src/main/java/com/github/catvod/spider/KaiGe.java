@@ -203,49 +203,58 @@ public class KaiGe extends Spider {
                 }
             }
 
-            // --- 🚀 最終返回邏輯（診斷版核心） ---
+            // --- 🚀 最終返回邏輯（凱哥直連優化版） ---
             String finalUrl = varPool.get("final_url");
-            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4") || finalUrl.toLowerCase().contains(".flv");
-            boolean isUrlChanged = !finalUrl.equals(url) && !finalUrl.equals(id);
+            if (finalUrl == null) finalUrl = url;
 
-            String resultTemplate = play.optString("final_output", "");
-            String result;
+            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || 
+                                   finalUrl.toLowerCase().contains(".mp4") || 
+                                   finalUrl.toLowerCase().contains(".flv");
+
+            int pValue = 1; // 默認嗅探
             String reason = "";
-            int pValue = 1;
 
-            if (!resultTemplate.isEmpty()) {
-                result = replaceStepVars(resultTemplate);
-                reason = "使用 JSON 規則中的 final_output 模板";
-            } else {
-                if (hasStreamExt) {
-                    pValue = 0;
-                    reason = "命中視頻後綴 (.m3u8/.mp4/...)";
-                } else if (stepCount > 0 && isUrlChanged) {
-                    pValue = 0;
-                    reason = "執行了 Step 步驟且地址發生變更";
-                } else {
-                    pValue = 1;
-                    reason = "無步驟、解析未動或無視頻後綴，走嗅探";
-                }
-
-                JSONObject resJson = new JSONObject();
-                resJson.put("parse", pValue);
-                resJson.put("url", finalUrl);
-                JSONObject headJson = play.optJSONObject("play_headers");
-                if (headJson == null) {
-                    headJson = new JSONObject();
-                    headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
-                    headJson.put("Referer", this.siteUrl + "/");
-                    headJson.put("Origin", this.siteUrl);
-                }
-                resJson.put("header", headJson);
-                result = resJson.toString();
+            // 1. 如果有流媒體後綴，直接直連
+            if (hasStreamExt) {
+                pValue = 0;
+                reason = "命中視頻後綴，直接播放";
+            } 
+            // 2. 如果沒有 Step 步驟，不管地址變沒變，直接給 1 嗅探
+            else if (stepCount == 0) {
+                pValue = 1;
+                reason = "無解析步驟，直接交給殼子嗅探";
+            }
+            // 3. 有 Step 步驟且地址變了，認為是解析出的直連
+            else if (!finalUrl.equals(url)) {
+                pValue = 0;
+                reason = "執行步驟後地址變更，視為直連";
+            }
+            // 4. 其他情況（如執行了步驟但地址沒變），保險起見也走嗅探
+            else {
+                pValue = 1;
+                reason = "解析後地址未變，走嗅探保底";
             }
 
-            String logColor = (result.contains("\"parse\":0")) ? "#16a085" : "#e67e22";
+            JSONObject resJson = new JSONObject();
+            resJson.put("parse", pValue);
+            resJson.put("url", finalUrl);
+            
+            // 頭部信息處理
+            JSONObject headJson = play.optJSONObject("play_headers");
+            if (headJson == null) {
+                headJson = new JSONObject();
+                headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                headJson.put("Referer", this.siteUrl + "/");
+                headJson.put("Origin", this.siteUrl);
+            }
+            resJson.put("header", headJson);
+            String result = resJson.toString();
+
+            // 🏁 最終診斷日誌
+            String logColor = (pValue == 0) ? "#16a085" : "#e67e22";
             logger("<br><span style='color:" + logColor + ";'>🏁 <b>[解析返回診斷]</b></span>" +
                    "<br><b>判定原因:</b> " + reason +
-                   "<br><b>判定詳情:</b> 含有後綴=" + hasStreamExt + " | 步驟數=" + stepCount + " | 地址變更=" + isUrlChanged +
+                   "<br><b>最終地址:</b> " + finalUrl +
                    "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
 
             return result;
