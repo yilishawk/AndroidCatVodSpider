@@ -157,12 +157,30 @@ public class KaiGe extends Spider {
             
             JSONObject play = rule.getJSONObject("play");
             JSONArray steps = play.optJSONArray("steps");
+// --- 🚀 凱哥分流邏輯：沒 Step 直接回嗅探，有 Step 才跑解析 ---
+            int stepCount = (steps != null ? steps.length() : 0);
+            boolean isStream = url.toLowerCase().contains(".m3u8") || url.toLowerCase().contains(".mp4") || url.toLowerCase().contains(".flv");
+
+            // 🔥 第一關：如果完全沒有步驟，直接秒回（除非網址本身就是流媒體後綴）
+            if (stepCount == 0) {
+                int pValue = isStream ? 0 : 1;
+                JSONObject res = new JSONObject();
+                res.put("parse", pValue);
+                res.put("url", url);
+                res.put("header", getPlayHeaders(play)); // 調用下面的輔助方法
+                String result = res.toString();
+                
+                logger("<br><span style='color:#e67e22;'>🏁 <b>[無步驟模式]</b></span>" +
+                       "<br><b>判定原因:</b> 規則無 Steps" +
+                       "<br><b>返回類型:</b> " + (pValue == 0 ? "直連" : "嗅探") +
+                       "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
+                return result;
+            }
+
+            // --- 🚀 第二關：有 Step 的情況下，初始化並執行解析 ---
             varPool.clear();
             varPool.put("play_id", url);
-            varPool.put("final_url", url); // 默認初始值
-
-            // --- 🚀 步驟解析循環 ---
-            int stepCount = (steps != null ? steps.length() : 0);
+            varPool.put("final_url", url); // 初始值保底
             String currentHtml = "";
 
             for (int i = 0; i < stepCount; i++) {
@@ -172,14 +190,6 @@ public class KaiGe extends Spider {
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
                 logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
-
-                // 打印請求頭摺疊日誌
-                StringBuilder hdLog = new StringBuilder("<details style='margin:5px 0;'><summary style='color:#0077ff;font-size:11px;cursor:pointer;'>📤 點擊查看請求頭 (Headers)</summary><div style='color:#666;font-size:10px;padding:5px;background:#f9f9f9;border-left:2px solid #0077ff;margin-top:5px;'>");
-                for (Map.Entry<String, String> entry : headers.entrySet()) {
-                    hdLog.append("<b>").append(entry.getKey()).append(":</b> ").append(entry.getValue()).append("<br>");
-                }
-                hdLog.append("</div></details>");
-                logger(hdLog.toString());
                 
                 OkResult res = method.equals("post") 
                     ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
@@ -196,64 +206,29 @@ public class KaiGe extends Spider {
                         String vRule = vars.getString(k);
                         String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
                         varPool.put(k, val);
-                        // 🚀 關鍵：如果是最終地址，自動更新
+                        // 🚀 同步更新 final_url，確保後面的邏輯能拿到解析後的地址
                         if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
                         logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
                     }
                 }
             }
 
-            // --- 🚀 最終返回邏輯（凱哥直連優化版） ---
+            // --- 🚀 第三關：有 Step 執行後的判定邏輯 ---
             String finalUrl = varPool.get("final_url");
             if (finalUrl == null) finalUrl = url;
 
-            boolean hasStreamExt = finalUrl.toLowerCase().contains(".m3u8") || 
-                                   finalUrl.toLowerCase().contains(".mp4") || 
-                                   finalUrl.toLowerCase().contains(".flv");
-
-            int pValue = 1; // 默認嗅探
-            String reason = "";
-
-            // 1. 如果有流媒體後綴，直接直連
-            if (hasStreamExt) {
-                pValue = 0;
-                reason = "命中視頻後綴，直接播放";
-            } 
-            // 2. 如果沒有 Step 步驟，不管地址變沒變，直接給 1 嗅探
-            else if (stepCount == 0) {
-                pValue = 1;
-                reason = "無解析步驟，直接交給殼子嗅探";
-            }
-            // 3. 有 Step 步驟且地址變了，認為是解析出的直連
-            else if (!finalUrl.equals(url)) {
-                pValue = 0;
-                reason = "執行步驟後地址變更，視為直連";
-            }
-            // 4. 其他情況（如執行了步驟但地址沒變），保險起見也走嗅探
-            else {
-                pValue = 1;
-                reason = "解析後地址未變，走嗅探保底";
-            }
+            // 重新判定解析後的地址是否有視頻後綴
+            boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
+            int pValue = (finalHasStream || !finalUrl.equals(url)) ? 0 : 1;
 
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
             resJson.put("url", finalUrl);
-            
-            // 頭部信息處理
-            JSONObject headJson = play.optJSONObject("play_headers");
-            if (headJson == null) {
-                headJson = new JSONObject();
-                headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
-                headJson.put("Referer", this.siteUrl + "/");
-                headJson.put("Origin", this.siteUrl);
-            }
-            resJson.put("header", headJson);
+            resJson.put("header", getPlayHeaders(play));
             String result = resJson.toString();
 
-            // 🏁 最終診斷日誌
-            String logColor = (pValue == 0) ? "#16a085" : "#e67e22";
-            logger("<br><span style='color:" + logColor + ";'>🏁 <b>[解析返回診斷]</b></span>" +
-                   "<br><b>判定原因:</b> " + reason +
+            logger("<br><span style='color:#16a085;'>🏁 <b>[解析返回診斷]</b></span>" +
+                   "<br><b>判定原因:</b> Step 解析完成" +
                    "<br><b>最終地址:</b> " + finalUrl +
                    "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
 
@@ -272,6 +247,20 @@ public class KaiGe extends Spider {
             logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常拋給殼子]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
             return errorResult;
         }
+    }
+
+    // 🚀 在類末尾補上這個提取播放頭的輔助方法，保證代碼簡潔
+    private JSONObject getPlayHeaders(JSONObject play) {
+        JSONObject headJson = play.optJSONObject("play_headers");
+        if (headJson == null) {
+            headJson = new JSONObject();
+            try {
+                headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                headJson.put("Referer", this.siteUrl + "/");
+                headJson.put("Origin", this.siteUrl);
+            } catch (Exception e) {}
+        }
+        return headJson;
     }
 
     private String parseList(String html, String pg, boolean isSearch) {
