@@ -313,16 +313,35 @@ try {
         return t.equals("href") || t.equals("title") || t.equals("src") || t.startsWith("data-") || t.equals("value");
     }
 
-    private String extractString(String content, String ruleStr) {
+private String extractString(String content, String ruleStr) {
         try {
-            if (!ruleStr.contains("&&")) return content;
+            if (content == null || !ruleStr.contains("&&")) return "";
             String[] p = ruleStr.split("&&");
-            int s = content.indexOf(p[0].trim());
+            String startRule = p[0].trim();
+            String endRule = p[1].trim();
+
+            // 🚀 通配符邏輯
+            if (startRule.contains("*")) {
+                String regexStart = java.util.regex.Pattern.quote(startRule).replace("*", "\\E.*?\\Q");
+                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\Q" + regexStart + "\\E");
+                java.util.regex.Matcher matcher = pattern.matcher(content);
+                if (matcher.find()) {
+                    int s = matcher.end(); 
+                    int e = content.indexOf(endRule, s);
+                    return (e != -1) ? content.substring(s, e).trim() : "";
+                }
+                return "";
+            }
+
+            // 🔹 基礎提取邏輯
+            int s = content.indexOf(startRule);
             if (s == -1) return "";
-            s += p[0].trim().length();
-            int e = content.indexOf(p[1].trim(), s);
+            s += startRule.length();
+            int e = content.indexOf(endRule, s);
             return (e != -1) ? content.substring(s, e).trim() : "";
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) { 
+            return ""; 
+        }
     }
 
     private String replaceStepVars(String text) {
