@@ -313,33 +313,21 @@ try {
         return t.equals("href") || t.equals("title") || t.equals("src") || t.startsWith("data-") || t.equals("value");
     }
 
-private String extractString(String content, String ruleStr) {
+    private String extractString(String content, String ruleStr) {
         try {
+            // 1. 基礎檢查：源碼為空或者規則沒寫 && 就不玩了
             if (content == null || !ruleStr.contains("&&")) return "";
+            
+            // 2. 切割規則，拿到 [起點] 和 [終點]
             String[] p = ruleStr.split("&&");
-            String startRule = p[0].trim();
-            String endRule = p[1].trim();
-
-            // 🚀 通配符邏輯
-            if (startRule.contains("*")) {
-                String regexStart = java.util.regex.Pattern.quote(startRule).replace("*", "\\E.*?\\Q");
-                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\Q" + regexStart + "\\E");
-                java.util.regex.Matcher matcher = pattern.matcher(content);
-                if (matcher.find()) {
-                    int s = matcher.end(); 
-                    int e = content.indexOf(endRule, s);
-                    return (e != -1) ? content.substring(s, e).trim() : "";
-                }
-                return "";
-            }
-
-            // 🔹 基礎提取邏輯
-            int s = content.indexOf(startRule);
-            if (s == -1) return "";
-            s += startRule.length();
-            int e = content.indexOf(endRule, s);
-            return (e != -1) ? content.substring(s, e).trim() : "";
+            
+            // 3. 🚀 核心：直接調用 Util 類裡我們剛寫好的那個 cut 方法
+            // 注意：這裡直接傳入 p[0].trim() 和 p[1].trim()
+            return com.github.catvod.utils.Util.cut(content, p[0].trim(), p[1].trim());
+            
         } catch (Exception e) { 
+            // 出錯了打印一下日誌，方便調試
+            // logger("❌ 提取變量出錯: " + e.getMessage());
             return ""; 
         }
     }
