@@ -175,16 +175,22 @@ public class KaiGe extends Spider {
         }
     }
 
-
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-try {
-            String url = id.startsWith("/") && !id.startsWith("//") ? rule.optString("host") + id : id;
+        try {
+            // ✅ 從這裡開始粘貼
+            String url = id;
+            if (url.startsWith("/") && !url.startsWith("//")) {
+                url = this.siteUrl + url;
+            } else if (!url.startsWith("http")) {
+                url = this.siteUrl + (this.siteUrl.endsWith("/") ? "" : "/") + id;
+            }
+
             logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
-
-            // ❌ 注意：原代碼這行 if (!rule.has("play")) ... 必須刪掉或註釋掉，否則會直接返回 parse:0 導致後面的邏輯跑不到
-            // if (!rule.has("play")) return "{\"parse\":0,\"url\":\"" + url + "\"}";
-
+            
+            varPool.clear();
+            varPool.put("play_id", url);
+            varPool.put("final_url", url); 
             JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
             JSONArray steps = play.optJSONArray("steps");
 
