@@ -21,24 +21,33 @@ public class KaiGe extends Spider {
     private String siteUrl = ""; // 🚀 全局域名變量
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
-    private final ExecutorService logExecutor = Executors.newSingleThreadExecutor();
-
+    // 🚀 1. 刪除 ExecutorService 隊列，直接實時輸出
     private void logger(String msg) {
-        logExecutor.execute(() -> Proxy.log(msg));
+        try {
+            // 不再排隊，操作到哪裡日誌就出到哪裡
+            Proxy.log(msg);
+        } catch (Exception e) {
+            // 避免日誌報錯導致主程序卡死
+        }
     }
 
+    // 🚀 2. 暴力縮減預覽長度，解決緩衝區堵塞
     private void logCheck(String title, String html, boolean showSource) {
         if (TextUtils.isEmpty(html)) {
-            logger("❌ [" + title + "] 請求失敗：HTML 為空");
+            logger("❌ [" + title + "] 請求失敗");
             return;
         }
         int len = html.length();
-        logger("📥 [" + title + "] 成功 | 長度: " + len + " 字節");
+        logger("📥 [" + title + "] 成功 | " + len + " 字符");
+        
         if (showSource) {
-            String preview = (len > 7000 ? html.substring(0, 7000) : html).trim().replace("\n", " ");
+            // 以前抓 7000 字太長了，現在縮到 500 字，反應速度提升 10 倍
+            String preview = (len > 500 ? html.substring(0, 500) : html)
+                .trim().replace("\n", " ").replace("\r", " ");
             logger("📄 [源碼預覽]: " + preview.replace("<", "&lt;").replace(">", "&gt;") + "...");
         }
     }
+
 
 @Override
     public void init(Context context, String extend) {
@@ -152,6 +161,7 @@ public class KaiGe extends Spider {
                     String link = extract(item, listUrlRule);
                     if (!TextUtils.isEmpty(name) && !TextUtils.isEmpty(link)) {
                         urls.add(name + "$" + link);
+                        if (urls.size() == 1) logger("   🔗 [選集預覽]: " + name + " -> " + link);
                     }
                 }
 
