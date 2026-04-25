@@ -293,23 +293,29 @@ try {
             
             String finalResult = "";
 
-            // 🚀 凱哥分流 A 區：標準 CSS 提取 (規則含 @ 且不含 &&)
-            if (ruleStr.contains("@") && !ruleStr.contains("&&")) {
-                String[] parts = ruleStr.split("@");
-                String selector = parts[0].trim();
-                String attr = parts[1].trim();
-                
+            // 🚀 凱哥判定法：如果規則裡「不包含」&&，則認定為標準 CSS 規則，交給 Jsoup 處理
+            if (!ruleStr.contains("&&")) {
                 if (root instanceof Element) {
                     Element el = (Element) root;
-                    Element target = selector.isEmpty() ? el : el.selectFirst(selector);
-                    if (target != null) {
-                        finalResult = target.attr(attr);
-                        // logger("📡 [Jsoup 原生] 規則: " + ruleStr + " | 提取成功: " + (finalResult.length() > 30 ? finalResult.substring(0,30) : finalResult));
+                    
+                    // A1. 處理帶 @ 的屬性提取 (如 a@href)
+                    if (ruleStr.contains("@")) {
+                        String[] parts = ruleStr.split("@");
+                        String selector = parts[0].trim();
+                        String attr = parts[1].trim();
+                        Element target = selector.isEmpty() ? el : el.selectFirst(selector);
+                        finalResult = (target != null) ? target.attr(attr) : "";
+                    } 
+                    // A2. 處理不帶 @ 的純定位取文本 (如 span.absolute)
+                    else {
+                        Element target = el.selectFirst(ruleStr);
+                        finalResult = (target != null) ? target.text() : "";
                     }
                 }
+                // logger("📡 [Jsoup 原生模式] 規則: " + ruleStr + " | 結果: " + finalResult);
             } 
             
-            // 🚀 凱哥分流 B 區：全能切刀提取 (含 && 或不含 @ 的規則)
+            // 🚀 凱哥判定法：如果規則「包含」&&，則啟動全能工具 Java 進行切割
             else {
                 String content = (root instanceof Document) ? ((Document) root).outerHtml() 
                                : (root instanceof Element) ? ((Element) root).outerHtml() 
@@ -318,20 +324,19 @@ try {
                 com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
                     com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
                 
-                finalResult = res.value == null ? "" : res.value;
-                // logger("🔪 [凱哥切刀] 規則: " + ruleStr + " | 提取結果: " + (finalResult.length() > 30 ? finalResult.substring(0,30) : finalResult));
+                finalResult = (res.value == null) ? "" : res.value;
+                // logger("🔪 [工具 Java 模式] 規則: " + ruleStr + " | 結果: " + finalResult);
             }
 
-            // 🚀 終極防崩潰攔截 (防止髒數據再次衝擊殼子)
+            // 🛑 最後一道防線：過濾掉導致閃退的 HTML 殘片髒數據
             if (finalResult.contains("=\"") || finalResult.contains("class=")) {
-                // logger("⚠️ [攔截] 檢測到非法屬性內容，已強行置空防止閃退");
+                // logger("⚠️ [攔截] 發現非法 HTML 屬性內容，已置空防止閃退");
                 return "";
             }
 
             return finalResult;
 
         } catch (Exception e) {
-            // logger("🚨 [提取異常]: " + e.getMessage());
             return "";
         }
     }
