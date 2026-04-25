@@ -290,33 +290,35 @@ try {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-            
-            // 1. 統一轉字符串
-            String content = (root instanceof Document) ? ((Document) root).outerHtml() 
-                           : (root instanceof Element) ? ((Element) root).outerHtml() 
-                           : root.toString();
 
-            // 🚀 【核心診斷日誌】
-            logger("🛠️ [引擎接收] 規則: " + ruleStr + " | 源碼長度: " + content.length());
+            // 1. 診斷：Jsoup 傳過來的是什麼？
+            String type = root.getClass().getSimpleName();
+            String content = "";
+            if (root instanceof Document) {
+                content = ((Document) root).outerHtml();
+            } else if (root instanceof Element) {
+                content = ((Element) root).outerHtml();
+            } else {
+                content = root.toString();
+            }
 
-            // 2. 調用引擎
+            // 🚀 [日誌 A]：看看 Jsoup 給出的源碼片段對不對
+            String preview = content.length() > 60 ? content.substring(0, 60) : content;
+            logger("🔍 [對象:" + type + "] | 規則: " + ruleStr + " | 源碼頭部: " + preview.replace("<", "&lt;"));
+
+            // 2. 執行工具加工
             com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
                 com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
             
-            // 🚀 【結果診斷日誌】
-            if (res.value.isEmpty()) {
-                logger("❌ [引擎無效] 規則未匹配到內容");
-            } else {
-                logger("✅ [引擎有效] 提取到: " + (res.value.length() > 50 ? res.value.substring(0, 50) : res.value));
-            }
+            // 🚀 [日誌 B]：看看工具處理完吐出來的是什麼
+            logger("🎯 [引擎返回]: " + res.value);
 
             return res.value;
-        } catch (Exception e) {
-            logger("🚨 [引擎崩潰]: " + e.getMessage());
+        } catch (Throwable t) {
+            logger("🚨 [崩潰報錯]: " + t.getMessage());
             return "";
         }
     }
-
 
     private String replaceStepVars(String text) {
         String res = text;
