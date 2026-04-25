@@ -118,21 +118,35 @@ public class KaiGe extends Spider {
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
             
+            // --- 🚀 凱哥同步對齊保險版：從這裡開始替換 ---
             Elements froms = doc.select(rule.optString("dt_from"));
-            List<String> fList = new ArrayList<>();
-            for (Element f : froms) fList.add(f.text().trim());
-            vod.put("vod_play_from", TextUtils.join("$$$", fList));
-
             Elements lists = doc.select(rule.optString("dt_list"));
+            
+            List<String> fList = new ArrayList<>();
             List<String> pLists = new ArrayList<>();
-            // 精確子定位規則
+
             String listNameRule = rule.optString("dt_list_name", "a");
             String listUrlRule = rule.optString("dt_list_url", "a@href");
 
+            // 核心：以「列表組」的數量為準進行循環，確保線路與集數一一對應
             for (int i = 0; i < lists.size(); i++) {
+                String sourceName = "";
+
+                // 1. 嘗試從 JSON 規則中獲取線路名
+                if (i < froms.size()) {
+                    sourceName = froms.get(i).text().trim();
+                }
+
+                // 2. 💡 凱哥的核心邏輯：如果抓不到名字，自動生成“線路1, 2, 3”
+                if (TextUtils.isEmpty(sourceName) || sourceName.length() < 2 || sourceName.contains("列表")) {
+                    sourceName = "播放線路 " + (i + 1);
+                }
+
+                // 3. 提取當前線路下的選集
                 Element group = lists.get(i);
-                List<String> urls = new ArrayList<>();
                 Elements items = group.select("a"); 
+                List<String> urls = new ArrayList<>();
+                
                 for (Element item : items) {
                     String name = extract(item, listNameRule);
                     String link = extract(item, listUrlRule);
@@ -140,14 +154,27 @@ public class KaiGe extends Spider {
                         urls.add(name + "$" + link);
                     }
                 }
-                String source = i < fList.size() ? fList.get(i) : "線路" + (i + 1);
-                logger("✅ [詳情] 線路 [" + source + "] 成功提取選集: " + urls.size() + " 個");
-                pLists.add(TextUtils.join("#", urls));
+
+                // 4. 只有當真的有集數時，才把線路和列表同步加入，徹底解決跳台問題
+                if (!urls.isEmpty()) {
+                    fList.add(sourceName);
+                    pLists.add(TextUtils.join("#", urls));
+                    logger("✅ [詳情] 線路對齊成功: [" + sourceName + "] 提取集數: " + urls.size());
+                }
             }
+
+            // 5. 統一塞入 vod 對象
+            vod.put("vod_play_from", TextUtils.join("$$$", fList));
             vod.put("vod_play_url", TextUtils.join("$$$", pLists));
+            // --- 🚀 替換結束 ---
+
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) { 
+            logger("🚨 [詳情崩潰]: " + e.getMessage());
+            return ""; 
+        }
     }
+
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
