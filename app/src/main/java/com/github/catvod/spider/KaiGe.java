@@ -287,108 +287,33 @@ try {
         } catch (Exception e) { return "{\"list\":[]}"; }
     }
 
-private String extract(Object root, String ruleStr) {
-    try {
-        if (TextUtils.isEmpty(ruleStr) || root == null) {
-            return "";
-        }
-
-        // 🚀 【新增邏輯】處理純源碼字符串（Step 2 的關鍵）
-        if (root instanceof String) {
-            String content = (String) root;
-            String workRule = ruleStr.replace("@", "&&");
-            
-            if (workRule.contains("&&")) {
-                String result = extractString(content, workRule);
-                // 💡 日誌：監控字符串截取結果
-                if (result.isEmpty()) {
-                    String start = workRule.split("&&")[0].trim();
-                    if (!content.contains(start)) {
-                        logger("⚠️ [提取失敗] 源碼中完全找不到起點關鍵詞: " + start);
-                    } else {
-                        logger("⚠️ [提取失敗] 找到起點但未找到匹配的終點，規則: " + workRule);
-                    }
-                } else {
-                    logger("✅ [提取成功] 規則: " + workRule + " -> 提取值: " + result);
-                }
-                return result;
-            } else {
-                // CSS 選擇器日誌
-                Document doc = Jsoup.parse(content);
-                Element el = doc.selectFirst(workRule);
-                String res = el != null ? el.text().trim() : "";
-                logger("🔍 [CSS提取] 規則: " + workRule + " -> 結果: " + res);
-                return res;
-            }
-        }
-
-        // 🚀 【原有邏輯】處理 Document / Element 對象
-        String workRule = ruleStr.replace("@", "&&");
-        if (workRule.contains("&&")) {
-            String[] parts = workRule.split("&&");
-            String selector = parts[0].trim();
-            String second = parts[1].trim();
-
-            Element target = (root instanceof Document)
-                    ? ((Document) root).selectFirst(selector)
-                    : ((Element) root).selectFirst(selector);
-
-            if (target != null) {
-                String res = "";
-                if (isAttr(second)) {
-                    res = target.attr(second).trim();
-                } else if (second.equals("text") || second.isEmpty()) {
-                    res = target.text().trim();
-                } else {
-                    res = extractString(target.outerHtml(), second);
-                }
-                logger("✅ [對象提取] 選擇器: " + selector + " -> 結果: " + res);
-                return res;
-            } else {
-                logger("❌ [對象提取] 找不到選擇器節點: " + selector);
-            }
-        }
-
-        if (root instanceof Element) {
-            Element el = ((Element) root).selectFirst(workRule);
-            return el != null ? el.text().trim() : "";
-        }
-    } catch (Exception e) {
-        logger("🚨 [提取崩潰] 錯誤原因: " + e.getMessage());
-    }
-    return "";
-}
-
-    private boolean isAttr(String s) {
-        String t = s.toLowerCase();
-        return t.equals("href") || t.equals("title") || t.equals("src") || t.startsWith("data-") || t.equals("value");
-    }
-
-    private String extractString(String content, String ruleStr) {
+    private String extract(Object root, String ruleStr) {
         try {
-            if (content == null || !ruleStr.contains("&&")) return "";
-            
-            String[] p = ruleStr.split("&&");
-            String start = p[0].trim();
-            String end = p[1].trim();
+            if (TextUtils.isEmpty(ruleStr) || root == null) return "";
 
-            // 🚀 核心調用
-            String result = com.github.catvod.utils.Util.cut(content, start, end);
-            
-            // 💡 凱哥專用調試日誌：如果提取是空的，我們就打印原因
-            if (result.isEmpty()) {
-                if (!content.contains(start)) {
-                    logger("⚠️ [匹配失敗] 源碼中找不到起點: " + start);
-                } else {
-                    logger("⚠️ [匹配失敗] 找到起點但找不到終點: " + end);
-                }
+            // 1. 把提取對象（不管是 Document、Element 還是 String）統一轉成字符串
+            String content = "";
+            if (root instanceof Document) {
+                content = ((Document) root).outerHtml();
+            } else if (root instanceof Element) {
+                content = ((Element) root).outerHtml();
+            } else {
+                content = root.toString();
             }
+
+            // 2. 核心：直接交給凱哥引擎處理，res.value 就支持了 &&, *, +, > [base64] 等功能
+            // siteUrl 用於 [full] 標籤自動補全域名
+            com.github.catvod.utils.KaiGeEngine.ExtractionResult res = com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
             
-            return result;
-            
-        } catch (Exception e) { 
-            logger("❌ [提取崩潰]: " + e.getMessage());
-            return ""; 
+            // 💡 調試日誌
+            if (!res.value.isEmpty()) {
+                logger("✅ [引擎提取] 成功 | 規則: " + ruleStr);
+            }
+
+            return res.value;
+        } catch (Exception e) {
+            logger("🚨 [提取出錯]: " + e.getMessage());
+            return "";
         }
     }
 
