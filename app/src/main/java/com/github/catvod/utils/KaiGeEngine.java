@@ -1,8 +1,11 @@
 package com.github.catvod.utils;
 
+import android.text.TextUtils;
+import android.util.Base64; 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.URLDecoder;
+import com.github.catvod.net.OkHttp; 
 
 /**
  * 凱哥標準規則引擎 1.0 (終極版)
