@@ -290,32 +290,48 @@ try {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
+            
+            String finalResult = "";
 
-            // 1. 診斷：Jsoup 傳過來的是什麼？
-            String type = root.getClass().getSimpleName();
-            String content = "";
-            if (root instanceof Document) {
-                content = ((Document) root).outerHtml();
-            } else if (root instanceof Element) {
-                content = ((Element) root).outerHtml();
-            } else {
-                content = root.toString();
+            // 🚀 凱哥分流 A 區：標準 CSS 提取 (規則含 @ 且不含 &&)
+            if (ruleStr.contains("@") && !ruleStr.contains("&&")) {
+                String[] parts = ruleStr.split("@");
+                String selector = parts[0].trim();
+                String attr = parts[1].trim();
+                
+                if (root instanceof Element) {
+                    Element el = (Element) root;
+                    Element target = selector.isEmpty() ? el : el.selectFirst(selector);
+                    if (target != null) {
+                        finalResult = target.attr(attr);
+                        // logger("📡 [Jsoup 原生] 規則: " + ruleStr + " | 提取成功: " + (finalResult.length() > 30 ? finalResult.substring(0,30) : finalResult));
+                    }
+                }
+            } 
+            
+            // 🚀 凱哥分流 B 區：全能切刀提取 (含 && 或不含 @ 的規則)
+            else {
+                String content = (root instanceof Document) ? ((Document) root).outerHtml() 
+                               : (root instanceof Element) ? ((Element) root).outerHtml() 
+                               : root.toString();
+
+                com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
+                    com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
+                
+                finalResult = res.value == null ? "" : res.value;
+                // logger("🔪 [凱哥切刀] 規則: " + ruleStr + " | 提取結果: " + (finalResult.length() > 30 ? finalResult.substring(0,30) : finalResult));
             }
 
-            // 🚀 [日誌 A]：看看 Jsoup 給出的源碼片段對不對
-            String preview = content.length() > 60 ? content.substring(0, 60) : content;
-            logger("🔍 [對象:" + type + "] | 規則: " + ruleStr + " | 源碼頭部: " + preview.replace("<", "&lt;"));
+            // 🚀 終極防崩潰攔截 (防止髒數據再次衝擊殼子)
+            if (finalResult.contains("=\"") || finalResult.contains("class=")) {
+                // logger("⚠️ [攔截] 檢測到非法屬性內容，已強行置空防止閃退");
+                return "";
+            }
 
-            // 2. 執行工具加工
-            com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
-                com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
-            
-            // 🚀 [日誌 B]：看看工具處理完吐出來的是什麼
-            logger("🎯 [引擎返回]: " + res.value);
+            return finalResult;
 
-            return res.value;
-        } catch (Throwable t) {
-            logger("🚨 [崩潰報錯]: " + t.getMessage());
+        } catch (Exception e) {
+            // logger("🚨 [提取異常]: " + e.getMessage());
             return "";
         }
     }
