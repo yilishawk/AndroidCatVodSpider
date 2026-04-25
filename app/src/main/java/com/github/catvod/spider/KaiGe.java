@@ -290,32 +290,33 @@ try {
     private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-
-            // 1. 把提取對象（不管是 Document、Element 還是 String）統一轉成字符串
-            String content = "";
-            if (root instanceof Document) {
-                content = ((Document) root).outerHtml();
-            } else if (root instanceof Element) {
-                content = ((Element) root).outerHtml();
-            } else {
-                content = root.toString();
-            }
-
-            // 2. 核心：直接交給凱哥引擎處理，res.value 就支持了 &&, *, +, > [base64] 等功能
-            // siteUrl 用於 [full] 標籤自動補全域名
-            com.github.catvod.utils.KaiGeEngine.ExtractionResult res = com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
             
-            // 💡 調試日誌
-            if (!res.value.isEmpty()) {
-                logger("✅ [引擎提取] 成功 | 規則: " + ruleStr);
+            // 1. 統一轉字符串
+            String content = (root instanceof Document) ? ((Document) root).outerHtml() 
+                           : (root instanceof Element) ? ((Element) root).outerHtml() 
+                           : root.toString();
+
+            // 🚀 【核心診斷日誌】
+            logger("🛠️ [引擎接收] 規則: " + ruleStr + " | 源碼長度: " + content.length());
+
+            // 2. 調用引擎
+            com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
+                com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
+            
+            // 🚀 【結果診斷日誌】
+            if (res.value.isEmpty()) {
+                logger("❌ [引擎無效] 規則未匹配到內容");
+            } else {
+                logger("✅ [引擎有效] 提取到: " + (res.value.length() > 50 ? res.value.substring(0, 50) : res.value));
             }
 
             return res.value;
         } catch (Exception e) {
-            logger("🚨 [提取出錯]: " + e.getMessage());
+            logger("🚨 [引擎崩潰]: " + e.getMessage());
             return "";
         }
     }
+
 
     private String replaceStepVars(String text) {
         String res = text;
