@@ -239,98 +239,91 @@ public class KaiGe extends Spider {
 
             logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
             
+            // 🚀 1. 初始化變量池與保底地址 (日誌起點)
             varPool.clear();
             varPool.put("play_id", url);
             varPool.put("final_url", url); 
-            JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
+
+            // 🚀 2. 實時檢查 JSON 讀取狀態
+            JSONObject play = rule.optJSONObject("play");
+            if (play == null) {
+                logger("⚠️ [診斷] JSON 規則中未發現 'play' 節點，將走保底嗅探");
+                play = new JSONObject();
+            }
+            
             JSONArray steps = play.optJSONArray("steps");
-
-            // --- 🚀 凱哥分流邏輯：沒 Step 直接回嗅探，有 Step 才跑解析 ---
             int stepCount = (steps != null ? steps.length() : 0);
-            boolean isStream = url.toLowerCase().contains(".m3u8") || url.toLowerCase().contains(".mp4") || url.toLowerCase().contains(".flv");
+            logger("🔍 [診斷] 識別到解析步驟 (Steps) 數量: " + stepCount);
 
-            // 🔥 第一關：如果完全沒有步驟，直接秒回（除非網址本身就是流媒體後綴）
-            if (stepCount == 0) {
-                int pValue = isStream ? 0 : 1;
-                JSONObject res = new JSONObject();
-                res.put("parse", pValue);
-                res.put("url", url);
-                res.put("header", getPlayHeaders(play)); 
-                String result = res.toString();
+            // 🚀 3. 解析執行區：有 Step 才跑，每一步都實時輸出結果
+            if (stepCount > 0) {
+                String currentHtml = "";
+                for (int i = 0; i < stepCount; i++) {
+                    JSONObject step = steps.getJSONObject(i);
+                    String method = step.optString("method", "get").toLowerCase();
+                    String stepUrl = replaceStepVars(step.optString("url", url));
+                    Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
-                logger("<br><span style='color:#e67e22;'>🏁 <b>[無步驟模式]</b></span>" +
-                        "<br><b>判定原因:</b> 規則無 Steps" +
-                        "<br><b>返回類型:</b> " + (pValue == 0 ? "直連" : "嗅探") +
-                        "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
-                return result;
-            } // <--- 這裡就是你說的原代碼最後那個括號，執行到這就 return 了
+                    logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
 
-            // --- 🚀 第二關：有 Step 的情況下，初始化並執行解析 ---
-            varPool.clear();
-            varPool.put("play_id", url);
-            varPool.put("final_url", url); // 初始值保底
-            // --- 🚀 第二關：執行解析步驟 ---
-            String currentHtml = "";
-            for (int i = 0; i < stepCount; i++) {
-                JSONObject step = steps.getJSONObject(i);
-                String method = step.optString("method", "get").toLowerCase();
-                String stepUrl = replaceStepVars(step.optString("url", url));
-                Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
+                    OkResult res = method.equals("post") 
+                        ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
+                        : OkHttp.get(stepUrl, null, headers);
 
-                logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
+                    currentHtml = res.getBody();
+                    logCheck("解析 Step " + (i+1), currentHtml, true);
 
-                OkResult res = method.equals("post") 
-                    ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
-                    : OkHttp.get(stepUrl, null, headers);
-
-                currentHtml = res.getBody();
-                logCheck("解析 Step " + (i+1), currentHtml, true);
-
-                if (step.has("vars")) {
-                    JSONObject vars = step.getJSONObject("vars");
-                    Iterator<String> keys = vars.keys();
-                    while (keys.hasNext()) {
-                        String k = keys.next();
-                        String vRule = vars.getString(k);
-                        try {
-                            // 🚀 凱哥修正：支持 JSON 路徑與切刀規則
-                            String val = vRule.startsWith("json:") 
-                                ? new JSONObject(currentHtml).optString(vRule.substring(5)) 
-                                : extract(currentHtml, vRule);
-                            
-                            varPool.put(k, val);
-                            
-                            // 💡 關鍵監控：打印提取長度，如果長度為 0 說明切刀規則不對
-                            logger("  └ 💡 提取變量 [<b>" + k + "</b>] 長度: " + (val == null ? 0 : val.length()));
-                            
-                            if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
-                        } catch (Exception e) {
-                            logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 失敗: " + e.getMessage());
+                    // 關鍵：變量提取監控
+                    if (step.has("vars")) {
+                        JSONObject vars = step.getJSONObject("vars");
+                        Iterator<String> keys = vars.keys();
+                        while (keys.hasNext()) {
+                            String k = keys.next();
+                            String vRule = vars.getString(k);
+                            try {
+                                String val = vRule.startsWith("json:") 
+                                    ? new JSONObject(currentHtml).optString(vRule.substring(5)) 
+                                    : extract(currentHtml, vRule);
+                                
+                                varPool.put(k, val);
+                                
+                                // 💡 診斷核心：實時噴出變量名和提取到的長度
+                                int vLen = (val == null ? 0 : val.length());
+                                logger("  └ 💡 提取變量 [<b>" + k + "</b>] 長度: " + vLen);
+                                
+                                // 如果提取到 final_url 或 url，則更新最終輸出地址
+                                if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
+                            } catch (Exception e) {
+                                logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 失敗: " + e.getMessage());
+                            }
                         }
-                    } // end while
-                } // end if vars
-            } // 🚨 凱哥補齊：確保 for 循環正確關閉，邏輯才能進入下一步
+                    } else {
+                        logger("  ⚠️ Step " + (i+1) + " 配置中未發現 'vars' 標籤");
+                    }
+                }
+            }
 
-            // --- 🚀 第三關：有 Step 執行後的判定邏輯 ---
+            // 🚀 4. 決策輸出：解析優先，嗅探保底
             String finalUrl = varPool.get("final_url");
-            if (finalUrl == null) finalUrl = url;
+            boolean hasChanged = !finalUrl.equals(url); // 地址是否被解析修改過
+            boolean isStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4") || finalUrl.toLowerCase().contains(".flv");
 
-            // 重新判定解析後的地址是否有視頻後綴
-            boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
-            int pValue = (finalHasStream || !finalUrl.equals(url)) ? 0 : 1;
+            // 判定：只要有 Step 且地址變了，或者是直連流，就走 parse: 0 (直連)
+            // 否則，只要沒有 Step 或者地址沒動，就走 parse: 1 (丟給殼子嗅探 ID)
+            int pValue = (stepCount > 0 && (hasChanged || isStream)) ? 0 : 1;
 
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
             resJson.put("url", finalUrl);
             resJson.put("header", getPlayHeaders(play));
+            
             String result = resJson.toString();
-
-            logger("<br><span style='color:#16a085;'>🏁 <b>[解析返回診斷]</b></span>" +
-                   "<br><b>判定原因:</b> Step 解析完成" +
-                   "<br><b>最終地址:</b> " + finalUrl +
-                   "<br><b>完整返回:</b> <code style='color:#2980b9;'>" + result + "</code>");
-
+            logger("<br><span style='color:#16a085;'>🏁 <b>[解析最終診斷]</b></span>: " + (pValue == 0 ? "直連(解析成功)" : "嗅探(保底模式)") + 
+                   "<br><b>最終 URL 長度:</b> " + finalUrl.length() + 
+                   "<br><b>返回 JSON:</b> <code>" + result + "</code>");
+            
             return result;
+
 
         } catch (Exception e) { 
             String finalId = id;
