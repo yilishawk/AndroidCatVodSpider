@@ -15,9 +15,10 @@ import java.net.URLEncoder;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import com.github.catvod.utils.Proxy;
 import com.github.catvod.utils.KaiGeEngine
 
-public class KaiGe extends Spider {
+public class KG extends Spider {
     private String siteUrl = ""; // 🚀 全局域名變量
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
