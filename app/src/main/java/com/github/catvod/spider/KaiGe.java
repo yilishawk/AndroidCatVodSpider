@@ -238,11 +238,14 @@ public class KaiGe extends Spider {
             }
 
             logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
-
             // 🚀 1. 初始化絕對保底
             varPool.clear();
             varPool.put("play_id", url);
             varPool.put("final_url", url);
+            // 預設凱哥的 4 個標准坑位
+            varPool.put("p1", ""); varPool.put("p2", ""); 
+            varPool.put("p3", ""); varPool.put("p4", "");
+            
             int pValue = 1; 
 
             JSONObject play = rule.optJSONObject("play");
@@ -252,18 +255,18 @@ public class KaiGe extends Spider {
 
             logger("🔍 [核心診斷] Step 總數: " + actualSteps + " | 引擎預設坑位: 4");
 
-            // 🚀 2. 獨立 Step 執行序列 (每個 Step 都是全透明模塊)
+            // 🚀 2. 獨立 Step 執行序列 (每個 Step 都是獨立模塊)
             for (int i = 0; i < 4; i++) {
                 if (i >= actualSteps) break;
 
-                // 🛡️ 模塊防火牆：單個 Step 失敗不影響整體回傳
                 try {
                     JSONObject step = steps.getJSONObject(i);
                     String method = step.optString("method", "get").toLowerCase();
+                    // 支持從 varPool 替換變量 (如 {p1})
                     String stepUrl = replaceStepVars(step.optString("url", url));
                     Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
-                    // --- 📢 核心日誌 1：請求頭監控 ---
+                    // --- 📢 日誌：請求監控 ---
                     logger("<br><b>[Step " + (i + 1) + " 請求中]</b>");
                     logger("🔗 網址: " + stepUrl);
                     logger("📤 請求頭: " + headers.toString());
@@ -274,9 +277,9 @@ public class KaiGe extends Spider {
 
                     String currentHtml = res.getBody();
                     
-                    // --- 📢 核心日誌 2：返回數據監控 ---
+                    // --- 📢 日誌：源碼監控 ---
                     if (TextUtils.isEmpty(currentHtml)) {
-                        logger("❌ [Step " + (i + 1) + "] 返回源碼為空，請檢查網絡或請求頭！");
+                        logger("❌ [Step " + (i + 1) + "] 返回源碼為空！");
                     } else {
                         int len = currentHtml.length();
                         String preview = (len > 500 ? currentHtml.substring(0, 500) : currentHtml)
@@ -284,7 +287,7 @@ public class KaiGe extends Spider {
                         logger("📥 [返回源碼] 長度: " + len + " | 預覽: " + preview + "...");
                     }
 
-                    // --- 📢 核心日誌 3：提取結果監控 ---
+                    // --- 📢 日誌：標准坑位提取 (p1-p4) ---
                     if (step.has("vars")) {
                         JSONObject vars = step.getJSONObject("vars");
                         Iterator<String> keys = vars.keys();
@@ -298,14 +301,17 @@ public class KaiGe extends Spider {
 
                                 if (val != null && !val.isEmpty()) {
                                     varPool.put(k, val);
-                                    // 強行噴出提取到的內容，不管長短
                                     logger("  └ ✅ 提取變量 [<b>" + k + "</b>] -> 內容: " + val);
-                                    if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
+
+                                    // 🚀 自動識別標准坑位：p1, p2, p3, p4, url, final_url, p_url
+                                    if (k.matches("p[1-4]") || k.contains("url")) {
+                                        varPool.put("final_url", val);
+                                    }
                                 } else {
-                                    logger("  └ ⚠️ 提取變量 [<b>" + k + "</b>] 失敗 | 規則: " + vRule);
+                                    logger("  └ ⚠️ 變量 [<b>" + k + "</b>] 提取失敗 | 規則: " + vRule);
                                 }
                             } catch (Exception eVar) {
-                                logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 崩潰: " + eVar.getMessage());
+                                logger("  └ ❌ 變量 [<b>" + k + "</b>] 崩潰: " + eVar.getMessage());
                             }
                         }
                     } else {
@@ -313,11 +319,11 @@ public class KaiGe extends Spider {
                     }
 
                 } catch (Exception eStep) {
-                    logger("🚨 <b>[Step " + (i + 1) + " 模塊崩潰]</b>: " + eStep.getMessage());
+                    logger("🚨 <b>[Step " + (i + 1) + " 致命錯誤]</b>: " + eStep.getMessage());
                 }
             }
 
-            // 🚀 3. 最終判定：只要有 Step 且地址變了，就嘗試直連 (0)
+            // 🚀 3. 最終判定：只要有解析動作且地址變了，就直連 (0)
             String finalUrl = varPool.get("final_url");
             if (finalUrl == null) finalUrl = url;
 
@@ -327,16 +333,20 @@ public class KaiGe extends Spider {
             if (actualSteps > 0 && (hasChanged || isStream)) {
                 pValue = 0;
             } else {
-                pValue = 1; // 無論如何，最後一定會給出 pValue
+                pValue = 1;
             }
 
+            // 構建推給殼子的最終 JSON
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
             resJson.put("url", finalUrl);
             resJson.put("header", getPlayHeaders(play));
             
             String result = resJson.toString();
-            logger("<br>🏁 <b>[解析結果]</b>: " + (pValue == 0 ? "直連" : "嗅探") + "<br>傳回數據: <code>" + result + "</code>");
+            
+            // 📢 凱哥重點：在日誌最後強行噴出最終返回給殼子的格式
+            logger("<br>🏁 <b>[解析最終回傳]</b>: " + (pValue == 0 ? "直連 (Parse 0)" : "嗅探 (Parse 1)"));
+            logger("📦 <b>推給殼子的 JSON:</b> <code>" + result + "</code>");
             
             return result;
 
