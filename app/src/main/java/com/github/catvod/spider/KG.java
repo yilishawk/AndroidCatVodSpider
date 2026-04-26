@@ -16,7 +16,7 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import com.github.catvod.utils.Proxy;
-import com.github.catvod.utils.KaiGeEngine
+import com.github.catvod.utils.KaiGeEngine;
 
 public class KG extends Spider {
     private String siteUrl = ""; // 🚀 全局域名變量
