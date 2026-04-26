@@ -7,9 +7,8 @@ import java.util.regex.Pattern;
 import java.net.URLDecoder;
 
 /**
- * 凱哥標準規則引擎 1.0 (正式版)
- * 修復：a@href 導致的屬性提取錯位及閃退問題
- * 功能：支持 &&, @, *, +, [n], [包含], [full], >, [base64]
+ * 凱哥標準規則引擎 1.0 (正式修正版)
+ * 修復：編譯錯誤及漏掉的括號、內部類、自動補全方法
  */
 public class KaiGeEngine {
 
@@ -34,7 +33,7 @@ public class KaiGeEngine {
             if (tag.startsWith("[包含:")) result.includeKey = tag.substring(4, tag.length() - 1);
         }
 
-        // 2. 處理核心邏輯 (支持管道符 >)
+        // 2. 處理核心邏輯
         String finalValue = "";
         if (coreLogic.contains(" > ")) {
             String[] steps = coreLogic.split(" > ");
@@ -71,18 +70,15 @@ public class KaiGeEngine {
     }
 
     private static String executeSingleRule(String html, String rule) {
-        // 🚀 核心改進：精確處理 @ 屬性提取，不再轉為 &&
         if (rule.contains("@")) {
             String[] parts = rule.split("@");
-            String attrName = parts[parts.length - 1].trim(); // 拿到 href 或 data-src
-            // 精確匹配屬性值，防止拿到 class
+            String attrName = parts[parts.length - 1].trim(); 
             Pattern p = Pattern.compile(attrName + "\\s*=\\s*[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE);
             Matcher m = p.matcher(html);
             if (m.find()) return m.group(1).trim();
             return ""; 
         }
 
-        // 傳統 && 切分邏輯
         if (rule.contains("&&")) {
             String[] parts = rule.split("&&");
             String start = parts[0].trim();
@@ -126,4 +122,25 @@ public class KaiGeEngine {
                 if (e > -1) return html.substring(s, e).trim();
             }
         } catch (Exception e) { return ""; }
-      
+        return "";
+    }
+
+    private static String autoFullUrl(String path, String host) {
+        if (isEmpty(path) || path.startsWith("http")) return path;
+        if (isEmpty(host)) return path;
+        if (path.startsWith("//")) return "https:" + path;
+        if (path.startsWith("/")) {
+            if (host.endsWith("/")) return host + path.substring(1);
+            return host + path;
+        }
+        return host + (host.endsWith("/") ? "" : "/") + path;
+    }
+
+    // 🚀 核心內部類，確保 KG.java 能讀到結果
+    public static class ExtractionResult {
+        public String value = "";
+        public boolean shouldFull = false;
+        public int index = 0;
+        public String includeKey = "";
+    }
+}
