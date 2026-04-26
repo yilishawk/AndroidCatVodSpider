@@ -228,157 +228,133 @@ public class KaiGe extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+        // 🚀 1. 預置原始地址，防止任何意外導致變量丟失
+        String originalUrl = id.startsWith("/") && !id.startsWith("//") ? rule.optString("host") + id : id;
+        
         try {
-            // ✅ 從這裡開始粘貼
-            String url = id;
-            if (url.startsWith("/") && !url.startsWith("//")) {
-                url = this.siteUrl + url;
-            } else if (!url.startsWith("http")) {
-                url = this.siteUrl + (this.siteUrl.endsWith("/") ? "" : "/") + id;
+            logger("<br>🎬 <b>[播放解析啟動]</b>: " + originalUrl);
+
+            // 🚀 2. 初始化變量池 (清空舊數據，放入起點地址)
+            varPool.clear();
+            varPool.put("play_id", originalUrl);
+            varPool.put("final_url", originalUrl); 
+
+            JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
+            JSONArray steps = play.optJSONArray("steps");
+            int stepCount = (steps != null ? steps.length() : 0);
+
+            // 🔥 核心保護：如果沒寫 Step，直接按原始邏輯走 (是流媒體就直連，不是就嗅探)
+            if (stepCount == 0) {
+                boolean isStream = originalUrl.toLowerCase().contains(".m3u8") || originalUrl.toLowerCase().contains(".mp4");
+                int pValue = isStream ? 0 : 1;
+                JSONObject res = new JSONObject();
+                res.put("parse", pValue);
+                res.put("url", originalUrl);
+                res.put("header", getPlayHeaders(play));
+                String result = res.toString();
+                logger("<br>🏁 <b>[無步驟模式]</b> 返回: " + result);
+                return result;
             }
 
-            logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
-            // 🚀 1. 初始化絕對保底
-            varPool.clear();
-            varPool.put("play_id", url);
-            varPool.put("final_url", url);
-            // 預設凱哥的 4 個標准坑位
-            varPool.put("p1", ""); varPool.put("p2", ""); 
-            varPool.put("p3", ""); varPool.put("p4", "");
-            
-            int pValue = 1; 
+            // 🚀 3. 核心 Step 循環：吸取老代碼精髓，實現「自動接力」
+            for (int i = 0; i < stepCount; i++) {
+                if (i >= 5) break; // 安全閥：最多 5 步
 
-            JSONObject play = rule.optJSONObject("play");
-            if (play == null) play = new JSONObject();
-            JSONArray steps = play.optJSONArray("steps");
-            int actualSteps = (steps != null) ? steps.length() : 0;
+                JSONObject step = steps.getJSONObject(i);
+                String method = step.optString("method", "get").toLowerCase();
+                
+                // 📢 【接力點】：下一步請求的網址，優先從池子裡拿「上一步切出來的最新地址」
+                // 如果 JSON 裡沒寫新 url，它就會拿 final_url 去請求
+                String lastResult = varPool.get("final_url");
+                String stepUrl = replaceStepVars(step.optString("url", lastResult));
+                
+                Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
-            logger("🔍 [核心診斷] Step 總數: " + actualSteps + " | 引擎預設坑位: 4");
+                logger("<b>Step " + (i + 1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
 
-            // 🚀 2. 獨立 Step 執行序列 (每個 Step 都是獨立模塊)
-            for (int i = 0; i < 4; i++) {
-                if (i >= actualSteps) break;
+                OkResult res = method.equals("post") 
+                    ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
+                    : OkHttp.get(stepUrl, null, headers);
 
-                try {
-                    JSONObject step = steps.getJSONObject(i);
-                    String method = step.optString("method", "get").toLowerCase();
-                    // 支持從 varPool 替換變量 (如 {p1})
-                    String stepUrl = replaceStepVars(step.optString("url", url));
-                    Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
+                String html = res.getBody();
+                logCheck("解析 Step " + (i + 1), html, true);
 
-                    // --- 📢 日誌：請求監控 ---
-                    logger("<br><b>[Step " + (i + 1) + " 請求中]</b>");
-                    logger("🔗 網址: " + stepUrl);
-                    logger("📤 請求頭: " + headers.toString());
+                // --- 變量提取與池子更新 ---
+                if (step.has("vars")) {
+                    JSONObject vars = step.getJSONObject("vars");
+                    Iterator<String> keys = vars.keys();
+                    while (keys.hasNext()) {
+                        String k = keys.next();
+                        String vRule = vars.getString(k);
+                        
+                        // 執行提取 (支持 JSON 和 字符串截取)
+                        String val = vRule.startsWith("json:") 
+                            ? new JSONObject(html).optString(vRule.substring(5)) 
+                            : extract(html, vRule);
 
-                    OkResult res = method.equals("post") 
-                        ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
-                        : OkHttp.get(stepUrl, null, headers);
-
-                    String currentHtml = res.getBody();
-                    
-                    // --- 📢 日誌：源碼監控 ---
-                    if (TextUtils.isEmpty(currentHtml)) {
-                        logger("❌ [Step " + (i + 1) + "] 返回源碼為空！");
-                    } else {
-                        int len = currentHtml.length();
-                        String preview = (len > 500 ? currentHtml.substring(0, 500) : currentHtml)
-                                        .replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ");
-                        logger("📥 [返回源碼] 長度: " + len + " | 預覽: " + preview + "...");
-                    }
-
-                    // --- 📢 日誌：標准坑位提取 (p1-p4) ---
-                    if (step.has("vars")) {
-                        JSONObject vars = step.getJSONObject("vars");
-                        Iterator<String> keys = vars.keys();
-                        while (keys.hasNext()) {
-                            String k = keys.next();
-                            String vRule = vars.getString(k);
-                            try {
-                                String val = vRule.startsWith("json:") 
-                                    ? new JSONObject(currentHtml).optString(vRule.substring(5)) 
-                                    : extract(currentHtml, vRule);
-
-                                if (val != null && !val.isEmpty()) {
-                                    varPool.put(k, val);
-                                    logger("  └ ✅ 提取變量 [<b>" + k + "</b>] -> 內容: " + val);
-
-                                    // 🚀 自動識別標准坑位：p1, p2, p3, p4, url, final_url, p_url
-                                    if (k.matches("p[1-4]") || k.contains("url")) {
-                                        varPool.put("final_url", val);
-                                    }
-                                } else {
-                                    logger("  └ ⚠️ 變量 [<b>" + k + "</b>] 提取失敗 | 規則: " + vRule);
-                                }
-                            } catch (Exception eVar) {
-                                logger("  └ ❌ 變量 [<b>" + k + "</b>] 崩潰: " + eVar.getMessage());
+                        if (!TextUtils.isEmpty(val)) {
+                            varPool.put(k, val);
+                            logger("  └ 💡 提取 [<b>" + k + "</b>] = " + val);
+                            
+                            // 🚀 【接力開關】：只要變量名包含 url 或符合 p1-p4，就認定它是下一步的目標
+                            if (k.contains("url") || k.matches("p[1-4]")) {
+                                varPool.put("final_url", val);
+                                logger("  └ 🔄 <b>接力棒更新</b> -> 準備交給下一步");
                             }
                         }
-                    } else {
-                        logger("  ⚠️ Step " + (i + 1) + " 未配置 vars 提取規則");
                     }
-
-                } catch (Exception eStep) {
-                    logger("🚨 <b>[Step " + (i + 1) + " 致命錯誤]</b>: " + eStep.getMessage());
                 }
             }
 
-            // 🚀 3. 最終判定：只要有解析動作且地址變了，就直連 (0)
+            // 🚀 4. 最終判定：不管 Step 成敗，最後必須噴出 JSON
             String finalUrl = varPool.get("final_url");
-            if (finalUrl == null) finalUrl = url;
+            
+            // 判定邏輯：只要地址變了，就給 0 (直連)
+            boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
+            int pValue = (finalHasStream || !finalUrl.equals(originalUrl)) ? 0 : 1;
 
-            boolean hasChanged = !finalUrl.equals(url);
-            boolean isStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4") || finalUrl.toLowerCase().contains(".flv");
-
-            if (actualSteps > 0 && (hasChanged || isStream)) {
-                pValue = 0;
-            } else {
-                pValue = 1;
-            }
-
-            // 構建推給殼子的最終 JSON
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
             resJson.put("url", finalUrl);
             resJson.put("header", getPlayHeaders(play));
             
             String result = resJson.toString();
-            
-            // 📢 凱哥重點：在日誌最後強行噴出最終返回給殼子的格式
-            logger("<br>🏁 <b>[解析最終回傳]</b>: " + (pValue == 0 ? "直連 (Parse 0)" : "嗅探 (Parse 1)"));
-            logger("📦 <b>推給殼子的 JSON:</b> <code>" + result + "</code>");
-            
+            logger("<br>🏁 <b>[解析終點]</b> 最終推給殼子的 JSON: <code>" + result + "</code>");
             return result;
 
-
-        } catch (Exception e) { 
-            String finalId = id;
-            if (id != null && !id.startsWith("http")) {
-                String baseUrl = this.siteUrl;
-                if (baseUrl != null && !baseUrl.isEmpty()) {
-                    if (baseUrl.endsWith("/")) baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-                    finalId = id.startsWith("/") ? (baseUrl + id) : (baseUrl + "/" + id);
-                }
-            }
-            String errorResult = "{\"parse\":1,\"url\":\"" + finalId + "\",\"header\":{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36\",\"Referer\":\"" + this.siteUrl + "/\",\"Origin\":\"" + this.siteUrl + "\"}}";
-            logger("<br><span style='color:#e74c3c;'>🚨 <b>[解析異常拋給殼子]</b></span><br>原因: " + e.getMessage() + "<br>返回: <code>" + errorResult + "</code>");
-            return errorResult;
-        }
-    }
-
-    // 🚀 在類末尾補上這個提取播放頭的輔助方法，保證代碼簡潔
-    private JSONObject getPlayHeaders(JSONObject play) {
-        JSONObject headJson = play.optJSONObject("play_headers");
-        if (headJson == null) {
-            headJson = new JSONObject();
+        } catch (Exception e) {
+            // 🚨 異常保底：萬一崩潰了，也得給個能用的 JSON
+            logger("🚨 [解析中斷]: " + e.getMessage());
+            JSONObject err = new JSONObject();
             try {
-                headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
-                headJson.put("Referer", this.siteUrl + "/");
-                headJson.put("Origin", this.siteUrl);
-            } catch (Exception e) {}
+                err.put("parse", 1);
+                err.put("url", originalUrl);
+                err.put("header", getPlayHeaders(new JSONObject()));
+            } catch (Exception ex) {}
+            return err.toString();
         }
-        return headJson;
     }
+
+    // 🚀 配套的 Header 獲取方法（如果類末尾沒有就補上）
+private JSONObject getPlayHeaders(JSONObject play) {
+    // 🚀 從 JSON 規則中嘗試獲取自定義播放頭
+    JSONObject headJson = play.optJSONObject("play_headers");
+
+    // 🚀 如果規則沒寫，則使用凱哥強效保底頭部
+    if (headJson == null) {
+        headJson = new JSONObject();
+        try {
+            headJson.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+            headJson.put("Referer", this.siteUrl + "/");
+            headJson.put("Origin", this.siteUrl); // 🔥 補強：解決部分站點 403 跨域問題
+        } catch (Exception e) {
+            // 靜默處理，確保不崩潰
+        }
+    }
+    return headJson;
+}
+
+
 
     private String parseList(String html, String pg, boolean isSearch) {
         try {
