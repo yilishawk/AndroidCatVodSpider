@@ -15,7 +15,6 @@ import java.net.URLEncoder;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import com.github.catvod.utils.KaiGeEngine;
 
 public class KaiGe extends Spider {
     private String siteUrl = ""; // 🚀 全局域名變量
@@ -410,8 +409,8 @@ private JSONObject getPlayHeaders(JSONObject play) {
                                : (root instanceof Element) ? ((Element) root).outerHtml() 
                                : root.toString();
 
-                com.github.catvod.utils.KaiGeEngine.ExtractionResult res = 
-                    com.github.catvod.utils.KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
+                KaiGeEngine.ExtractionResult res = 
+                    KaiGeEngine.doExtract(content, ruleStr, this.siteUrl);
                 
                 finalResult = (res.value == null) ? "" : res.value;
                 // logger("🔪 [工具 Java 模式] 規則: " + ruleStr + " | 結果: " + finalResult);
