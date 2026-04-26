@@ -269,8 +269,8 @@ public class KaiGe extends Spider {
             varPool.clear();
             varPool.put("play_id", url);
             varPool.put("final_url", url); // 初始值保底
+            // --- 🚀 第二關：執行解析步驟 ---
             String currentHtml = "";
-
             for (int i = 0; i < stepCount; i++) {
                 JSONObject step = steps.getJSONObject(i);
                 String method = step.optString("method", "get").toLowerCase();
@@ -278,11 +278,11 @@ public class KaiGe extends Spider {
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
                 logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
-                
+
                 OkResult res = method.equals("post") 
                     ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
                     : OkHttp.get(stepUrl, null, headers);
-                
+
                 currentHtml = res.getBody();
                 logCheck("解析 Step " + (i+1), currentHtml, true);
 
@@ -292,14 +292,24 @@ public class KaiGe extends Spider {
                     while (keys.hasNext()) {
                         String k = keys.next();
                         String vRule = vars.getString(k);
-                        String val = vRule.startsWith("json:") ? new JSONObject(currentHtml).optString(vRule.substring(5)) : extract(currentHtml, vRule);
-                        varPool.put(k, val);
-                        // 🚀 同步更新 final_url，確保後面的邏輯能拿到解析後的地址
-                        if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
-                        logger("  └ 💡 提取變量 [<b>" + k + "</b>] = " + val);
-                    }
-                }
-            }
+                        try {
+                            // 🚀 凱哥修正：支持 JSON 路徑與切刀規則
+                            String val = vRule.startsWith("json:") 
+                                ? new JSONObject(currentHtml).optString(vRule.substring(5)) 
+                                : extract(currentHtml, vRule);
+                            
+                            varPool.put(k, val);
+                            
+                            // 💡 關鍵監控：打印提取長度，如果長度為 0 說明切刀規則不對
+                            logger("  └ 💡 提取變量 [<b>" + k + "</b>] 長度: " + (val == null ? 0 : val.length()));
+                            
+                            if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
+                        } catch (Exception e) {
+                            logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 失敗: " + e.getMessage());
+                        }
+                    } // end while
+                } // end if vars
+            } // 🚨 凱哥補齊：確保 for 循環正確關閉，邏輯才能進入下一步
 
             // --- 🚀 第三關：有 Step 執行後的判定邏輯 ---
             String finalUrl = varPool.get("final_url");
@@ -410,12 +420,6 @@ public class KaiGe extends Spider {
                 
                 finalResult = (res.value == null) ? "" : res.value;
                 // logger("🔪 [工具 Java 模式] 規則: " + ruleStr + " | 結果: " + finalResult);
-            }
-
-            // 🛑 最後一道防線：過濾掉導致閃退的 HTML 殘片髒數據
-            if (finalResult.contains("=\"") || finalResult.contains("class=")) {
-                // logger("⚠️ [攔截] 發現非法 HTML 屬性內容，已置空防止閃退");
-                return "";
             }
 
             return finalResult;
