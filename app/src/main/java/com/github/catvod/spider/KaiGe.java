@@ -238,42 +238,53 @@ public class KaiGe extends Spider {
             }
 
             logger("<br>🎬 <b>[播放解析啟動]</b>: " + url);
-            
-            // 🚀 1. 初始化變量池與保底地址 (日誌起點)
+
+            // 🚀 1. 初始化絕對保底
             varPool.clear();
             varPool.put("play_id", url);
-            varPool.put("final_url", url); 
+            varPool.put("final_url", url);
+            int pValue = 1; 
 
-            // 🚀 2. 實時檢查 JSON 讀取狀態
             JSONObject play = rule.optJSONObject("play");
-            if (play == null) {
-                logger("⚠️ [診斷] JSON 規則中未發現 'play' 節點，將走保底嗅探");
-                play = new JSONObject();
-            }
-            
+            if (play == null) play = new JSONObject();
             JSONArray steps = play.optJSONArray("steps");
-            int stepCount = (steps != null ? steps.length() : 0);
-            logger("🔍 [診斷] 識別到解析步驟 (Steps) 數量: " + stepCount);
+            int actualSteps = (steps != null) ? steps.length() : 0;
 
-            // 🚀 3. 解析執行區：有 Step 才跑，每一步都實時輸出結果
-            if (stepCount > 0) {
-                String currentHtml = "";
-                for (int i = 0; i < stepCount; i++) {
+            logger("🔍 [核心診斷] Step 總數: " + actualSteps + " | 引擎預設坑位: 4");
+
+            // 🚀 2. 獨立 Step 執行序列 (每個 Step 都是全透明模塊)
+            for (int i = 0; i < 4; i++) {
+                if (i >= actualSteps) break;
+
+                // 🛡️ 模塊防火牆：單個 Step 失敗不影響整體回傳
+                try {
                     JSONObject step = steps.getJSONObject(i);
                     String method = step.optString("method", "get").toLowerCase();
                     String stepUrl = replaceStepVars(step.optString("url", url));
                     Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
 
-                    logger("<b>Step " + (i+1) + "</b> (" + method.toUpperCase() + "): " + stepUrl);
+                    // --- 📢 核心日誌 1：請求頭監控 ---
+                    logger("<br><b>[Step " + (i + 1) + " 請求中]</b>");
+                    logger("🔗 網址: " + stepUrl);
+                    logger("📤 請求頭: " + headers.toString());
 
                     OkResult res = method.equals("post") 
                         ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
                         : OkHttp.get(stepUrl, null, headers);
 
-                    currentHtml = res.getBody();
-                    logCheck("解析 Step " + (i+1), currentHtml, true);
+                    String currentHtml = res.getBody();
+                    
+                    // --- 📢 核心日誌 2：返回數據監控 ---
+                    if (TextUtils.isEmpty(currentHtml)) {
+                        logger("❌ [Step " + (i + 1) + "] 返回源碼為空，請檢查網絡或請求頭！");
+                    } else {
+                        int len = currentHtml.length();
+                        String preview = (len > 500 ? currentHtml.substring(0, 500) : currentHtml)
+                                        .replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ");
+                        logger("📥 [返回源碼] 長度: " + len + " | 預覽: " + preview + "...");
+                    }
 
-                    // 關鍵：變量提取監控
+                    // --- 📢 核心日誌 3：提取結果監控 ---
                     if (step.has("vars")) {
                         JSONObject vars = step.getJSONObject("vars");
                         Iterator<String> keys = vars.keys();
@@ -284,33 +295,40 @@ public class KaiGe extends Spider {
                                 String val = vRule.startsWith("json:") 
                                     ? new JSONObject(currentHtml).optString(vRule.substring(5)) 
                                     : extract(currentHtml, vRule);
-                                
-                                varPool.put(k, val);
-                                
-                                // 💡 診斷核心：實時噴出變量名和提取到的長度
-                                int vLen = (val == null ? 0 : val.length());
-                                logger("  └ 💡 提取變量 [<b>" + k + "</b>] 長度: " + vLen);
-                                
-                                // 如果提取到 final_url 或 url，則更新最終輸出地址
-                                if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
-                            } catch (Exception e) {
-                                logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 失敗: " + e.getMessage());
+
+                                if (val != null && !val.isEmpty()) {
+                                    varPool.put(k, val);
+                                    // 強行噴出提取到的內容，不管長短
+                                    logger("  └ ✅ 提取變量 [<b>" + k + "</b>] -> 內容: " + val);
+                                    if (k.equals("final_url") || k.equals("url")) varPool.put("final_url", val);
+                                } else {
+                                    logger("  └ ⚠️ 提取變量 [<b>" + k + "</b>] 失敗 | 規則: " + vRule);
+                                }
+                            } catch (Exception eVar) {
+                                logger("  └ ❌ 提取變量 [<b>" + k + "</b>] 崩潰: " + eVar.getMessage());
                             }
                         }
                     } else {
-                        logger("  ⚠️ Step " + (i+1) + " 配置中未發現 'vars' 標籤");
+                        logger("  ⚠️ Step " + (i + 1) + " 未配置 vars 提取規則");
                     }
+
+                } catch (Exception eStep) {
+                    logger("🚨 <b>[Step " + (i + 1) + " 模塊崩潰]</b>: " + eStep.getMessage());
                 }
             }
 
-            // 🚀 4. 決策輸出：解析優先，嗅探保底
+            // 🚀 3. 最終判定：只要有 Step 且地址變了，就嘗試直連 (0)
             String finalUrl = varPool.get("final_url");
-            boolean hasChanged = !finalUrl.equals(url); // 地址是否被解析修改過
+            if (finalUrl == null) finalUrl = url;
+
+            boolean hasChanged = !finalUrl.equals(url);
             boolean isStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4") || finalUrl.toLowerCase().contains(".flv");
 
-            // 判定：只要有 Step 且地址變了，或者是直連流，就走 parse: 0 (直連)
-            // 否則，只要沒有 Step 或者地址沒動，就走 parse: 1 (丟給殼子嗅探 ID)
-            int pValue = (stepCount > 0 && (hasChanged || isStream)) ? 0 : 1;
+            if (actualSteps > 0 && (hasChanged || isStream)) {
+                pValue = 0;
+            } else {
+                pValue = 1; // 無論如何，最後一定會給出 pValue
+            }
 
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
@@ -318,9 +336,7 @@ public class KaiGe extends Spider {
             resJson.put("header", getPlayHeaders(play));
             
             String result = resJson.toString();
-            logger("<br><span style='color:#16a085;'>🏁 <b>[解析最終診斷]</b></span>: " + (pValue == 0 ? "直連(解析成功)" : "嗅探(保底模式)") + 
-                   "<br><b>最終 URL 長度:</b> " + finalUrl.length() + 
-                   "<br><b>返回 JSON:</b> <code>" + result + "</code>");
+            logger("<br>🏁 <b>[解析結果]</b>: " + (pValue == 0 ? "直連" : "嗅探") + "<br>傳回數據: <code>" + result + "</code>");
             
             return result;
 
