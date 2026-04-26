@@ -127,55 +127,96 @@ public class KaiGe extends Spider {
             vod.put("vod_director", extract(doc, rule.optString("dt_director")));
             vod.put("vod_content", extract(doc, rule.optString("dt_content")));
             
-            // --- 🚀 凱哥同步對齊保險版：從這裡開始替換 ---
-            Elements froms = doc.select(rule.optString("dt_from"));
-            Elements lists = doc.select(rule.optString("dt_list"));
+            // --- 🚀 凱哥全能修復：【第一部分】線路與列表精準配對 ---
+            String fromRule = rule.optString("dt_from");
+            String listRule = rule.optString("dt_list");
+            logger("🔍 [詳情診斷] 標題規則: " + fromRule + " | 列表規則: " + listRule);
+
+            // 1. 兼容 [包含] 語法，提取真正的 CSS 標籤部分
+            String cssFrom = fromRule;
+            if (fromRule.contains("&&")) {
+                String[] parts = fromRule.split("&&");
+                // 💡 如果第一段是 [包含]，我們就取第二段作為 CSS 選擇器，否則取第一段
+                cssFrom = parts[0].contains("[包含:") ? (parts.length > 1 ? parts[1] : "h3") : parts[0];
+            }
+
             
+            Elements fromElements = doc.select(cssFrom);
+            logger("🔍 [詳情診斷] 找到標題數量: " + fromElements.size());
+
             List<String> fList = new ArrayList<>();
             List<String> pLists = new ArrayList<>();
 
-            String listNameRule = rule.optString("dt_list_name", "a");
-            String listUrlRule = rule.optString("dt_list_url", "a@href");
+            for (Element from : fromElements) {
+                String sourceName = from.text().trim();
+                if (TextUtils.isEmpty(sourceName)) sourceName = "播放線路 " + (fromElements.indexOf(from) + 1);
 
-            // 核心：以「列表組」的數量為準進行循環，確保線路與集數一一對應
-            for (int i = 0; i < lists.size(); i++) {
-                String sourceName = "";
-
-                // 1. 嘗試從 JSON 規則中獲取線路名
-                if (i < froms.size()) {
-                    sourceName = froms.get(i).text().trim();
-                }
-
-                // 2. 💡 凱哥的核心邏輯：如果抓不到名字，自動生成“線路1, 2, 3”
-                if (TextUtils.isEmpty(sourceName) || sourceName.length() < 2 || sourceName.contains("列表")) {
-                    sourceName = "播放線路 " + (i + 1);
-                }
-
-                // 3. 提取當前線路下的選集
-                Element group = lists.get(i);
-                Elements items = group.select("a"); 
-                List<String> urls = new ArrayList<>();
-                
-                for (Element item : items) {
-                    String name = extract(item, listNameRule);
-                    String link = extract(item, listUrlRule);
-                    if (!TextUtils.isEmpty(name) && !TextUtils.isEmpty(link)) {
-                        urls.add(name + "$" + link);
-                        if (urls.size() == 1) logger("   🔗 [選集預覽]: " + name + " -> " + link);
+                // 💡 凱哥雷達：精準定位標題附近的列表
+                Element nextList = null;
+                Element p = from.parent(); 
+                while (p != null && nextList == null) {
+                    Element sibling = p.nextElementSibling();
+                    while (sibling != null) {
+                        nextList = sibling.selectFirst(listRule);
+                        if (nextList != null) break;
+                        sibling = sibling.nextElementSibling();
                     }
+                    if (nextList != null) break;
+                    p = p.parent();
+                    if (p != null && p.tagName().equals("body")) break;
                 }
 
-                // 4. 只有當真的有集數時，才把線路和列表同步加入，徹底解決跳台問題
-                if (!urls.isEmpty()) {
+                if (nextList == null) {
+                    Elements allLists = doc.select(listRule);
+                    int idx = fromElements.indexOf(from);
+                    if (idx < allLists.size()) nextList = allLists.get(idx);
+                }
+
+                if (nextList != null) {
                     fList.add(sourceName);
-                    pLists.add(TextUtils.join("#", urls));
-                    logger("✅ [詳情] 線路對齊成功: [" + sourceName + "] 提取集數: " + urls.size());
+                    pLists.add(nextList.outerHtml()); 
+                    logger("✅ [成功] 匹配到線路: [" + sourceName + "]");
+                } else {
+                    logger("❌ [失敗] 標題 [" + sourceName + "] 附近找不到符合規則的列表");
                 }
             }
 
-            // 5. 統一塞入 vod 對象
+            // --- 🚀 凱哥全能修復：【第二部分】選集解析與日誌監控 ---
+            List<String> playList = new ArrayList<>();
+            logger("🔍 [詳情診斷] 準備解析播放列表，總線路數: " + pLists.size());
+
+            for (int i = 0; i < pLists.size(); i++) {
+                List<String> urls = new ArrayList<>();
+                Document listDoc = Jsoup.parse(pLists.get(i));
+                
+                String nameRule = rule.optString("dt_list_name");
+                String urlRule = rule.optString("dt_list_url");
+                
+                Elements aElements = listDoc.select("a");
+                // 💡 這裡是關鍵日誌點
+                logger("   📂 線路 " + (i+1) + " [" + fList.get(i) + "] 發現 <a> 標籤數量: " + aElements.size());
+
+                for (Element a : aElements) {
+                    String pName = extract(a, nameRule); 
+                    String pUrl = extract(a, urlRule);
+                    
+                    if (!pName.isEmpty() && !pUrl.isEmpty()) {
+                        urls.add(pName + "$" + pUrl);
+                    }
+                }
+                
+                if (urls.size() > 0) {
+                    logger("   🎉 [成功] 提取到有效選集: " + urls.size() + " 個 (首集: " + urls.get(0).split("\\$")[0] + ")");
+                } else {
+                    logger("   ⚠️ [警告] 線路 " + (i+1) + " 沒能提取出有效選集，請檢查 dt_list_name/url 規則");
+                }
+                playList.add(TextUtils.join("#", urls));
+            }
+
+            // 最後存入對象
             vod.put("vod_play_from", TextUtils.join("$$$", fList));
-            vod.put("vod_play_url", TextUtils.join("$$$", pLists));
+            vod.put("vod_play_url", TextUtils.join("$$$", playList));
+
             // --- 🚀 替換結束 ---
 
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
