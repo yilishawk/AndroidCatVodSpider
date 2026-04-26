@@ -13,7 +13,6 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.*;
-import com.github.catvod.utils.Proxy;
 import com.github.catvod.utils.KaiGeEngine;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
