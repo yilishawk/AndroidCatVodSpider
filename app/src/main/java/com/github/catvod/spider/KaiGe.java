@@ -305,10 +305,10 @@ public class KaiGe extends Spider {
                 }
             }
 
-            // 🚀 4. 最終判定：不管 Step 成敗，最後必須噴出 JSON
+            // --- 🚀 正常終點 ---
             String finalUrl = varPool.get("final_url");
-            
-            // 判定邏輯：只要地址變了，就給 0 (直連)
+
+            // 判定邏輯：只要地址變了（說明 Step 跑通了），或者包含流媒體格式，就給 0 (直連)
             boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
             int pValue = (finalHasStream || !finalUrl.equals(originalUrl)) ? 0 : 1;
 
@@ -316,23 +316,40 @@ public class KaiGe extends Spider {
             resJson.put("parse", pValue);
             resJson.put("url", finalUrl);
             resJson.put("header", getPlayHeaders(play));
-            
+
             String result = resJson.toString();
-            logger("<br>🏁 <b>[解析終點]</b> 最終推給殼子的 JSON: <code>" + result + "</code>");
+            
+            // ✅ 正常完成時，用綠色顯示最終 JSON，讓凱哥一眼看到結果
+            logger("<br>🏁 <b>[解析成功]</b> 推送 JSON:");
+            logger("<code style='color:#00FF00;'>" + result + "</code>");
+            
             return result;
 
         } catch (Exception e) {
-            // 🚨 異常保底：萬一崩潰了，也得給個能用的 JSON
-            logger("🚨 [解析中斷]: " + e.getMessage());
+            // --- 🚨 異常保底 ---
+            // 這裡先把錯誤原因噴出來（紅色），方便凱哥查是哪一行崩了
+            logger("<br>🚨 <b>[解析異常中斷]</b>: <span style='color:red;'>" + e.getMessage() + "</span>");
+            
             JSONObject err = new JSONObject();
             try {
+                // 崩潰時強制 parse: 1，讓殼子自己去嗅探原始地址
                 err.put("parse", 1);
                 err.put("url", originalUrl);
                 err.put("header", getPlayHeaders(new JSONObject()));
-            } catch (Exception ex) {}
-            return err.toString();
+            } catch (Exception ex) {
+                // 這裡基本不會崩，除非 originalUrl 也是空的
+            }
+            
+            String errResult = err.toString();
+            
+            // ✅ 即使崩潰了，也要把丟給殼子的保底 JSON 用紅色噴出來，防止盲目調試
+            logger("⚠️ <b>[觸發保底推送]</b>:");
+            logger("<code style='color:#FF0000;'>" + errResult + "</code>");
+            
+            return errResult;
         }
-    }
+    } // 👈 這是 playerContent 方法的最末尾大括號
+
 
     // 🚀 配套的 Header 獲取方法（如果類末尾沒有就補上）
 private JSONObject getPlayHeaders(JSONObject play) {
