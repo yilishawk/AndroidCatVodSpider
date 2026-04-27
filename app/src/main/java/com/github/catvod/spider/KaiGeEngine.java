@@ -20,7 +20,7 @@ public class KaiGeEngine {
         ExtractionResult result = new ExtractionResult();
         if (isEmpty(html) || isEmpty(rule)) return result;
 
-        // 🚀 1. 指令拆分：支持 ;; 前後任意空格
+        // 🚀 1. 指令拆分 (;; 分隔)
         String[] segments = rule.split("\\s*;;\\s*");
         String coreLogic = segments[0].trim();
 
@@ -31,9 +31,11 @@ public class KaiGeEngine {
                 result.index = Integer.parseInt(tag.replaceAll("[\\[\\]]", ""));
             }
             if (tag.startsWith("[包含:")) result.includeKey = tag.substring(4, tag.length() - 1);
+            // 🚀 這裡新增：識別 [排除:xxx]
+            if (tag.startsWith("[排除:")) result.excludeKey = tag.substring(4, tag.length() - 1);
         }
 
-        // 🚀 2. 處理核心邏輯：流水線支持 > 前後任意空格
+        // 2. 處理核心邏輯
         String finalValue = "";
         if (coreLogic.contains(">")) {
             String[] steps = coreLogic.split("\\s*>\\s*");
@@ -45,12 +47,19 @@ public class KaiGeEngine {
             finalValue = processStep(html, coreLogic, host);
         }
 
+        // 🚀 3. 過濾與補全
+        // 原有的「包含」邏輯
         if (!isEmpty(result.includeKey) && !finalValue.contains(result.includeKey)) finalValue = "";
+        
+        // 🚀 新增的「排除」邏輯：如果包含排除詞，直接清空結果
+        if (!isEmpty(result.excludeKey) && finalValue.contains(result.excludeKey)) finalValue = "";
+
         if (result.shouldFull && !isEmpty(finalValue)) finalValue = autoFullUrl(finalValue, host);
 
         result.value = finalValue;
         return result;
     }
+
 
     private static String processStep(String content, String step, String host) {
         if (isEmpty(step)) return content;
@@ -153,5 +162,6 @@ public class KaiGeEngine {
         public boolean shouldFull = false;
         public int index = 0;
         public String includeKey = "";
+        public String excludeKey = "";
     }
 }
