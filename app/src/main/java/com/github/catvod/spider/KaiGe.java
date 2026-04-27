@@ -275,35 +275,59 @@ public class KaiGe extends Spider {
                     ? OkHttp.post(stepUrl, replaceStepVars(step.optString("body")), headers)
                     : OkHttp.get(stepUrl, null, headers);
 
-                String html = res.getBody();
+String html = res.getBody();
                 logCheck("解析 Step " + (i + 1), html, true);
 
-                // --- 變量提取與池子更新 ---
-                if (step.has("vars")) {
-                    JSONObject vars = step.getJSONObject("vars");
-                    Iterator<String> keys = vars.keys();
-                    while (keys.hasNext()) {
-                        String k = keys.next();
-                        String vRule = vars.getString(k);
-                        
-                        // 執行提取 (支持 JSON 和 字符串截取)
-                        String val = vRule.startsWith("json:") 
-                            ? new JSONObject(html).optString(vRule.substring(5)) 
-                            : extract(html, vRule);
+                // 🚀 【關鍵修正】：必須先從當前 step 提取 vars 對象，否則下面會報錯
+                JSONObject vars = step.optJSONObject("vars");
 
-                        if (!TextUtils.isEmpty(val)) {
-                            varPool.put(k, val);
-                            logger("  └ 💡 提取 [<b>" + k + "</b>] = " + val);
+                // --- 🚀 開始替換：變量提取循環 ---
+                if (vars != null) {
+                    for (Iterator<String> it = vars.keys(); it.hasNext(); ) {
+                        String k = it.next();
+                        String vRule = vars.optString(k);
+                        String val = "";
+
+                        if (vRule.startsWith("json:")) {
+                            // 🚀 處理 JSON 路徑提取
+                            try {
+                                val = new JSONObject(html).optString(vRule.substring(5));
+                            } catch (Exception e) {
+                                val = "";
+                            }
+                        } else {
+                            // 🚀 直接調用核心引擎，確保日誌絕對可見
+                            logger("  └ 🔍 [引擎啟動] 正在提取變量 [<b>" + k + "</b>]");
                             
-                            // 🚀 【接力開關】：只要變量名包含 url 或符合 p1-p4，就認定它是下一步的目標
+                            KaiGeEngine.ExtractionResult engineRes = KaiGeEngine.doExtract(html, vRule, this.siteUrl);
+                            val = engineRes.value;
+
+                            // 🚀 強制日誌輸出：失敗也要顯示原因
+                            if (android.text.TextUtils.isEmpty(val)) {
+                                logger("  └ ❌ [提取失敗] 規則: " + vRule);
+                            } else {
+                                logger("  └ 💡 [提取成功] [<b>" + k + "</b>] = " + val);
+                            }
+                        }
+
+                        if (!android.text.TextUtils.isEmpty(val)) {
+                            // 1. 存入當前變量池
+                            varPool.put(k, val);
+                            
+                            // 2. 🚀 【接力開關】：自動識別並更新下一棒網址
                             if (k.contains("url") || k.matches("p[1-4]")) {
-                                varPool.put("final_url", val);
-                                logger("  └ 🔄 <b>接力棒更新</b> -> 準備交給下一步");
+                                varPool.put("final_url", val); 
+                                logger("  └ 🔄 <b>接力棒更新</b> -> 準備交給下一步請求");
                             }
                         }
                     }
                 }
-            }
+                // --- 替換結束 ---
+            } // 👈 這裡是 for (int i = 0; i < stepCount; i++) 的結束括號
+
+            // --- 🚀 正常終點 ---
+            String finalUrl = varPool.get("final_url");
+            // ... 後面接你原本的 finalUrl 判定邏輯
 
             // --- 🚀 正常終點 ---
             String finalUrl = varPool.get("final_url");
