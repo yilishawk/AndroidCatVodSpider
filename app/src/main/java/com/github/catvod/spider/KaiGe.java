@@ -324,11 +324,6 @@ String html = res.getBody();
                 }
                 // --- 替換結束 ---
             } // 👈 這裡是 for (int i = 0; i < stepCount; i++) 的結束括號
-
-            // --- 🚀 正常終點 ---
-            String finalUrl = varPool.get("final_url");
-            // ... 後面接你原本的 finalUrl 判定邏輯
-
             // --- 🚀 正常終點 ---
             String finalUrl = varPool.get("final_url");
 
