@@ -7,8 +7,8 @@ import java.util.regex.Pattern;
 import java.net.URLDecoder;
 
 /**
- * 凱哥標準規則引擎 1.0 (正式修正版)
- * 修復：編譯錯誤及漏掉的括號、內部類、自動補全方法
+ * 凱哥標準規則引擎 2.0 (空格自由版)
+ * 已修復：重複方法定義、支持符號前後任意空格、保護提取規則內部空格
  */
 public class KaiGeEngine {
 
@@ -20,8 +20,8 @@ public class KaiGeEngine {
         ExtractionResult result = new ExtractionResult();
         if (isEmpty(html) || isEmpty(rule)) return result;
 
-        // 1. 拆分指令 (;; 分隔)
-        String[] segments = rule.split(";;");
+        // 🚀 1. 指令拆分：支持 ;; 前後任意空格
+        String[] segments = rule.split("\\s*;;\\s*");
         String coreLogic = segments[0].trim();
 
         for (int i = 1; i < segments.length; i++) {
@@ -33,10 +33,10 @@ public class KaiGeEngine {
             if (tag.startsWith("[包含:")) result.includeKey = tag.substring(4, tag.length() - 1);
         }
 
-        // 2. 處理核心邏輯
+        // 🚀 2. 處理核心邏輯：流水線支持 > 前後任意空格
         String finalValue = "";
-        if (coreLogic.contains(" > ")) {
-            String[] steps = coreLogic.split(" > ");
+        if (coreLogic.contains(">")) {
+            String[] steps = coreLogic.split("\\s*>\\s*");
             finalValue = html; 
             for (String step : steps) {
                 finalValue = processStep(finalValue, step.trim(), host);
@@ -45,7 +45,6 @@ public class KaiGeEngine {
             finalValue = processStep(html, coreLogic, host);
         }
 
-        // 3. 過濾與補全
         if (!isEmpty(result.includeKey) && !finalValue.contains(result.includeKey)) finalValue = "";
         if (result.shouldFull && !isEmpty(finalValue)) finalValue = autoFullUrl(finalValue, host);
 
@@ -54,17 +53,23 @@ public class KaiGeEngine {
     }
 
     private static String processStep(String content, String step, String host) {
+        if (isEmpty(step)) return content;
+        
         if (step.equalsIgnoreCase("[base64]")) {
             try { return new String(Base64.decode(content, Base64.DEFAULT)); } catch (Exception e) { return content; }
         }
         if (step.equalsIgnoreCase("[url_decode]")) {
-            try { return URLDecoder.decode(content, "UTF-8"); } catch (Exception e) { return content; }
+            try { return java.net.URLDecoder.decode(content, "UTF-8"); } catch (Exception e) { return content; }
         }
         if (step.startsWith("[reg:")) {
-            Matcher m = Pattern.compile(step.substring(5, step.length() - 1)).matcher(content);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(step.substring(5, step.length() - 1)).matcher(content);
             return m.find() ? m.group(1).trim() : "";
         }
-        if (step.contains(" + ")) return handleCombination(content, step, host);
+        
+        // 🚀 3. 處理拼接：支持 + 號前後任意空格
+        if (step.contains("+")) {
+            return handleCombination(content, step, host);
+        }
 
         return executeSingleRule(content, step);
     }
@@ -88,30 +93,26 @@ public class KaiGeEngine {
         return html; 
     }
 
+    // 🚀 核心修改：只保留一個強大的 handleCombination，支持 + 前後任意空格
     private static String handleCombination(String html, String logic, String host) {
-        // 🚀 1. 按照 + 號拆分
-        String[] parts = logic.split("\\+");
+        String[] parts = logic.split("\\s*\\+\\s*");
         StringBuilder sb = new StringBuilder();
         
         for (String p : parts) {
-            String item = p.trim(); // 👈 先去掉前後空格，不要動引號
+            String item = p.trim(); 
             
-            // 🚀 2. 只有當這一段完全是被引號包住的（如 "www.qkw1.com"），才去掉引號當作「純文字」
             if (item.startsWith("\"") && item.endsWith("\"") && item.length() >= 2) {
                 sb.append(item.substring(1, item.length() - 1));
             } 
-            // 🚀 3. 如果包含提取符號，則原封不動地交給提取器，保留裡面的引號
             else if (item.contains("@") || item.contains("&&")) {
                 sb.append(executeSingleRule(html, item));
             } 
-            // 🚀 4. 其他情況（沒引號也沒規則），當作普通文字直接拼入
             else {
                 sb.append(item);
             }
         }
         return sb.toString();
     }
-
 
     private static String cutWithWildcard(String html, String startRule, String end) {
         try {
@@ -147,7 +148,6 @@ public class KaiGeEngine {
         return host + (host.endsWith("/") ? "" : "/") + path;
     }
 
-    // 🚀 核心內部類，確保 KG.java 能讀到結果
     public static class ExtractionResult {
         public String value = "";
         public boolean shouldFull = false;
