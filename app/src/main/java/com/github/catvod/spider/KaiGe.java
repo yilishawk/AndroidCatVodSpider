@@ -241,6 +241,7 @@ public class KaiGe extends Spider {
             JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
             JSONArray steps = play.optJSONArray("steps");
             int stepCount = (steps != null ? steps.length() : 0);
+            boolean finalStepSuccess = false;
 
             // 🔥 核心保護：如果沒寫 Step，直接按原始邏輯走 (是流媒體就直連，不是就嗅探)
             if (stepCount == 0) {
@@ -281,28 +282,19 @@ String html = res.getBody();
                 // 🚀 【關鍵修正】：必須先從當前 step 提取 vars 對象，否則下面會報錯
                 JSONObject vars = step.optJSONObject("vars");
 
-                // --- 🚀 開始替換：變量提取循環 ---
+                        // --- 🚀 開始替換：變量提取循環 ---
                 if (vars != null) {
+                    boolean currentStepAnyOk = false; // 💡 標記本步是否拿到了新地址
                     for (Iterator<String> it = vars.keys(); it.hasNext(); ) {
                         String k = it.next();
                         String vRule = vars.optString(k);
                         String val = "";
 
                         if (vRule.startsWith("json:")) {
-                            // 🚀 處理 JSON 路徑提取
-                            try {
-                                val = new JSONObject(html).optString(vRule.substring(5));
-                            } catch (Exception e) {
-                                val = "";
-                            }
+                            try { val = new JSONObject(html).optString(vRule.substring(5)); } catch (Exception e) { val = ""; }
                         } else {
-                            // 🚀 直接調用核心引擎，確保日誌絕對可見
-                            logger("  └ 🔍 [引擎啟動] 正在提取變量 [<b>" + k + "</b>]");
-                            
                             KaiGeEngine.ExtractionResult engineRes = KaiGeEngine.doExtract(html, vRule, this.siteUrl);
                             val = engineRes.value;
-
-                            // 🚀 強制日誌輸出：失敗也要顯示原因
                             if (android.text.TextUtils.isEmpty(val)) {
                                 logger("  └ ❌ [提取失敗] 規則: " + vRule);
                             } else {
@@ -311,64 +303,47 @@ String html = res.getBody();
                         }
 
                         if (!android.text.TextUtils.isEmpty(val)) {
-                            // 1. 存入當前變量池
                             varPool.put(k, val);
-                            
-                            // 2. 🚀 【接力開關】：自動識別並更新下一棒網址
                             if (k.contains("url") || k.matches("p[1-4]")) {
                                 varPool.put("final_url", val); 
+                                currentStepAnyOk = true; // ✅ 本步拿到了地址
                                 logger("  └ 🔄 <b>接力棒更新</b> -> 準備交給下一步請求");
                             }
                         }
                     }
+                    // 🚀 【關鍵修正】：如果這是最後一個 Step 且拿到了數據
+                    if (i == stepCount - 1 && currentStepAnyOk) {
+                        finalStepSuccess = true;
+                    }
                 }
                 // --- 替換結束 ---
-            } // 👈 這裡是 for (int i = 0; i < stepCount; i++) 的結束括號
+            } 
+
             // --- 🚀 正常終點 ---
             String finalUrl = varPool.get("final_url");
-
-            // 判定邏輯：只要地址變了（說明 Step 跑通了），或者包含流媒體格式，就給 0 (直連)
             boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
-            int pValue = (finalHasStream || !finalUrl.equals(originalUrl)) ? 0 : 1;
+
+            // 🚀 判定邏輯：必須是最後一步成功(finalStepSuccess) 或者是 直接拿到了流媒體(finalHasStream)
+            int pValue = (finalStepSuccess || finalHasStream) ? 0 : 1;
+
+            // 🚀 如果判定嗅探(pValue=1)，URL 必須還原成原始 ID，否則殼子會去嗅探 Step 1 拿到的中間無效地址
+            String pushUrl = (pValue == 0) ? finalUrl : originalUrl;
 
             JSONObject resJson = new JSONObject();
             resJson.put("parse", pValue);
-            resJson.put("url", finalUrl);
+            resJson.put("url", pushUrl);
             resJson.put("header", getPlayHeaders(play));
 
             String result = resJson.toString();
-            
-            // ✅ 正常完成時，用綠色顯示最終 JSON，讓凱哥一眼看到結果
-            logger("<br>🏁 <b>[解析成功]</b> 推送 JSON:");
-            logger("<code style='color:#00FF00;'>" + result + "</code>");
-            
+            logger("<br>🏁 <b>[解析結束]</b> 最終決策: " + (pValue == 0 ? "✅ 直連" : "🔍 嗅探"));
+            logger("<code style='color:" + (pValue == 0 ? "#00FF00" : "#FF9900") + ";'>" + result + "</code>");
             return result;
 
         } catch (Exception e) {
-            // --- 🚨 異常保底 ---
-            // 這裡先把錯誤原因噴出來（紅色），方便凱哥查是哪一行崩了
             logger("<br>🚨 <b>[解析異常中斷]</b>: <span style='color:red;'>" + e.getMessage() + "</span>");
-            
-            JSONObject err = new JSONObject();
-            try {
-                // 崩潰時強制 parse: 1，讓殼子自己去嗅探原始地址
-                err.put("parse", 1);
-                err.put("url", originalUrl);
-                err.put("header", getPlayHeaders(new JSONObject()));
-            } catch (Exception ex) {
-                // 這裡基本不會崩，除非 originalUrl 也是空的
-            }
-            
-            String errResult = err.toString();
-            
-            // ✅ 即使崩潰了，也要把丟給殼子的保底 JSON 用紅色噴出來，防止盲目調試
-            logger("⚠️ <b>[觸發保底推送]</b>:");
-            logger("<code style='color:#FF0000;'>" + errResult + "</code>");
-            
-            return errResult;
+            return "{\"parse\":1,\"url\":\"" + originalUrl + "\",\"header\":{}}";
         }
-    } // 👈 這是 playerContent 方法的最末尾大括號
-
+    }
 
     // 🚀 配套的 Header 獲取方法（如果類末尾沒有就補上）
 private JSONObject getPlayHeaders(JSONObject play) {
