@@ -89,18 +89,29 @@ public class KaiGeEngine {
     }
 
     private static String handleCombination(String html, String logic, String host) {
+        // 🚀 1. 按照 + 號拆分
         String[] parts = logic.split("\\+");
         StringBuilder sb = new StringBuilder();
+        
         for (String p : parts) {
-            String item = p.trim().replace("\"", "");
-            if (item.contains("@") || item.contains("&&")) {
+            String item = p.trim(); // 👈 先去掉前後空格，不要動引號
+            
+            // 🚀 2. 只有當這一段完全是被引號包住的（如 "www.qkw1.com"），才去掉引號當作「純文字」
+            if (item.startsWith("\"") && item.endsWith("\"") && item.length() >= 2) {
+                sb.append(item.substring(1, item.length() - 1));
+            } 
+            // 🚀 3. 如果包含提取符號，則原封不動地交給提取器，保留裡面的引號
+            else if (item.contains("@") || item.contains("&&")) {
                 sb.append(executeSingleRule(html, item));
-            } else {
+            } 
+            // 🚀 4. 其他情況（沒引號也沒規則），當作普通文字直接拼入
+            else {
                 sb.append(item);
             }
         }
         return sb.toString();
     }
+
 
     private static String cutWithWildcard(String html, String startRule, String end) {
         try {
