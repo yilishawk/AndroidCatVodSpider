@@ -1,286 +1,142 @@
 package com.github.catvod.spider;
 
+import android.text.TextUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-
-import android.text.TextUtils;
-
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class KaiGeSmart {
 
-    // 🚀 ================== 列表 ==================
-    public static String buildResult(String data, String key) {
+    // ================== 安全写入 JSON ==================
+    private static void safePut(JSONObject obj, String key, Object value) {
         try {
-            if (TextUtils.isEmpty(data)) return empty();
-
-            String trim = data.trim();
-
-            // ✅ JSON 模式
-            if (trim.startsWith("{") || trim.startsWith("[")) {
-                return parseJsonList(trim, key);
+            if (obj != null && !TextUtils.isEmpty(key) && value != null) {
+                obj.put(key, value);
             }
-
-            // ✅ HTML 模式
-            return parseHtmlList(trim, key);
-
-        } catch (Exception e) {
-            return empty();
-        }
+        } catch (Exception ignored) {}
     }
 
-    private static String parseJsonList(String data, String key) {
-        try {
-            JSONObject json = new JSONObject(data);
-
-            JSONArray arr = json.optJSONArray("list");
-            if (arr == null) arr = json.optJSONArray("data");
-
-            if (arr == null) return data;
-
-            JSONArray list = new JSONArray();
-
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject it = arr.getJSONObject(i);
-
-                String id = it.optString("vod_id", it.optString("id"));
-                String name = it.optString("vod_name", it.optString("name"));
-                String pic = it.optString("vod_pic", it.optString("pic"));
-                String remarks = it.optString("vod_remarks", it.optString("remarks", ""));
-
-                if (TextUtils.isEmpty(id) || TextUtils.isEmpty(name)) continue;
-                if (!TextUtils.isEmpty(key) && !name.contains(key)) continue;
-
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", id);
-                vod.put("vod_name", name);
-                vod.put("vod_pic", fixUrl(pic));
-                vod.put("vod_remarks", remarks);
-
-                list.put(vod);
-            }
-
-            return new JSONObject().put("list", list).toString();
-
-        } catch (Exception e) {
-            return empty();
-        }
-    }
-
-    private static String parseHtmlList(String html, String key) {
-        Document doc = Jsoup.parse(html);
-        JSONArray list = new JSONArray();
-
-        Elements items = doc.select(
-            ".module-item, .vodlist_item, .myui-vodlist__item, .stui-vodlist__item, li"
-        );
-
-        if (items.isEmpty()) {
-            items = doc.select("a[href*='vod'], a[href*='detail']");
-        }
-
-        for (Element el : items) {
-            JSONObject vod = parseList(el);
-
-            if (vod.has("vod_name")) {
-                if (!TextUtils.isEmpty(key) && !vod.optString("vod_name").contains(key)) continue;
-                list.put(vod);
-            }
-        }
-
-        return new JSONObject().put("list", list).toString();
-    }
-
-    // 🚀 ================== 列表单项 ==================
-    public static JSONObject parseList(Element el) {
+    // ================== 列表智能识别 ==================
+    public static JSONObject parseList(Element item) {
         JSONObject vod = new JSONObject();
-
         try {
-            String id = findUrl(el);
-            String name = findTitle(el);
-            String pic = findPic(el);
+            if (item == null) return vod;
 
-            if (TextUtils.isEmpty(name) || TextUtils.isEmpty(id)) return vod;
+            // 标题
+            String name = item.select("a[title]").attr("title");
+            if (TextUtils.isEmpty(name)) name = item.select("img[alt]").attr("alt");
+            if (TextUtils.isEmpty(name)) name = item.text();
+            safePut(vod, "vod_name", name.trim());
 
-            vod.put("vod_id", id);
-            vod.put("vod_name", name);
-            vod.put("vod_pic", pic);
+            // 图片
+            String pic = item.select("img").attr("data-src");
+            if (TextUtils.isEmpty(pic)) pic = item.select("img").attr("src");
+            safePut(vod, "vod_pic", pic);
 
-            String remarks = findRemarks(el);
-            vod.put("vod_remarks", remarks);
+            // ID / URL
+            String id = item.select("a").attr("href");
+            safePut(vod, "vod_id", id);
+
+            // 备注
+            String remark = item.select(".remarks,.note,.tag").text();
+            safePut(vod, "vod_remarks", remark);
 
         } catch (Exception ignored) {}
 
         return vod;
     }
 
-    // 🚀 ================== 详情 ==================
-    public static String buildDetail(String html) {
-        try {
-            JSONObject result = new JSONObject();
-            JSONArray list = new JSONArray();
-
-            list.put(parseDetail(html));
-            result.put("list", list);
-
-            return result.toString();
-        } catch (Exception e) {
-            return empty();
-        }
-    }
-
+    // ================== 详情智能识别 ==================
     public static JSONObject parseDetail(String html) {
         JSONObject vod = new JSONObject();
-
         try {
+            if (TextUtils.isEmpty(html)) return vod;
+
             Document doc = Jsoup.parse(html);
 
-            vod.put("vod_name", findTitle(doc));
-            vod.put("vod_pic", findPic(doc));
-            vod.put("vod_content", findContent(doc));
+            // 标题
+            String title = doc.select("h1").text();
+            if (TextUtils.isEmpty(title)) title = doc.title();
+            safePut(vod, "vod_name", title);
 
-            parseMeta(doc, vod);
-            parsePlaylist(doc, vod);
+            // 图片
+            String pic = doc.select("img").attr("src");
+            safePut(vod, "vod_pic", pic);
+
+            // 简介
+            String content = doc.select(".content,.desc,.detail").text();
+            safePut(vod, "vod_content", content);
+
+            // 演员 / 导演 / 年份等
+            Elements infos = doc.select("p,li,span");
+            for (Element el : infos) {
+                String t = el.text();
+                if (TextUtils.isEmpty(t)) continue;
+
+                try {
+                    if (t.contains("主演")) safePut(vod, "vod_actor", t);
+                    if (t.contains("导演")) safePut(vod, "vod_director", t);
+                    if (t.contains("地区")) safePut(vod, "vod_area", t);
+                    if (t.contains("年份")) safePut(vod, "vod_year", t);
+                } catch (Exception ignored) {}
+            }
+
+            // ================== 播放列表识别 ==================
+            Elements links = doc.select("a[href]");
+            List<String> playUrls = new ArrayList<>();
+            for (Element a : links) {
+                String href = a.attr("href");
+                String text = a.text();
+
+                if (TextUtils.isEmpty(href) || TextUtils.isEmpty(text)) continue;
+
+                // 过滤非播放链接
+                if (href.contains("javascript")) continue;
+
+                // 识别视频链接
+                if (href.contains(".m3u8") || href.contains(".mp4") || href.contains("play")) {
+                    playUrls.add(text + "$" + href);
+                }
+            }
+
+            if (!playUrls.isEmpty()) {
+                String playUrl = TextUtils.join("#", playUrls);
+                safePut(vod, "vod_play_from", "智能线路");
+                safePut(vod, "vod_play_url", playUrl);
+            }
 
         } catch (Exception ignored) {}
 
         return vod;
     }
 
-    // 🚀 ================== 播放列表 ==================
-    private static void parsePlaylist(Document doc, JSONObject vod) {
+    // ================== JSON列表解析（备用） ==================
+    public static String parseJsonList(JSONArray list) {
         try {
-            List<String> from = new ArrayList<>();
-            List<String> urls = new ArrayList<>();
+            JSONArray result = new JSONArray();
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject item = list.getJSONObject(i);
+                JSONObject vod = new JSONObject();
 
-            Elements blocks = doc.select(
-                ".playlist, .play-list, .module-play-list, .content_playlist"
-            );
+                safePut(vod, "vod_id", item.optString("id"));
+                safePut(vod, "vod_name", item.optString("name"));
+                safePut(vod, "vod_pic", item.optString("pic"));
+                safePut(vod, "vod_remarks", item.optString("remarks"));
 
-            if (blocks.isEmpty()) {
-                String all = findAllLinks(doc);
-                if (!TextUtils.isEmpty(all)) {
-                    from.add("默认线路");
-                    urls.add(all);
-                }
-            } else {
-                for (int i = 0; i < blocks.size(); i++) {
-                    String links = findAllLinks(blocks.get(i));
-
-                    if (!TextUtils.isEmpty(links)) {
-                        from.add("线路" + (i + 1));
-                        urls.add(links);
-                    }
-                }
+                result.put(vod);
             }
 
-            vod.put("vod_play_from", TextUtils.join("$$$", from));
-            vod.put("vod_play_url", TextUtils.join("$$$", urls));
+            JSONObject res = new JSONObject();
+            safePut(res, "list", result);
+            return res.toString();
 
-        } catch (Exception ignored) {}
-    }
-
-    private static String findAllLinks(Element root) {
-        StringBuilder sb = new StringBuilder();
-
-        for (Element a : root.select("a")) {
-            String name = a.text().trim();
-            String href = a.attr("href");
-
-            if (TextUtils.isEmpty(href)) continue;
-
-            // 🚀 过滤垃圾
-            if (href.contains("javascript")) continue;
-            if (name.length() > 20) continue;
-
-            if (!href.contains("play") && !href.contains("vod")) continue;
-
-            if (sb.length() > 0) sb.append("#");
-            sb.append(name).append("$").append(href);
+        } catch (Exception e) {
+            return "{\"list\":[]}";
         }
-
-        return sb.toString();
-    }
-
-    // 🚀 ================== 辅助 ==================
-
-    private static String findTitle(Element el) {
-        String t = el.attr("title");
-
-        if (TextUtils.isEmpty(t)) t = el.select("img").attr("alt");
-        if (TextUtils.isEmpty(t)) t = el.text();
-
-        return t.trim();
-    }
-
-    private static String findUrl(Element el) {
-        Element a = el.selectFirst("a[href]");
-        return a != null ? a.attr("href") : "";
-    }
-
-    private static String findPic(Element el) {
-        Elements imgs = el.select("img");
-
-        for (Element img : imgs) {
-            String src = img.attr("data-src");
-            if (TextUtils.isEmpty(src)) src = img.attr("src");
-
-            if (isValidPic(src)) return fixUrl(src);
-        }
-
-        return "";
-    }
-
-    private static boolean isValidPic(String url) {
-        if (TextUtils.isEmpty(url)) return false;
-        String u = url.toLowerCase();
-        return !u.contains("gif") && !u.contains("base64");
-    }
-
-    private static String findRemarks(Element el) {
-        Element r = el.selectFirst(".remarks, .tag, .label, .state");
-        return r != null ? r.text().trim() : "";
-    }
-
-    private static String findContent(Document doc) {
-        Elements els = doc.select(
-            ".content, .vod_content, .detail-content, #desc"
-        );
-
-        String best = "";
-        for (Element e : els) {
-            if (e.text().length() > best.length()) {
-                best = e.text();
-            }
-        }
-
-        return best;
-    }
-
-    private static void parseMeta(Document doc, JSONObject vod) {
-        Elements nodes = doc.select("p, li");
-
-        for (Element n : nodes) {
-            String t = n.text();
-
-            if (t.contains("主演")) vod.put("vod_actor", t);
-            if (t.contains("导演")) vod.put("vod_director", t);
-            if (t.contains("地区")) vod.put("vod_area", t);
-            if (t.contains("年份")) vod.put("vod_year", t);
-        }
-    }
-
-    private static String fixUrl(String url) {
-        if (TextUtils.isEmpty(url)) return "";
-        if (url.startsWith("//")) return "http:" + url;
-        return url;
-    }
-
-    private static String empty() {
-        return "{\"list\":[]}";
     }
 }
