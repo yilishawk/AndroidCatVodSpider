@@ -5,16 +5,15 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 public class Proxy extends Spider {
     private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
-    private static final int MY_LOG_PORT = 10086;          // 日志面板端口（保持不变）
+    private static final int MY_LOG_PORT = 10086;
 
-    public static int getPort() { return 9978; }           // 这个返回值可能被其他模块使用，保留
+    public static int getPort() { return 9978; }
     public static String getUrl() { return "http://127.0.0.1:9978/proxy"; }
 
     public static void log(String msg) {
@@ -26,7 +25,6 @@ public class Proxy extends Spider {
         if (!isServerRunning) startLegacyServer();
     }
 
-    // 原有的 10086 端口日志服务（完全未改动）
     private static void startLegacyServer() {
         if (isServerRunning) return;
         new Thread(() -> {
@@ -82,28 +80,23 @@ public class Proxy extends Spider {
     }
 
     /**
-     * TV 应用会通过 http://127.0.0.1:9978/proxy?do=danmu&title=xxx&episode=1 调用此方法
-     * 注意：不要在此方法内再启动任何 ServerSocket，否则会和 TV 应用的主服务冲突
+     * 注意：此方法不是重写父类方法，而是因为 TV 应用会通过反射调用它。
+     * 不要加 @Override 注解，否则编译会失败。
      */
-    @Override
     public Object[] proxy(Map<String, String> params) {
-        // 记录请求到日志面板（方便调试）
         log("收到 proxy 调用: " + params);
 
-        // 1. 检查是否为弹幕请求
         String doParam = params.get("do");
         if (doParam == null || !doParam.equals("danmu")) {
             return errorResponse(400, "Missing or invalid 'do' parameter");
         }
 
-        // 2. 提取标题和集数
         String title = params.get("title");
         String episode = params.get("episode");
         if (title == null || title.isEmpty() || episode == null || episode.isEmpty()) {
             return errorResponse(400, "Missing title or episode");
         }
 
-        // 3. URL 解码
         try {
             title = URLDecoder.decode(title, "UTF-8");
         } catch (Exception ignored) {}
@@ -113,24 +106,19 @@ public class Proxy extends Spider {
 
         log("弹幕请求：title=" + title + ", episode=" + episode);
 
-        // 4. 生成弹幕 XML（模拟数据，可以替换成真实抓取逻辑）
         String xml = generateDanmuXml(title, episode);
 
-        // 5. 返回成功响应
         Map<String, String> headers = new HashMap<>();
         headers.put("Content-Type", "application/xml; charset=utf-8");
         headers.put("Connection", "close");
         return new Object[]{200, headers, xml};
     }
 
-    /**
-     * 生成弹幕 XML（目前是模拟一条弹幕，可自行扩展）
-     */
     private String generateDanmuXml(String title, String episode) {
         long now = System.currentTimeMillis() / 1000;
         String p = "5.0,1,25,16777215," + now + ",0,123456,0";
         String content = "来自代理的弹幕：" + title + " 第" + episode + "集";
-        
+
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
                "<i>\n" +
                "    <d p=\"" + escapeXml(p) + "\">" + escapeXml(content) + "</d>\n" +
