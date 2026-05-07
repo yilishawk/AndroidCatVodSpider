@@ -2,18 +2,20 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import java.io.*;
-import java.net.*;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 
 public class Proxy extends Spider {
     private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
-    private static final int MY_LOG_PORT = 10086;          // 日志面板端口
-    private static final int DANMU_PORT = 9978;            // 弹幕接口端口
+    private static final int MY_LOG_PORT = 10086;          // 日志面板端口（保持不变）
 
-    public static int getPort() { return DANMU_PORT; }
-    public static String getUrl() { return "http://127.0.0.1:" + DANMU_PORT + "/proxy"; }
+    public static int getPort() { return 9978; }           // 这个返回值可能被其他模块使用，保留
+    public static String getUrl() { return "http://127.0.0.1:9978/proxy"; }
 
     public static void log(String msg) {
         if (msg == null) return;
@@ -21,14 +23,12 @@ public class Proxy extends Spider {
         String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
         sb.append("<div class='line'><span class='time'>[").append(time).append("]</span> ")
           .append("<span class='msg'>").append(msg).append("</span></div>");
-        if (!isServerRunning) startLegacyServer();          // 启动日志面板服务
+        if (!isServerRunning) startLegacyServer();
     }
 
-    // 启动两个服务：10086（日志面板） + 9978（弹幕接口）
+    // 原有的 10086 端口日志服务（完全未改动）
     private static void startLegacyServer() {
         if (isServerRunning) return;
-
-        // 原有的 10086 端口日志面板服务 (保持不变)
         new Thread(() -> {
             try (ServerSocket server = new ServerSocket(MY_LOG_PORT)) {
                 server.setReuseAddress(true);
@@ -79,91 +79,65 @@ public class Proxy extends Spider {
                 }
             } catch (Exception e) { isServerRunning = false; }
         }).start();
-
-        // ========== 新增：9978 端口弹幕服务 ==========
-        new Thread(() -> {
-            try (ServerSocket danmuServer = new ServerSocket(DANMU_PORT)) {
-                log("弹幕服务已启动在端口 " + DANMU_PORT);
-                while (true) {
-                    try (Socket client = danmuServer.accept()) {
-                        BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8)
-                        );
-                        String requestLine = reader.readLine();
-                        if (requestLine == null) continue;
-
-                        // 解析请求路径和参数
-                        String[] parts = requestLine.split(" ");
-                        if (parts.length < 2) continue;
-                        String path = parts[1];
-                        
-                        // 只处理 /proxy?do=danmu 的请求
-                        if (path.startsWith("/proxy") && path.contains("do=danmu")) {
-                            String title = extractParam(path, "title");
-                            String episode = extractParam(path, "episode");
-                            
-                            log("收到弹幕请求: title=" + title + ", episode=" + episode);
-                            
-                            // 生成弹幕 XML (这里先返回一个模拟的示例 XML)
-                            String xmlDanmu = generateMockDanmuXML(title, episode);
-                            
-                            OutputStream out = client.getOutputStream();
-                            String response = "HTTP/1.1 200 OK\r\n" +
-                                    "Content-Type: application/xml; charset=utf-8\r\n" +
-                                    "Connection: close\r\n\r\n" +
-                                    xmlDanmu;
-                            out.write(response.getBytes(StandardCharsets.UTF_8));
-                            out.flush();
-                        } else {
-                            // 其他路径返回 404
-                            OutputStream out = client.getOutputStream();
-                            out.write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
-                            out.flush();
-                        }
-                    } catch (Exception e) {
-                        log("弹幕服务处理异常: " + e.getMessage());
-                    }
-                }
-            } catch (Exception e) {
-                log("弹幕服务启动失败: " + e.getMessage());
-            }
-        }).start();
     }
 
-    // 从请求路径中提取 URL 参数值 (简单解析，不处理编码)
-    private static String extractParam(String path, String paramName) {
-        String pattern = paramName + "=";
-        int start = path.indexOf(pattern);
-        if (start == -1) return "";
-        start += pattern.length();
-        int end = path.indexOf("&", start);
-        if (end == -1) end = path.length();
-        String value = path.substring(start, end);
-        try {
-            // 处理 URL 编码 (如 %E6%96%B9...)
-            return URLDecoder.decode(value, "UTF-8");
-        } catch (Exception e) {
-            return value;
+    /**
+     * TV 应用会通过 http://127.0.0.1:9978/proxy?do=danmu&title=xxx&episode=1 调用此方法
+     * 注意：不要在此方法内再启动任何 ServerSocket，否则会和 TV 应用的主服务冲突
+     */
+    @Override
+    public Object[] proxy(Map<String, String> params) {
+        // 记录请求到日志面板（方便调试）
+        log("收到 proxy 调用: " + params);
+
+        // 1. 检查是否为弹幕请求
+        String doParam = params.get("do");
+        if (doParam == null || !doParam.equals("danmu")) {
+            return errorResponse(400, "Missing or invalid 'do' parameter");
         }
+
+        // 2. 提取标题和集数
+        String title = params.get("title");
+        String episode = params.get("episode");
+        if (title == null || title.isEmpty() || episode == null || episode.isEmpty()) {
+            return errorResponse(400, "Missing title or episode");
+        }
+
+        // 3. URL 解码
+        try {
+            title = URLDecoder.decode(title, "UTF-8");
+        } catch (Exception ignored) {}
+        try {
+            episode = URLDecoder.decode(episode, "UTF-8");
+        } catch (Exception ignored) {}
+
+        log("弹幕请求：title=" + title + ", episode=" + episode);
+
+        // 4. 生成弹幕 XML（模拟数据，可以替换成真实抓取逻辑）
+        String xml = generateDanmuXml(title, episode);
+
+        // 5. 返回成功响应
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/xml; charset=utf-8");
+        headers.put("Connection", "close");
+        return new Object[]{200, headers, xml};
     }
 
-    // 生成一个示例弹幕 XML (模拟数据)
-    private static String generateMockDanmuXML(String title, String episode) {
-        // 这里你可以替换成真正的弹幕获取逻辑（从 B站、弹弹play 等拉取）
-        // 目前返回一个简单的带一条弹幕的 XML
+    /**
+     * 生成弹幕 XML（目前是模拟一条弹幕，可自行扩展）
+     */
+    private String generateDanmuXml(String title, String episode) {
         long now = System.currentTimeMillis() / 1000;
-        // p 参数格式: 出现时间(秒), 弹幕类型, 字号, 颜色, 发送时间戳, 弹幕池, 用户ID, 弹幕ID
         String p = "5.0,1,25,16777215," + now + ",0,123456,0";
-        String content = "观众弹幕测试：" + title + " 第" + episode + "集";
+        String content = "来自代理的弹幕：" + title + " 第" + episode + "集";
         
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
                "<i>\n" +
-               "    <d p=\"" + p + "\">" + escapeXml(content) + "</d>\n" +
+               "    <d p=\"" + escapeXml(p) + "\">" + escapeXml(content) + "</d>\n" +
                "</i>";
     }
 
-    // 简单的 XML 转义
-    private static String escapeXml(String s) {
+    private String escapeXml(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -172,6 +146,10 @@ public class Proxy extends Spider {
                 .replace("'", "&apos;");
     }
 
-    // 原 Spider 接口实现 (可保留空实现)
-    public Object[] proxy(Map<String, String> params) { return null; }
+    private Object[] errorResponse(int code, String message) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "text/plain; charset=utf-8");
+        log("错误响应: " + code + " " + message);
+        return new Object[]{code, headers, message};
+    }
 }
