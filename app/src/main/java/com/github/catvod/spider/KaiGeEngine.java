@@ -9,7 +9,7 @@ import com.github.catvod.utils.Util;
 import com.github.catvod.utils.AESEncryption;
 
 /**
- * 凱哥標準規則引擎 2.0 (空格自由版)
+ * 凱哥標準規則引擎 2.0 (空格自由版本)
  * 已修復：重副方法定義、支持符號前後任意空格、保護提取規則內部空格
  */
 public class KaiGeEngine {
