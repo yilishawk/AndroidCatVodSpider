@@ -1,270 +1,244 @@
 package com.github.catvod.spider;
 
 import android.text.TextUtils;
-import android.util.Base64;
-
+import android.util.Base64; 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.net.URLDecoder;
 import com.github.catvod.utils.Util;
 import com.github.catvod.utils.AESEncryption;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-import org.json.JSONTokener;
-
-import java.net.URLDecoder;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
+/**
+ * 凱哥標準規則引擎 2.0 (空格自由版)
+ * 已修復：重副方法定義、支持符號前後任意空格、保護提取規則內部空格
+ */
 public class KaiGeEngine {
 
-    public static boolean DEBUG = false;
-
-    // 🚀 正则缓存（性能优化）
-    private static final Map<String, Pattern> patternCache = new ConcurrentHashMap<>();
-
-    private static Pattern getPattern(String regex) {
-        return patternCache.computeIfAbsent(regex, Pattern::compile);
+    private static boolean isEmpty(String str) {
+        return str == null || str.length() == 0;
     }
 
-    private static boolean isEmpty(String s) {
-        return s == null || s.length() == 0;
-    }
-
-    // 🚀 主入口
     public static ExtractionResult doExtract(String html, String rule, String host) {
-
         ExtractionResult result = new ExtractionResult();
         if (isEmpty(html) || isEmpty(rule)) return result;
 
+        // 🚀 1. 指令拆分 (;; 分隔)
         String[] segments = rule.split("\\s*;;\\s*");
-        String core = segments[0];
+        String coreLogic = segments[0].trim();
 
         for (int i = 1; i < segments.length; i++) {
             String tag = segments[i].trim();
-
             if (tag.equalsIgnoreCase("[full]")) result.shouldFull = true;
-            if (tag.matches("\\[\\d+]")) {
+            if (tag.matches("\\[\\d+\\]")) {
                 result.index = Integer.parseInt(tag.replaceAll("[\\[\\]]", ""));
             }
             if (tag.startsWith("[包含:")) result.includeKey = tag.substring(4, tag.length() - 1);
+            // 🚀 這裡新增：識別 [排除:xxx]
             if (tag.startsWith("[排除:")) result.excludeKey = tag.substring(4, tag.length() - 1);
         }
 
-        String value = html;
-
-        String[] steps = core.split("\\s*>\\s*");
-
-        for (int i = 0; i < steps.length; i++) {
-            value = processStep(value, steps[i].trim(), host);
-
-            if (DEBUG) System.out.println("Step" + i + " => " + value);
+        // 2. 處理核心邏輯
+        String finalValue = "";
+        if (coreLogic.contains(">")) {
+            String[] steps = coreLogic.split("\\s*>\\s*");
+            finalValue = html; 
+            for (String step : steps) {
+                finalValue = processStep(finalValue, step.trim(), host);
+            }
+        } else {
+            finalValue = processStep(html, coreLogic, host);
         }
 
-        // include
-        if (!isEmpty(result.includeKey) && !value.contains(result.includeKey)) value = "";
+        // 🚀 3. 過濾與補全
+        // 原有的「包含」邏輯
+        if (!isEmpty(result.includeKey) && !finalValue.contains(result.includeKey)) finalValue = "";
 
-        // exclude
-        if (!isEmpty(result.excludeKey) && value.contains(result.excludeKey)) value = "";
+        // 🚀 新增的「排除」邏輯：如果包含排除詞，直接清空結果
+        if (!isEmpty(result.excludeKey) && finalValue.contains(result.excludeKey)) finalValue = "";
 
-        // full url
-        if (result.shouldFull) value = autoFullUrl(value, host);
+        if (result.shouldFull && !isEmpty(finalValue)) finalValue = autoFullUrl(finalValue, host);
 
-        result.value = value;
+        result.value = finalValue;
         return result;
     }
 
-    // 🚀 核心处理
+
     private static String processStep(String content, String step, String host) {
-
         if (isEmpty(step)) return content;
-
-        step = applyVars(step, content, host);
-
-        // JSON
-        if (step.startsWith("json:") || step.startsWith("[json:")) {
-            String path = step.replace("[", "").replace("]", "").replace("json:", "").trim();
-            return parseJson(content, path);
+// 🚀 凱哥特供版：兼容 json:key 和 [json:key] 兩種寫法，支持 data.url 嵌套路徑
+        if (step.contains("json:")) {
+            try {
+                // 1. 自動清洗標籤，提取路徑（如：data.url）
+                String path = step.replace("[", "").replace("]", "").replace("json:", "").trim();
+                
+                // 2. 預處理：清洗 JSON 裡常見的反斜槓轉義
+                String cleanContent = content.replace("\\/", "/");
+                org.json.JSONObject obj = new org.json.JSONObject(cleanContent);
+                
+                // 3. 處理點號嵌套邏輯
+                if (path.contains(".")) {
+                    String[] keys = path.split("\\.");
+                    Object current = obj;
+                    for (int i = 0; i < keys.length; i++) {
+                        if (i == keys.length - 1) {
+                            // 最後一層，取值返回
+                            return ((org.json.JSONObject) current).optString(keys[i], "");
+                        } else {
+                            // 中間層，繼續深入
+                            current = ((org.json.JSONObject) current).optJSONObject(keys[i]);
+                            if (current == null) return ""; // 路徑斷裂則返回空
+                        }
+                    }
+                }
+                // 4. 普通單層提取
+                return obj.optString(path, "");
+            } catch (Exception e) {
+                // 5. 暴力保底：如果解析失敗，用正則摳出最後一個鍵名的值
+                String rawPath = step.replace("[", "").replace("]", "").replace("json:", "").trim();
+                String keyName = rawPath.contains(".") ? rawPath.substring(rawPath.lastIndexOf(".") + 1) : rawPath;
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"" + keyName + "\"\\s*:\\s*\"(.*?)\"").matcher(content);
+                return m.find() ? m.group(1).replace("\\/", "/") : "";
+            }
         }
 
-        // base64
         if (step.equalsIgnoreCase("[base64]")) {
-            try {
-                return new String(Base64.decode(content, Base64.DEFAULT));
-            } catch (Exception e) {
-                return content;
-            }
+            try { return new String(Base64.decode(content, Base64.DEFAULT)); } catch (Exception e) { return content; }
         }
-
-        // url decode
         if (step.equalsIgnoreCase("[url_decode]")) {
-            try {
-                return URLDecoder.decode(content, "UTF-8");
-            } catch (Exception e) {
-                return content;
-            }
+            try { return java.net.URLDecoder.decode(content, "UTF-8"); } catch (Exception e) { return content; }
         }
-
-        // md5
-        if (step.equalsIgnoreCase("[md5]")) {
-            return Util.MD5(content);
-        }
-
-        // sha1
-        if (step.equalsIgnoreCase("[sha1]")) {
-            try {
-                return Util.sha1Hex(content);
-            } catch (Exception e) {
-                return "";
-            }
-        }
-
-        // aes
-        if (step.startsWith("[aes_cbc:")) {
-            try {
-                String[] p = step.substring(9, step.length() - 1).split(",");
-                return AESEncryption.decrypt(content, p[0], p.length > 1 ? p[1] : "", AESEncryption.CBC_PKCS_7_PADDING);
-            } catch (Exception e) {
-                return "";
-            }
-        }
-
-        if (step.startsWith("[aes_ecb:")) {
-            try {
-                String key = step.substring(9, step.length() - 1);
-                return AESEncryption.decrypt(content, key, "", AESEncryption.ECB_PKCS_7_PADDING);
-            } catch (Exception e) {
-                return "";
-            }
-        }
-
-        // 正则
         if (step.startsWith("[reg:")) {
-            Matcher m = getPattern(step.substring(5, step.length() - 1)).matcher(content);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(step.substring(5, step.length() - 1)).matcher(content);
             return m.find() ? m.group(1).trim() : "";
         }
-
-        // 提取
-        if (step.startsWith("[提取:")) {
-            return executeSingleRule(content, step.substring(4, step.length() - 1));
+        if (step.startsWith("[提取:") && step.endsWith("]")) {
+            String realRule = step.substring(4, step.length() - 1);
+            return executeSingleRule(content, realRule);
         }
-
-        // 时间
+        // 🚀 7. 時間戳標籤
+        // [time] 生成 10 位秒級時間戳
         if (step.equalsIgnoreCase("[time]")) {
             return String.valueOf(System.currentTimeMillis() / 1000);
         }
-
+        // [time13] 生成 13 位毫秒級時間戳
         if (step.equalsIgnoreCase("[time13]")) {
             return String.valueOf(System.currentTimeMillis());
         }
 
-        // 拼接
+        // 🚀 2. 參數自動排序 (九州空間等 API 必備)
+        if (step.equalsIgnoreCase("[sort_params]")) {
+            return com.github.catvod.utils.Util.sortQueryString(content);
+        }
+
+        // 🚀 3. 加密哈希標籤
+        if (step.equalsIgnoreCase("[md5]")) {
+            return com.github.catvod.utils.Util.MD5(content);
+        }
+        if (step.equalsIgnoreCase("[sha1]")) {
+            try {
+                return com.github.catvod.utils.Util.sha1Hex(content);
+            } catch (Exception e) {
+                return "";
+            }
+        }
+        if (step.startsWith("[aes_cbc:") && step.endsWith("]")) {
+            try {
+                String paramsStr = step.substring(9, step.length() - 1);
+                String[] p = paramsStr.split(",");
+                String key = p[0].trim();
+                String iv = (p.length > 1) ? p[1].trim() : "";
+                return com.github.catvod.utils.AESEncryption.decrypt(content, key, iv, com.github.catvod.utils.AESEncryption.CBC_PKCS_7_PADDING);
+            } catch (Exception e) { return ""; }
+        }
+        if (step.startsWith("[aes_ecb:") && step.endsWith("]")) {
+            try {
+                String key = step.substring(9, step.length() - 1).trim();
+                return com.github.catvod.utils.AESEncryption.decrypt(content, key, "", com.github.catvod.utils.AESEncryption.ECB_PKCS_7_PADDING);
+            } catch (Exception e) { return ""; }
+        }
+
+        // 🚀 3. 處理拼接：支持 + 號前後任意空格
         if (step.contains("+")) {
-            return handlePlus(content, step);
+            return handleCombination(content, step, host);
         }
 
         return executeSingleRule(content, step);
     }
 
-    // 🚀 变量系统
-    private static String applyVars(String input, String content, String host) {
-        if (input == null) return "";
-        return input
-                .replace("${host}", host == null ? "" : host)
-                .replace("${input}", content == null ? "" : content)
-                .replace("${time}", String.valueOf(System.currentTimeMillis() / 1000))
-                .replace("${time13}", String.valueOf(System.currentTimeMillis()));
-    }
-
-    // 🚀 JSON解析（支持数组）
-    private static String parseJson(String content, String path) {
-        try {
-            Object json = new JSONTokener(content).nextValue();
-
-            String[] keys = path.split("\\.");
-            Object cur = json;
-
-            for (String k : keys) {
-
-                if (k.contains("[")) {
-                    String key = k.substring(0, k.indexOf("["));
-                    int idx = Integer.parseInt(k.replaceAll(".*\\[(\\d+)]", "$1"));
-
-                    cur = ((JSONObject) cur).optJSONArray(key);
-                    if (cur == null) return "";
-                    cur = ((JSONArray) cur).opt(idx);
-                } else {
-                    if (cur instanceof JSONObject) {
-                        cur = ((JSONObject) cur).opt(k);
-                    }
-                }
-
-                if (cur == null) return "";
-            }
-
-            return String.valueOf(cur);
-
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    // 🚀 拼接
-    private static String handlePlus(String content, String step) {
-        String[] parts = step.split("\\s*\\+\\s*");
-        StringBuilder sb = new StringBuilder();
-
-        for (String p : parts) {
-            p = p.trim();
-
-            if (p.startsWith("\"") && p.endsWith("\"")) {
-                sb.append(p.substring(1, p.length() - 1));
-            } else if (p.contains("@") || p.contains("&&")) {
-                sb.append(executeSingleRule(content, p));
-            } else {
-                sb.append(p);
-            }
-        }
-
-        return sb.toString();
-    }
-
-    // 🚀 单规则
     private static String executeSingleRule(String html, String rule) {
-
         if (rule.contains("@")) {
-            Pattern p = getPattern(rule.split("@")[1] + "\\s*=\\s*[\"']([^\"']*)[\"']");
+            String[] parts = rule.split("@");
+            String attrName = parts[parts.length - 1].trim(); 
+            Pattern p = Pattern.compile(attrName + "\\s*=\\s*[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE);
             Matcher m = p.matcher(html);
-            return m.find() ? m.group(1) : "";
+            if (m.find()) return m.group(1).trim();
+            return ""; 
         }
 
         if (rule.contains("&&")) {
-            String[] arr = rule.split("&&");
-            return simpleCut(html, arr[0], arr.length > 1 ? arr[1] : "");
+            String[] parts = rule.split("&&");
+            String start = parts[0].trim();
+            String end = parts.length > 1 ? parts[1].trim() : "";
+            return start.contains("*") ? cutWithWildcard(html, start, end) : simpleCut(html, start, end);
         }
+        return html; 
+    }
 
-        return html;
+    // 🚀 核心修改：只保留一個強大的 handleCombination，支持 + 前後任意空格
+    private static String handleCombination(String html, String logic, String host) {
+        String[] parts = logic.split("\\s*\\+\\s*");
+        StringBuilder sb = new StringBuilder();
+
+        for (String p : parts) {
+            String item = p.trim(); 
+
+            if (item.startsWith("\"") && item.endsWith("\"") && item.length() >= 2) {
+                sb.append(item.substring(1, item.length() - 1));
+            } 
+            else if (item.contains("@") || item.contains("&&")) {
+                sb.append(executeSingleRule(html, item));
+            } 
+            else {
+                sb.append(item);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String cutWithWildcard(String html, String startRule, String end) {
+        try {
+            String regexStart = Pattern.quote(startRule).replace("*", "\\E.*?\\Q");
+            String fullRegex = regexStart + "(.*?)" + (isEmpty(end) ? "$" : Pattern.quote(end));
+            Pattern pattern = Pattern.compile(fullRegex, Pattern.DOTALL);
+            Matcher matcher = pattern.matcher(html);
+            return matcher.find() ? matcher.group(1).trim() : "";
+        } catch (Exception e) { return ""; }
     }
 
     private static String simpleCut(String html, String start, String end) {
-        int s = html.indexOf(start);
-        if (s == -1) return "";
-        s += start.length();
-        if (isEmpty(end)) return html.substring(s);
-        int e = html.indexOf(end, s);
-        return e == -1 ? "" : html.substring(s, e);
+        try {
+            int s = html.indexOf(start);
+            if (s > -1) {
+                s += start.length();
+                if (isEmpty(end)) return html.substring(s).trim();
+                int e = html.indexOf(end, s);
+                if (e > -1) return html.substring(s, e).trim();
+            }
+        } catch (Exception e) { return ""; }
+        return "";
     }
 
-    // 🚀 自动补全 URL
     private static String autoFullUrl(String path, String host) {
         if (isEmpty(path) || path.startsWith("http")) return path;
         if (isEmpty(host)) return path;
         if (path.startsWith("//")) return "https:" + path;
-        if (path.startsWith("/")) return host + path;
-        return host + "/" + path;
+        if (path.startsWith("/")) {
+            if (host.endsWith("/")) return host + path.substring(1);
+            return host + path;
+        }
+        return host + (host.endsWith("/") ? "" : "/") + path;
     }
 
-    // 🚀 返回结构
     public static class ExtractionResult {
         public String value = "";
         public boolean shouldFull = false;
