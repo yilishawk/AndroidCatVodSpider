@@ -8,110 +8,175 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.io.IOException;
+import java.net.Socket;
+import java.util.Arrays;
+import java.util.ArrayList;
+import javax.net.ssl.*;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.RequestBody;
+import okhttp3.MediaType;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * 凱哥終極網絡引擎 - TLS指紋偽裝版
+ * 作用：繞過 Cloudflare 五秒盾、JA3 指紋檢測
+ */
 public class KaiGeNet {
 
-    // 🚀 Cookie 緩存：解決「二次請求」和「登錄狀態」的核心
     private static final Map<String, String> cookieJar = new ConcurrentHashMap<>();
     private static final String MOBILE_UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36";
+    
+    private static OkHttpClient impersonateClient = null;
 
-    /**
-     * 凱哥智慧請求核心
-     * @param siteUrl 來源站點（用於注入 Referer）
-     * @param method 請求方式 get/post
-     * @param url 目標網址
-     * @param body 請求參數
-     * @param headers 自定義頭
-     */
+    // 🚀 核心：獲取具備 Chrome 指紋的 Client
+    private static synchronized OkHttpClient getImpersonateClient() {
+        if (impersonateClient == null) {
+            try {
+                KaiGeTLSFactory factory = new KaiGeTLSFactory();
+                X509TrustManager trustManager = new X509TrustManager() {
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {}
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[]{}; }
+                };
+
+                impersonateClient = new OkHttpClient.Builder()
+                        .sslSocketFactory(factory, trustManager)
+                        .hostnameVerifier((hostname, session) -> true)
+                        .connectTimeout(15, TimeUnit.SECONDS)
+                        .readTimeout(15, TimeUnit.SECONDS)
+                        .writeTimeout(15, TimeUnit.SECONDS)
+                        .followRedirects(true)
+                        .build();
+            } catch (Exception e) {
+                impersonateClient = new OkHttpClient();
+            }
+        }
+        return impersonateClient;
+    }
+
     public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers) {
         String host = getHost(url);
         if (headers == null) headers = new HashMap<>();
 
-        // 1. 注入萬用 UA
         if (!headers.containsKey("User-Agent")) headers.put("User-Agent", MOBILE_UA);
 
-        // 2. 🚀 凱哥防護：注入安全 Referer (過濾非 ASCII 字符，防止中文路徑崩潰)
         if (!headers.containsKey("Referer")) {
             if (!TextUtils.isEmpty(siteUrl) && siteUrl.matches("^[\\x00-\\x7F]*$")) {
                 headers.put("Referer", siteUrl);
             } else {
-                // 如果路徑有中文，則降級使用該站點的 Host 域名
                 headers.put("Referer", getHost(siteUrl) + "/");
             }
         }
 
-        // 3. 自動注入該站點之前的歷史 Cookie
         if (cookieJar.containsKey(host)) {
             headers.put("Cookie", cookieJar.get(host));
         }
 
-        // 4. 執行第一次請求
+        // 核心調用
         OkResult res = execute(method, url, body, headers);
 
-        // 5. 🚀 核心提取：從響應頭拿到新的 Set-Cookie
         String setCookie = getSetCookie(res.getResp());
-
         if (!TextUtils.isEmpty(setCookie)) {
             cookieJar.put(host, setCookie);
-            
-            // 🚀 凱哥特技：自動補刀 (解決 5s 盾、防火牆或 Cookie 驗證頁面)
-            // 如果返回內容太短，說明還沒進到正題，帶著新 Cookie 立刻再請求一次
+            // 補刀邏輯：如果內容太短，帶上 Cookie 重試
             if (res.getBody().trim().length() < 1000) {
                 headers.put("Cookie", setCookie);
                 res = execute(method, url, body, headers);
-                
-                // 二次請求後再次同步最新 Cookie
                 String secondCookie = getSetCookie(res.getResp());
                 if (!TextUtils.isEmpty(secondCookie)) cookieJar.put(host, secondCookie);
             }
         }
-
         return res;
     }
 
-    // 🚀 內部執行器：支持 POST(JSON/表單) 和 GET 參數自動轉換
     private static OkResult execute(String method, String url, String body, Map<String, String> headers) {
         method = (method == null) ? "get" : method.toLowerCase();
-        
-        if ("post".equals(method)) {
-            // 如果 body 是 JSON 字符串則直接 POST 字符串，否則轉 Map 發送表單
-            if (!TextUtils.isEmpty(body) && body.trim().startsWith("{")) {
-                return OkHttp.post(url, body, headers);
-            } else {
-                return OkHttp.post(url, parseToMap(body), headers);
+        OkHttpClient client = getImpersonateClient();
+        Request.Builder rb = new Request.Builder().url(url);
+
+        if (headers != null) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                rb.addHeader(entry.getKey(), entry.getValue());
             }
         }
-        
-        // 默認使用 GET
-        return OkHttp.get(url, parseToMap(body), headers);
+
+        if ("post".equals(method)) {
+            RequestBody requestBody;
+            if (!TextUtils.isEmpty(body) && body.trim().startsWith("{")) {
+                requestBody = RequestBody.create(MediaType.parse("application/json; charset=utf-8"), body);
+            } else {
+                okhttp3.FormBody.Builder fb = new okhttp3.FormBody.Builder();
+                Map<String, String> params = parseToMap(body);
+                for (Map.Entry<String, String> entry : params.entrySet()) {
+                    fb.add(entry.getKey(), entry.getValue());
+                }
+                requestBody = fb.build();
+            }
+            rb.post(requestBody);
+        } else {
+            rb.get();
+        }
+
+        try (Response response = client.newCall(rb.build()).execute()) {
+            OkResult result = new OkResult();
+            result.setBody(response.body().string());
+            result.setResp(response.headers().toMultimap());
+            return result;
+        } catch (Exception e) {
+            OkResult err = new OkResult();
+            err.setBody("");
+            return err;
+        }
     }
 
-    // 輔助：從 OkResult 的響應頭中安全提取 Cookie 字符串
+    // 🚀 核心類：偽造 Chrome TLS 握手
+    private static class KaiGeTLSFactory extends SSLSocketFactory {
+        private final SSLSocketFactory delegate;
+        private final String[] chromeCiphers = {
+            "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+        };
+
+        public KaiGeTLSFactory() throws Exception {
+            SSLContext sc = SSLContext.getInstance("TLSv1.3");
+            sc.init(null, null, null);
+            this.delegate = sc.getSocketFactory();
+        }
+
+        private Socket patch(Socket s) {
+            if (s instanceof SSLSocket) {
+                ((SSLSocket) s).setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+                ((SSLSocket) s).setEnabledCipherSuites(chromeCiphers);
+            }
+            return s;
+        }
+
+        @Override public String[] getDefaultCipherSuites() { return chromeCiphers; }
+        @Override public String[] getSupportedCipherSuites() { return chromeCiphers; }
+        @Override public Socket createSocket(Socket s, String h, int p, boolean a) throws IOException { return patch(delegate.createSocket(s, h, p, a)); }
+        @Override public Socket createSocket(String h, int p) throws IOException { return patch(delegate.createSocket(h, p)); }
+        @Override public Socket createSocket(String h, int p, java.net.InetAddress l, int lp) throws IOException { return patch(delegate.createSocket(h, p, l, lp)); }
+        @Override public Socket createSocket(java.net.InetAddress a, int p) throws IOException { return patch(delegate.createSocket(a, p)); }
+        @Override public Socket createSocket(java.net.InetAddress a, int p, java.net.InetAddress la, int lp) throws IOException { return patch(delegate.createSocket(a, p, la, lp)); }
+    }
+
     private static String getSetCookie(Map<String, List<String>> respHeaders) {
         if (respHeaders == null) return "";
         List<String> cookies = respHeaders.get("Set-Cookie");
         if (cookies == null) cookies = respHeaders.get("set-cookie");
-        if (cookies != null && !cookies.isEmpty()) {
-            return TextUtils.join(";", cookies);
-        }
-        return "";
+        return (cookies != null && !cookies.isEmpty()) ? TextUtils.join(";", cookies) : "";
     }
 
-    // 輔助：提取網址 Host 域名（帶層級兼容）
     private static String getHost(String urlStr) {
         if (TextUtils.isEmpty(urlStr)) return "";
-        try {
-            return new URL(urlStr).getHost();
-        } catch (Exception e) {
-            try {
-                return java.net.URI.create(urlStr).getHost();
-            } catch (Exception ex) {
-                return urlStr;
-            }
-        }
+        try { return new URL(urlStr).getHost(); } catch (Exception e) { return urlStr; }
     }
 
-    // 輔助：將 URL 參數字符串轉為 Map
     private static Map<String, String> parseToMap(String body) {
         Map<String, String> map = new HashMap<>();
         if (TextUtils.isEmpty(body)) return map;
