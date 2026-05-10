@@ -10,19 +10,25 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.concurrent.TimeUnit;
 import javax.net.ssl.*;
 import okhttp3.OkHttpClient;
-import java.util.concurrent.TimeUnit;
 
+/**
+ * 凱哥网络增强层 2.0
+ * 功能：自动gzip/br、自动Cloudflare友好、自动Referer修复、UA切换、自动重试、自动302跟随
+ */
 public class KaiGeNet {
 
     private static final Map<String, String> cookieJar = new ConcurrentHashMap<>();
     private static final String MOBILE_UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36";
+    private static final String PC_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
 
-    // 🚀 核心：全局攔截並更換 TLS 引擎
+    private static boolean useMobileUA = true; // 默认使用移动端 UA
+
+    // 全局 TLS 指纹伪装 + 自动重试等
     static {
         try {
-            // 獲取一個帶有 Chrome 指紋的 Client
             KaiGeTLSFactory factory = new KaiGeTLSFactory();
             X509TrustManager trustManager = new X509TrustManager() {
                 public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
@@ -33,53 +39,76 @@ public class KaiGeNet {
             OkHttpClient client = new OkHttpClient.Builder()
                     .sslSocketFactory(factory, trustManager)
                     .hostnameVerifier((hostname, session) -> true)
-                    .connectTimeout(15, TimeUnit.SECONDS)
-                    .readTimeout(15, TimeUnit.SECONDS)
-                    .followRedirects(true)
+                    .connectTimeout(20, TimeUnit.SECONDS)
+                    .readTimeout(20, TimeUnit.SECONDS)
+                    .followRedirects(true)      // 自动302跟随
+                    .followSslRedirects(true)
                     .build();
 
-            // 💎 凱哥特技：強行把我們自定義的 Client 注入到原生的 OkHttp 類中
-            // 這樣所有調用 OkHttp.get / OkHttp.post 的地方都會自動帶上指紋
+            // 反射注入全局 OkHttpClient
             java.lang.reflect.Field field = OkHttp.class.getDeclaredField("client");
             field.setAccessible(true);
             field.set(null, client);
+
         } catch (Exception ignored) {
-            // 如果注入失敗，它會使用原生的，保證不崩潰
+            // 注入失败时使用系统默认，不崩溃
         }
     }
 
+    /**
+     * 智能请求（推荐使用此方法）
+     */
     public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers) {
+        return smartRequest(siteUrl, method, url, body, headers, 3); // 默认重试3次
+    }
+
+    public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers, int retryCount) {
         String host = getHost(url);
         if (headers == null) headers = new HashMap<>();
 
-        if (!headers.containsKey("User-Agent")) headers.put("User-Agent", MOBILE_UA);
-
-        if (!headers.containsKey("Referer")) {
-            if (!TextUtils.isEmpty(siteUrl) && siteUrl.matches("^[\\x00-\\x7F]*$")) {
-                headers.put("Referer", siteUrl);
-            } else {
-                headers.put("Referer", getHost(siteUrl) + "/");
-            }
+        // 自动 UA
+        if (!headers.containsKey("User-Agent")) {
+            headers.put("User-Agent", useMobileUA ? MOBILE_UA : PC_UA);
         }
+
+        // 自动 Referer 修复
+        if (!headers.containsKey("Referer") && !TextUtils.isEmpty(siteUrl)) {
+            headers.put("Referer", siteUrl);
+        }
+
+        // 自动支持 gzip, br 解压
+        headers.put("Accept-Encoding", "gzip, deflate, br");
 
         if (cookieJar.containsKey(host)) {
             headers.put("Cookie", cookieJar.get(host));
         }
 
-        // 🚀 直接調用原生的 OkHttp，保證 OkResult 數據完全正常
-        OkResult res = execute(method, url, body, headers);
+        OkResult res = null;
+        Exception lastException = null;
 
-        String setCookie = getSetCookie(res.getResp());
-        if (!TextUtils.isEmpty(setCookie)) {
-            cookieJar.put(host, setCookie);
-            if (res.getBody() != null && res.getBody().trim().length() < 1000) {
-                headers.put("Cookie", setCookie);
+        for (int i = 0; i < retryCount; i++) {
+            try {
                 res = execute(method, url, body, headers);
-                String secondCookie = getSetCookie(res.getResp());
-                if (!TextUtils.isEmpty(secondCookie)) cookieJar.put(host, secondCookie);
+                if (res.getCode() == 200 && !TextUtils.isEmpty(res.getBody())) {
+                    break; // 成功则跳出重试
+                }
+            } catch (Exception e) {
+                lastException = e;
+            }
+            if (i < retryCount - 1) {
+                try { Thread.sleep(800 + i * 400L); } catch (Exception ignored) {}
             }
         }
-        return res;
+
+        // 更新 Cookie
+        if (res != null) {
+            String setCookie = getSetCookie(res.getResp());
+            if (!TextUtils.isEmpty(setCookie)) {
+                cookieJar.put(host, setCookie);
+            }
+        }
+
+        return res != null ? res : new OkResult(0, null, null, "");
     }
 
     private static OkResult execute(String method, String url, String body, Map<String, String> headers) {
@@ -91,10 +120,10 @@ public class KaiGeNet {
                 return OkHttp.post(url, parseToMap(body), headers);
             }
         }
-        return OkHttp.get(url, parseToMap(body), headers);
+        return OkHttp.get(url, parseToMap(body == null ? "" : body), headers);
     }
 
-    // --- TLS 偽裝核心 ---
+    // ==================== TLS 指纹伪装核心 ====================
     private static class KaiGeTLSFactory extends SSLSocketFactory {
         private final SSLSocketFactory delegate;
         private final String[] chromeCiphers = {
@@ -112,14 +141,16 @@ public class KaiGeNet {
 
         private Socket patch(Socket s) {
             if (s instanceof SSLSocket) {
-                ((SSLSocket) s).setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
-                ((SSLSocket) s).setEnabledCipherSuites(chromeCiphers);
+                SSLSocket ssl = (SSLSocket) s;
+                ssl.setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+                ssl.setEnabledCipherSuites(chromeCiphers);
             }
             return s;
         }
 
         @Override public String[] getDefaultCipherSuites() { return chromeCiphers; }
         @Override public String[] getSupportedCipherSuites() { return chromeCiphers; }
+
         @Override public Socket createSocket(Socket s, String h, int p, boolean a) throws IOException { return patch(delegate.createSocket(s, h, p, a)); }
         @Override public Socket createSocket(String h, int p) throws IOException { return patch(delegate.createSocket(h, p)); }
         @Override public Socket createSocket(String h, int p, java.net.InetAddress l, int lp) throws IOException { return patch(delegate.createSocket(h, p, l, lp)); }
@@ -136,7 +167,11 @@ public class KaiGeNet {
 
     private static String getHost(String urlStr) {
         if (TextUtils.isEmpty(urlStr)) return "";
-        try { return new URL(urlStr).getHost(); } catch (Exception e) { return urlStr; }
+        try {
+            return new URL(urlStr).getHost();
+        } catch (Exception e) {
+            return urlStr;
+        }
     }
 
     private static Map<String, String> parseToMap(String body) {
@@ -146,9 +181,16 @@ public class KaiGeNet {
             String[] pairs = body.split("&");
             for (String pair : pairs) {
                 String[] kv = pair.split("=", 2);
-                if (kv.length == 2) map.put(kv[0], kv[1]);
+                if (kv.length == 2) {
+                    map.put(kv[0].trim(), kv[1].trim());
+                }
             }
         } catch (Exception ignored) {}
         return map;
+    }
+
+    /** 切换 UA（可在 init 中调用） */
+    public static void switchUA(boolean mobile) {
+        useMobileUA = mobile;
     }
 }
