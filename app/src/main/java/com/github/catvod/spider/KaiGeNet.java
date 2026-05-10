@@ -16,7 +16,7 @@ import okhttp3.OkHttpClient;
 
 /**
  * 凱哥网络增强层 2.0
- * 功能：自动gzip/br、自动Cloudflare友好、自动Referer修复、UA切换、自动重试、自动302跟随
+ * 支持：自动 gzip/br、自动 Cloudflare 友好、自动 Referer 修复、UA 切换、自动重试、自动 302 跟随
  */
 public class KaiGeNet {
 
@@ -24,9 +24,8 @@ public class KaiGeNet {
     private static final String MOBILE_UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36";
     private static final String PC_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
 
-    private static boolean useMobileUA = true; // 默认使用移动端 UA
+    private static boolean useMobileUA = true; // 默认移动端 UA
 
-    // 全局 TLS 指纹伪装 + 自动重试等
     static {
         try {
             KaiGeTLSFactory factory = new KaiGeTLSFactory();
@@ -41,25 +40,21 @@ public class KaiGeNet {
                     .hostnameVerifier((hostname, session) -> true)
                     .connectTimeout(20, TimeUnit.SECONDS)
                     .readTimeout(20, TimeUnit.SECONDS)
-                    .followRedirects(true)      // 自动302跟随
+                    .followRedirects(true)
                     .followSslRedirects(true)
                     .build();
 
-            // 反射注入全局 OkHttpClient
             java.lang.reflect.Field field = OkHttp.class.getDeclaredField("client");
             field.setAccessible(true);
             field.set(null, client);
 
         } catch (Exception ignored) {
-            // 注入失败时使用系统默认，不崩溃
+            // 注入失败不崩溃
         }
     }
 
-    /**
-     * 智能请求（推荐使用此方法）
-     */
     public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers) {
-        return smartRequest(siteUrl, method, url, body, headers, 3); // 默认重试3次
+        return smartRequest(siteUrl, method, url, body, headers, 3);
     }
 
     public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers, int retryCount) {
@@ -76,7 +71,7 @@ public class KaiGeNet {
             headers.put("Referer", siteUrl);
         }
 
-        // 自动支持 gzip, br 解压
+        // 自动解压支持
         headers.put("Accept-Encoding", "gzip, deflate, br");
 
         if (cookieJar.containsKey(host)) {
@@ -84,16 +79,14 @@ public class KaiGeNet {
         }
 
         OkResult res = null;
-        Exception lastException = null;
-
         for (int i = 0; i < retryCount; i++) {
             try {
                 res = execute(method, url, body, headers);
-                if (res.getCode() == 200 && !TextUtils.isEmpty(res.getBody())) {
-                    break; // 成功则跳出重试
+                if (res != null && res.getCode() == 200 && !TextUtils.isEmpty(res.getBody())) {
+                    break;
                 }
             } catch (Exception e) {
-                lastException = e;
+                // 继续重试
             }
             if (i < retryCount - 1) {
                 try { Thread.sleep(800 + i * 400L); } catch (Exception ignored) {}
@@ -108,7 +101,11 @@ public class KaiGeNet {
             }
         }
 
-        return res != null ? res : new OkResult(0, null, null, "");
+        // 修复：返回空结果
+        if (res == null) {
+            return new OkResult(0, "", null);
+        }
+        return res;
     }
 
     private static OkResult execute(String method, String url, String body, Map<String, String> headers) {
@@ -123,7 +120,7 @@ public class KaiGeNet {
         return OkHttp.get(url, parseToMap(body == null ? "" : body), headers);
     }
 
-    // ==================== TLS 指纹伪装核心 ====================
+    // ====================== TLS 指纹伪装 ======================
     private static class KaiGeTLSFactory extends SSLSocketFactory {
         private final SSLSocketFactory delegate;
         private final String[] chromeCiphers = {
@@ -189,7 +186,6 @@ public class KaiGeNet {
         return map;
     }
 
-    /** 切换 UA（可在 init 中调用） */
     public static void switchUA(boolean mobile) {
         useMobileUA = mobile;
     }
