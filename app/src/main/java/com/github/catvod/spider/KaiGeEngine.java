@@ -73,18 +73,10 @@ public class KaiGeEngine {
         if (step.startsWith("[提取:") && step.endsWith("]")) {
             return executeSingleRule(content, step.substring(4, step.length() - 1));
         }
-        if (step.equalsIgnoreCase("[time]")) {
-            return String.valueOf(System.currentTimeMillis() / 1000);
-        }
-        if (step.equalsIgnoreCase("[time13]")) {
-            return String.valueOf(System.currentTimeMillis());
-        }
-        if (step.equalsIgnoreCase("[sort_params]")) {
-            return com.github.catvod.utils.Util.sortQueryString(content);
-        }
-        if (step.equalsIgnoreCase("[md5]")) {
-            return com.github.catvod.utils.Util.MD5(content);
-        }
+        if (step.equalsIgnoreCase("[time]")) return String.valueOf(System.currentTimeMillis() / 1000);
+        if (step.equalsIgnoreCase("[time13]")) return String.valueOf(System.currentTimeMillis());
+        if (step.equalsIgnoreCase("[sort_params]")) return com.github.catvod.utils.Util.sortQueryString(content);
+        if (step.equalsIgnoreCase("[md5]")) return com.github.catvod.utils.Util.MD5(content);
         if (step.equalsIgnoreCase("[sha1]")) {
             try { return com.github.catvod.utils.Util.sha1Hex(content); } catch (Exception e) { return ""; }
         }
@@ -93,7 +85,7 @@ public class KaiGeEngine {
                 String paramsStr = step.substring(9, step.length() - 1);
                 String[] p = paramsStr.split(",");
                 String key = p[0].trim();
-                String iv = (p.length > 1) ? p[1].trim() : "";
+                String iv = p.length > 1 ? p[1].trim() : "";
                 return com.github.catvod.utils.AESEncryption.decrypt(content, key, iv, com.github.catvod.utils.AESEncryption.CBC_PKCS_7_PADDING);
             } catch (Exception e) { return ""; }
         }
@@ -140,8 +132,7 @@ public class KaiGeEngine {
         } catch (Exception e) {
             // 保底正则
             try {
-                String keyName = rawPath.contains(".") ? 
-                    rawPath.substring(rawPath.lastIndexOf(".") + 1) : rawPath;
+                String keyName = rawPath.contains(".") ? rawPath.substring(rawPath.lastIndexOf(".") + 1) : rawPath;
                 Matcher m = Pattern.compile("\"" + keyName + "\"\\s*:\\s*\"(.*?)\"").matcher(content);
                 return m.find() ? m.group(1).replace("\\/", "/") : "";
             } catch (Exception ignored) {}
@@ -208,9 +199,7 @@ public class KaiGeEngine {
         if (isEmpty(path) || path.startsWith("http")) return path;
         if (isEmpty(host)) return path;
         if (path.startsWith("//")) return "https:" + path;
-        if (path.startsWith("/")) {
-            return host.endsWith("/") ? host + path.substring(1) : host + path;
-        }
+        if (path.startsWith("/")) return host.endsWith("/") ? host + path.substring(1) : host + path;
         return host + (host.endsWith("/") ? "" : "/") + path;
     }
 
