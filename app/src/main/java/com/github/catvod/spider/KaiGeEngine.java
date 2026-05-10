@@ -112,12 +112,11 @@ public class KaiGeEngine {
     }
 
     private static String extractJsonPath(String content, String step) {
+        String rawPath = step.replace("[", "").replace("]", "").replace("json:", "").trim();
         try {
-            String path = step.replace("[", "").replace("]", "").replace("json:", "").trim();
             String cleanContent = content.replace("\\/", "/");
             Object current = new JSONObject(cleanContent);
-
-            String[] segments = path.split("\\.");
+            String[] segments = rawPath.split("\\.");
 
             for (String seg : segments) {
                 if (seg.contains("[")) {
@@ -141,7 +140,8 @@ public class KaiGeEngine {
         } catch (Exception e) {
             // 保底正则
             try {
-                String keyName = path.contains(".") ? path.substring(path.lastIndexOf(".") + 1) : path;
+                String keyName = rawPath.contains(".") ? 
+                    rawPath.substring(rawPath.lastIndexOf(".") + 1) : rawPath;
                 Matcher m = Pattern.compile("\"" + keyName + "\"\\s*:\\s*\"(.*?)\"").matcher(content);
                 return m.find() ? m.group(1).replace("\\/", "/") : "";
             } catch (Exception ignored) {}
