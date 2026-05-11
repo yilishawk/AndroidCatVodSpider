@@ -357,7 +357,41 @@ Document doc = Jsoup.parse(html);
             JSONArray steps = play.optJSONArray("steps");
             int stepCount = (steps != null ? steps.length() : 0);
             boolean finalStepSuccess = false;
+            // ✅ jx 动态解析配置
+            String jx = play.optString("jx", "");
+            if (!TextUtils.isEmpty(jx)) {
+                try {
+                    Proxy.log("<span style='color:#9b59b6;'>[jx配置] 请求: </span>" + jx);
+                    OkResult cfgRes = KaiGeNet.smartRequest(this.siteUrl, "get", jx, null, getHeaders(null));
+                    String cfgBody = cfgRes.getBody();
 
+                    if (!TextUtils.isEmpty(cfgBody)) {
+                        String jxList  = play.optString("jx_list",  "");
+                        String jxTitle = play.optString("jx_title", "");
+                        String jxParse = play.optString("jx_parse", "");
+
+                        if (!TextUtils.isEmpty(jxList) && !TextUtils.isEmpty(jxTitle) && !TextUtils.isEmpty(jxParse)) {
+                            // 第一步：切出线路列表片段
+                            String block = KaiGeEngine.doExtract(cfgBody, jxList, this.siteUrl).value;
+                            Proxy.log("<span style='color:#3498db;'>[jx配置] 切出片段长度: </span>" + block.length());
+
+                            // 第二步：引擎自动拼上 flag，用户规则里不需要写 {flag}
+                            String titleRule = jxTitle + flag + "\"&&" + jxParse;
+                            String val = KaiGeEngine.doExtract(block, titleRule, this.siteUrl).value;
+                            val = val.replace("\\/", "/").replace("\\", "").trim();
+
+                            varPool.put("jx_parse", val);
+                            if (!TextUtils.isEmpty(val)) {
+                                Proxy.log("<span style='color:#2ecc71;'>[jx配置] 命中 [" + flag + "] jx_parse = </span>" + val);
+                            } else {
+                                Proxy.log("<span style='color:#f1c40f;'>[jx配置] 线路 [" + flag + "] 无解析前缀，视为直链</span>");
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    Proxy.log("<b style='color:red;'>[jx配置] 失败: </b>" + ex.getMessage());
+                }
+            }
             if (stepCount == 0) {
                 boolean isStream = originalUrl.toLowerCase().contains(".m3u8") || originalUrl.toLowerCase().contains(".mp4");
                 JSONObject res = new JSONObject();
