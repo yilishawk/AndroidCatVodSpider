@@ -523,7 +523,7 @@ private String parseList(String html, String pg, boolean isSearch) {
             }
 
         // ✅ 没有写 cate_item，但返回的是标准JSON（自动兼容苹果CMS）
-        } else if (TextUtils.isEmpty(itemRule) && html.trim().startsWith("{") && html.contains("\"list\"")) {
+        } else if (html != null && html.trim().startsWith("{") && html.contains("\"list\"")) {
             JSONObject json = new JSONObject(html);
             JSONArray array = json.optJSONArray("list");
             if (array != null) {
