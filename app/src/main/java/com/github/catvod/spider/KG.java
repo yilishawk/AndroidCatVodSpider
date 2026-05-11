@@ -385,9 +385,22 @@ Document doc = Jsoup.parse(html);
                             }
                             Proxy.log("<span style='color:#3498db;'>[jx配置] 切出片段长度: </span>" + block.length());
 
-                            // 第二步：引擎自动拼上 flag，用户规则里不需要写 {flag}
-                            String titleRule = "\"" + jxTitle + "\":\"" + flag + "\"&&\"" + jxParse + "\":\"&&\"";
-                            String val = KaiGeEngine.doExtract(block, titleRule, this.siteUrl).value;
+                            String val = "";
+                            try {
+                                // ✅ 优先：标准JSON数组格式（如 hktvyb）
+                                JSONArray jxArray = new JSONArray(block);
+                                for (int j = 0; j < jxArray.length(); j++) {
+                                    JSONObject entry = jxArray.getJSONObject(j);
+                                    if (flag.equals(entry.optString(jxTitle))) {
+                                        val = entry.optString(jxParse, "");
+                                        break;
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                                // ✅ 兜底：切刀规则（如 qdys1 的JS文件格式）
+                                String titleRule = "\"" + jxTitle + "\":\"" + flag + "\"&&\"" + jxParse + "\":\"&&\"";
+                                val = KaiGeEngine.doExtract(block, titleRule, this.siteUrl).value;
+                            }
                             val = val.replace("\\/", "/").replace("\\", "").trim();
 
                             varPool.put("jx_parse", val);
