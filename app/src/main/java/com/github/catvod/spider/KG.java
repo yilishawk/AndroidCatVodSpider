@@ -52,7 +52,7 @@ public class KG extends Spider {
 
             String json;
             if (extend.startsWith("http")) {
-                // 🚀 關鍵修復：手動過濾掉可能包含中文的 Referer 隱患
+                // 🚀 關鍵修復：手動過濾掉可能包含中文 Referer 隱患
                 Map<String, String> initHeaders = new HashMap<>();
                 initHeaders.put("Referer", ""); // 清空 Referer，防止 OkHttp 報錯
                 
