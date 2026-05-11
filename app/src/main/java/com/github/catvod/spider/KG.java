@@ -372,7 +372,17 @@ Document doc = Jsoup.parse(html);
 
                         if (!TextUtils.isEmpty(jxList) && !TextUtils.isEmpty(jxTitle) && !TextUtils.isEmpty(jxParse)) {
                             // 第一步：切出线路列表片段
-                            String block = KaiGeEngine.doExtract(cfgBody, jxList, this.siteUrl).value;
+                            // ✅ 支持两种写法：JSON路径(data.jiexiDataList) 或 切刀规则(jiexiDataList&&[)
+                            String block = "";
+                            if (jxList.contains(".") && !jxList.contains("&&")) {
+                                try {
+                                    JSONObject cfgJson = new JSONObject(cfgBody);
+                                    Object pathResult = getJsonByPath(cfgJson, jxList);
+                                    block = pathResult != null ? pathResult.toString() : "";
+                                } catch (Exception ignored) {}
+                            } else {
+                                block = KaiGeEngine.doExtract(cfgBody, jxList, this.siteUrl).value;
+                            }
                             Proxy.log("<span style='color:#3498db;'>[jx配置] 切出片段长度: </span>" + block.length());
 
                             // 第二步：引擎自动拼上 flag，用户规则里不需要写 {flag}
