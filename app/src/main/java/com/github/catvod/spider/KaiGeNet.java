@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class KaiGeNet {
 
-    // 🚀 Cookie 緩存：解決「二次請求」和「登錄狀態」的核心
+    // 🚀 Cookie 緩存：解決「二次請求」和「登錄狀態」核心
     private static final Map<String, String> cookieJar = new ConcurrentHashMap<>();
     private static final String MOBILE_UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36";
 
