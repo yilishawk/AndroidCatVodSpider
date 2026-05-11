@@ -216,7 +216,33 @@ public class KG extends Spider {
             String html = res.getBody();
             logCheck("詳情", html, false);
 
-            Document doc = Jsoup.parse(html);
+// ✅ 新增：如果详情接口返回的是苹果CMS标准JSON，直接解析
+if (html != null && html.trim().startsWith("{")) {
+    try {
+        JSONObject json = new JSONObject(html.trim());
+        JSONArray dataList = json.optJSONArray("list");
+        if (dataList != null && dataList.length() > 0) {
+            JSONObject item = dataList.getJSONObject(0);
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id",       ids.get(0));
+            vod.put("vod_name",     item.optString("vod_name",     item.optString("name",     "")));
+            vod.put("vod_pic",      item.optString("vod_pic",      item.optString("pic",      "")));
+            vod.put("vod_remarks",  item.optString("vod_remarks",  item.optString("remarks",  "")));
+            vod.put("vod_actor",    item.optString("vod_actor",    item.optString("actor",    "")));
+            vod.put("vod_director", item.optString("vod_director", item.optString("director", "")));
+            vod.put("vod_content",  item.optString("vod_content",  item.optString("content",  "")));
+            vod.put("vod_play_from",item.optString("vod_play_from",""));
+            vod.put("vod_play_url", item.optString("vod_play_url", ""));
+            Proxy.log("<b style='color:#2ecc71;'>✅ [详情] JSON直解成功: </b>" + vod.optString("vod_name"));
+            return new JSONObject().put("list", new JSONArray().put(vod)).toString();
+        }
+    } catch (Exception ex) {
+        Proxy.log("<b style='color:red;'>❌ [详情] JSON解析失败: </b>" + ex.getMessage());
+    }
+}
+
+// 原有HTML解析逻辑继续往下走
+Document doc = Jsoup.parse(html);
             
             // 🚀 升級：智慧保底模式
             // 首先嘗試用 KaiGeSmart 掃描全圖
