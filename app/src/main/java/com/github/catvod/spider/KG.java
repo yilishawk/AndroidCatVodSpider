@@ -386,7 +386,7 @@ Document doc = Jsoup.parse(html);
                             Proxy.log("<span style='color:#3498db;'>[jx配置] 切出片段长度: </span>" + block.length());
 
                             // 第二步：引擎自动拼上 flag，用户规则里不需要写 {flag}
-                            String titleRule = jxTitle + flag + "\"&&" + jxParse;
+                            String titleRule = "\"" + jxTitle + "\":\"" + flag + "\"&&\"" + jxParse + "\":\"&&\"";
                             String val = KaiGeEngine.doExtract(block, titleRule, this.siteUrl).value;
                             val = val.replace("\\/", "/").replace("\\", "").trim();
 
