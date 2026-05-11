@@ -10,66 +10,6 @@ import android.text.TextUtils;
 import java.util.*;
 
 public class KaiGeSmart {
-private static String smartGet(JSONObject obj, String... keys) {
-    if (obj == null) return "";
-
-    for (String key : keys) {
-        try {
-            String val = obj.optString(key).trim();
-            if (!TextUtils.isEmpty(val) &&
-                !"null".equalsIgnoreCase(val) &&
-                !"{}".equals(val) &&
-                !"[]".equals(val)) {
-                return val;
-            }
-        } catch (Exception ignored) {}
-    }
-
-    return "";
-}
-
-// 🚀 智能数组识别（支持 data.list 嵌套）
-    private static JSONArray smartArray(JSONObject json, String... keys) {
-        if (json == null) return null;
-
-        // 第一层直接查找
-        for (String key : keys) {
-            try {
-                JSONArray arr = json.optJSONArray(key);
-
-                if (arr != null && arr.length() > 0) {
-                    return arr;
-                }
-
-            } catch (Exception ignored) {
-            }
-        }
-
-        // 🚀 第二层嵌套查找
-        Iterator<String> iterator = json.keys();
-
-        while (iterator.hasNext()) {
-            try {
-                String parentKey = iterator.next();
-
-                JSONObject child = json.optJSONObject(parentKey);
-
-                if (child == null) continue;
-
-                for (String key : keys) {
-                    JSONArray arr = child.optJSONArray(key);
-
-                    if (arr != null && arr.length() > 0) {
-                        return arr;
-                    }
-                }
-
-            } catch (Exception ignored) {
-            }
-        }
-
-        return null;
-    }
 
 public static String buildResult(String data, String key) {
         try {
@@ -78,34 +18,10 @@ public static String buildResult(String data, String key) {
 
             // 🚀 智慧識別 JSON 格式 (如蘋果 CMS 接口)
             if (trimData.startsWith("{") || trimData.startsWith("[")) {
-                JSONArray directArray = null;
-JSONObject json = null;
-
-if (trimData.startsWith("[")) {
-    directArray = new JSONArray(trimData);
-} else {
-    json = new JSONObject(trimData);
-}
-                JSONArray items;
-
-if (directArray != null) {
-
-    // 🚀 顶层数组接口
-    items = directArray;
-
-} else {
-
-    items = smartArray(json,
-            "list",
-            "data",
-            "items",
-            "rows",
-            "result",
-            "vod_list",
-            "videos",
-            "subjects"
-    );
-}
+                JSONObject json = new JSONObject(trimData);
+                // 優先取蘋果 CMS 規範的 list 數組，其次取 data 數組
+                JSONArray items = json.optJSONArray("list");
+                if (items == null) items = json.optJSONArray("data");
 
                 // 如果找不到數組，說明不是標準列表，回退原樣
                 if (items == null) return trimData;
@@ -117,36 +33,10 @@ if (directArray != null) {
 
                     // 映射字段：id -> vod_id, name -> vod_name, pic -> vod_pic
                     // 同時兼容蘋果 CMS 的標準字段名和簡寫名
-                    String vodId = smartGet(item,
-                            "vod_id",
-                            "id",
-                            "ids",
-                            "vodid"
-                    );
-
-                    String vodName = smartGet(item,
-                            "vod_name",
-                            "name",
-                            "title",
-                            "vod_title"
-                    );
-
-                    String vodPic = smartGet(item,
-                            "vod_pic",
-                            "pic",
-                            "thumb",
-                            "image",
-                            "cover",
-                            "poster"
-                    );
-
-                    String vodRemarks = smartGet(item,
-                            "vod_remarks",
-                            "remarks",
-                            "state",
-                            "note",
-                            "msg"
-                    );
+                    String vodId = item.optString("vod_id", item.optString("id"));
+                    String vodName = item.optString("vod_name", item.optString("name"));
+                    String vodPic = item.optString("vod_pic", item.optString("pic"));
+                    String vodRemarks = item.optString("vod_remarks", item.optString("remarks", ""));
 
                     if (TextUtils.isEmpty(vodId) || TextUtils.isEmpty(vodName)) continue;
 
