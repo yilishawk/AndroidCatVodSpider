@@ -557,9 +557,13 @@ private String parseList(String html, String pg, boolean isSearch) {
             }
 
         // ✅ 没有写 cate_item，但返回的是标准JSON（自动兼容苹果CMS）
-        } else if (html != null && html.trim().startsWith("{") && html.contains("\"list\"")) {
+        } else if (html != null && html.trim().startsWith("{")) {
             JSONObject json = new JSONObject(html);
-            JSONArray array = json.optJSONArray("list");
+            String listPath = rule.optString("cate_list_path", "list");
+            Object pathResult = getJsonByPath(json, listPath);
+            JSONArray array = pathResult instanceof JSONArray ? (JSONArray) pathResult : null;
+            // 兼容旧逻辑：找不到指定路径则尝试默认 list
+            if (array == null) array = json.optJSONArray("list");
             if (array != null) {
                 for (int i = 0; i < array.length(); i++) {
                     JSONObject vod = KaiGeSmart.parseListItem(array.getJSONObject(i));
@@ -717,4 +721,20 @@ public String homeContent(boolean filter) {
         return "";
     }
 }
+    // ✅ 通用JSON路径取值，支持多级路径如 data.list、data.jiexiDataList
+    private Object getJsonByPath(JSONObject json, String path) {
+        try {
+            Object current = json;
+            for (String key : path.split("\\.")) {
+                if (current instanceof JSONObject) {
+                    current = ((JSONObject) current).opt(key);
+                } else {
+                    return null;
+                }
+            }
+            return current;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
