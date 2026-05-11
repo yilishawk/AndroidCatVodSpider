@@ -454,49 +454,79 @@ private String parseList(String html, String pg, boolean isSearch) {
     try {
         JSONArray list = new JSONArray();
         String prefix = isSearch ? "sc_" : "cate_";
-        
-        if (html.trim().startsWith("{") && html.contains("\"list\"")) {
+        String detailTemplate = rule.optString("detail_url", "");
+
+        String itemRule = rule.optString(prefix + "item", rule.optString("cate_item", ""));
+        String idRule     = rule.optString(prefix + "id",      rule.optString("cate_id",      ""));
+        String nameRule   = rule.optString(prefix + "name",    rule.optString("cate_name",    ""));
+        String picRule    = rule.optString(prefix + "pic",     rule.optString("cate_pic",     ""));
+        String remarkRule = rule.optString(prefix + "remarks", rule.optString("cate_remarks", ""));
+
+        // ✅ 判断是否走 json: 模式（cate_item 以 json: 开头）
+        if (itemRule.toLowerCase().startsWith("json:")) {
+            // 取数组key，如 json:list -> list
+            String arrayKey = itemRule.substring(5).trim();
             JSONObject json = new JSONObject(html);
-            JSONArray array = json.optJSONArray("list");
+            JSONArray array = json.optJSONArray(arrayKey);
             if (array != null) {
-                String detailTemplate = rule.optString("detail_url", "");
                 for (int i = 0; i < array.length(); i++) {
                     JSONObject item = array.getJSONObject(i);
                     JSONObject vod = new JSONObject();
-                    
-                    String vId = item.optString("id");
-                    if (!TextUtils.isEmpty(vId)) {
-                        if (!detailTemplate.isEmpty() && !vId.startsWith("http")) {
-                            vod.put("vod_id", detailTemplate.replace("{id}", vId));
-                        } else {
-                            vod.put("vod_id", vId.startsWith("http") ? vId : this.siteUrl + (vId.startsWith("/") ? "" : "/") + vId);
-                        }
+
+                    // 取各字段：json:movie_id -> movie_id，没写json:则用原值兜底
+                    String vId      = item.optString(stripJson(idRule),      item.optString("vod_id", item.optString("id", "")));
+                    String vName    = item.optString(stripJson(nameRule),    item.optString("vod_name", item.optString("name", "")));
+                    String vPic     = item.optString(stripJson(picRule),     item.optString("vod_pic", item.optString("pic", "")));
+                    String vRemarks = item.optString(stripJson(remarkRule),  item.optString("vod_remarks", item.optString("remarks", "")));
+
+                    if (TextUtils.isEmpty(vId) || TextUtils.isEmpty(vName)) continue;
+
+                    if (!detailTemplate.isEmpty() && !vId.startsWith("http")) {
+                        vod.put("vod_id", detailTemplate.replace("{id}", vId));
+                    } else {
+                        vod.put("vod_id", vId.startsWith("http") ? vId : this.siteUrl + (vId.startsWith("/") ? "" : "/") + vId);
                     }
 
-                    vod.put("vod_name", item.optString("name"));
-                    
-                    String vPic = item.optString("pic");
+                    vod.put("vod_name", vName);
                     if (!TextUtils.isEmpty(vPic) && vPic.startsWith("//")) vPic = "http:" + vPic;
-                    vod.put("vod_pic", vPic);
-                    
-                    vod.put("vod_remarks", item.optString("remarks"));
-                    
+                    vod.put("vod_pic",     vPic);
+                    vod.put("vod_remarks", vRemarks);
+
                     if (vod.has("vod_id")) list.put(vod);
                 }
             }
+
+        // ✅ 没有写 cate_item，但返回的是标准JSON（自动兼容苹果CMS）
+        } else if (TextUtils.isEmpty(itemRule) && html.trim().startsWith("{") && html.contains("\"list\"")) {
+            JSONObject json = new JSONObject(html);
+            JSONArray array = json.optJSONArray("list");
+            if (array != null) {
+                for (int i = 0; i < array.length(); i++) {
+                    JSONObject vod = KaiGeSmart.parseListItem(array.getJSONObject(i));
+                    if (!vod.has("vod_id")) continue;
+
+                    String vId = vod.optString("vod_id");
+                    if (!detailTemplate.isEmpty() && !vId.startsWith("http")) {
+                        vod.put("vod_id", detailTemplate.replace("{id}", vId));
+                    } else {
+                        vod.put("vod_id", vId.startsWith("http") ? vId : this.siteUrl + (vId.startsWith("/") ? "" : "/") + vId);
+                    }
+                    list.put(vod);
+                }
+            }
+
+        // ✅ 原有 HTML CSS选择器逻辑，完全保留
         } else {
             Document doc = Jsoup.parse(html);
-            String itemRule = rule.optString(prefix + "item", rule.optString("cate_item"));
             Elements items = doc.select(itemRule);
-            String detailTemplate = rule.optString("detail_url", "");
 
             for (Element item : items) {
                 JSONObject smartVod = KaiGeSmart.parseList(item);
                 JSONObject vod = new JSONObject();
-                
-                String vId = extract(item, rule.optString(prefix + "id", rule.optString("cate_id")));
+
+                String vId = extract(item, idRule);
                 if (TextUtils.isEmpty(vId)) vId = smartVod.optString("vod_id");
-                
+
                 if (!TextUtils.isEmpty(vId)) {
                     if (isSearch && !detailTemplate.isEmpty() && !vId.startsWith("http")) {
                         vod.put("vod_id", detailTemplate.replace("{id}", vId));
@@ -505,24 +535,31 @@ private String parseList(String html, String pg, boolean isSearch) {
                     }
                 }
 
-                String vName = extract(item, rule.optString(prefix + "name", rule.optString("cate_name")));
+                String vName = extract(item, nameRule);
                 vod.put("vod_name", TextUtils.isEmpty(vName) ? smartVod.optString("vod_name") : vName);
-                
-                String vPic = extract(item, rule.optString(prefix + "pic", rule.optString("cate_pic")));
+
+                String vPic = extract(item, picRule);
                 if (TextUtils.isEmpty(vPic)) vPic = smartVod.optString("vod_pic");
                 if (!TextUtils.isEmpty(vPic) && vPic.startsWith("//")) vPic = "http:" + vPic;
                 vod.put("vod_pic", vPic);
-                
-                String vRemarks = extract(item, rule.optString(prefix + "remarks", rule.optString("cate_remarks")));
+
+                String vRemarks = extract(item, remarkRule);
                 vod.put("vod_remarks", TextUtils.isEmpty(vRemarks) ? smartVod.optString("vod_remarks") : vRemarks);
 
                 if (vod.has("vod_id")) list.put(vod);
             }
         }
+
         return new JSONObject().put("list", list).put("page", pg).toString();
-    } catch (Exception e) { 
-        return "{\"list\":[]}"; 
+    } catch (Exception e) {
+        return "{\"list\":[]}";
     }
+}
+
+// ✅ 工具方法：剥掉 json: 前缀，取字段名
+private String stripJson(String rule) {
+    if (TextUtils.isEmpty(rule)) return "";
+    return rule.toLowerCase().startsWith("json:") ? rule.substring(5).trim() : rule.trim();
 }
 
 private String extract(Object root, String ruleStr) {
