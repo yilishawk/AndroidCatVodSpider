@@ -52,25 +52,37 @@ public class KaiGeEngine {
         // 🚀 3. 過濾與補全
         // 原有的「包含」邏輯
         if (!isEmpty(result.includeKey) && !finalValue.contains(result.includeKey)) finalValue = "";
-        if (step.startsWith("xpath:")) {
+        // --- XPath 解析核心逻辑开始 ---
+        if (coreLogic.startsWith("xpath:")) {
             try {
-                String xpath = step.substring(6).trim();
-                org.seimicrawler.xpath.JXDocument doc = org.seimicrawler.xpath.JXDocument.create(content);
-                java.util.List<org.seimicrawler.xpath.JXNode> nodes = doc.selN(xpath);
+                // 1. 提取真正的 XPath 表达式
+                String xpathQuery = coreLogic.substring(6).trim();
+                
+                // 2. 使用项目中已有的 org.seimicrawler.xpath 库
+                org.seimicrawler.xpath.JXDocument jxDoc = org.seimicrawler.xpath.JXDocument.create(html);
+                java.util.List<org.seimicrawler.xpath.JXNode> nodes = jxDoc.selN(xpathQuery);
+                
                 if (nodes != null && !nodes.isEmpty()) {
-                    if (nodes.size() == 1) return nodes.get(0).asString().trim();
                     StringBuilder sb = new StringBuilder();
-                    for (org.seimicrawler.xpath.JXNode node : nodes) {
-                        String val = node.asString().trim();
-                        if (!TextUtils.isEmpty(val)) {
-                            if (sb.length() > 0) sb.append("#");
-                            sb.append(val);
+                    
+                    // 如果規則指定了 [n] 索引，則只取那一個
+                    if (result.index < nodes.size() && result.index >= 0) {
+                        sb.append(nodes.get(result.index).asString().trim());
+                    } else {
+                        // 否則提取所有結果，用 $$$ 分隔（方便後續二次處理）
+                        for (org.seimicrawler.xpath.JXNode node : nodes) {
+                            if (sb.length() > 0) sb.append("$$$");
+                            sb.append(node.asString().trim());
                         }
                     }
-                    return sb.toString();
+                    result.value = sb.toString();
                 }
-            } catch (Exception e) { return ""; }
+            } catch (Exception e) {
+                result.value = ""; // 解析失敗返回空
+            }
         }
+        // --- XPath 解析核心逻辑结束 ---
+
         // 🚀 新增的「排除」邏輯：如果包含排除詞，直接清空結果
         if (!isEmpty(result.excludeKey) && finalValue.contains(result.excludeKey)) finalValue = "";
 
