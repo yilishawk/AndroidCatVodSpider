@@ -124,4 +124,29 @@ public class KaiGeNet {
         } catch (Exception ignored) {}
         return map;
     }
+    // ✅ CDN盾验证：自动计算 cdndefend_js_cookie
+    public static String cdnDefendCookie(String html) {
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("const a0_0x2a54=\\['([A-F0-9]+)'")
+                .matcher(html);
+            if (!m.find()) return "";
+            String c = m.group(1);
+            int n1 = Integer.parseInt(String.valueOf(c.charAt(0)), 16);
+            for (int i = 0; i < 99999; i++) {
+                byte[] sha1 = sha1Bytes(c + i);
+                if (sha1 != null && (sha1[n1] & 0xFF) == 0xb0 && (sha1[n1 + 1] & 0xFF) == 0x0b) {
+                    return "cdndefend_js_cookie=" + c + i;
+                }
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    private static byte[] sha1Bytes(String input) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            return md.digest(input.getBytes("UTF-8"));
+        } catch (Exception e) { return null; }
+    }
 }
