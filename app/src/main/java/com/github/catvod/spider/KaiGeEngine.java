@@ -115,6 +115,39 @@ public class KaiGeEngine {
             String realRule = step.substring(4, step.length() - 1);
             return executeSingleRule(content, realRule);
         }
+        if (step.startsWith("[替换:") && step.endsWith("]")) {
+            try {
+                String params = step.substring(4, step.length() - 1);
+                int arrow = params.indexOf(">");
+                if (arrow > -1) {
+                    String oldStr = params.substring(0, arrow);
+                    String newStr = params.substring(arrow + 1);
+                    return content.replace(oldStr, newStr);
+                }
+            } catch (Exception e) { return content; }
+        }
+
+        // ✅ [排序:1>3>5>8] 按指定位置顺序重排 URL 参数
+        // 例如参数顺序是 a=1&b=2&c=3&d=4，[排序:3>1>4>2] 表示取第3个放第1位，以此类推
+        if (step.startsWith("[排序:") && step.endsWith("]")) {
+            try {
+                String params = step.substring(4, step.length() - 1);
+                String[] order = params.split(">");
+                int idx = content.indexOf("?");
+                String base = idx > -1 ? content.substring(0, idx + 1) : "";
+                String query = idx > -1 ? content.substring(idx + 1) : content;
+                String[] pairs = query.split("&");
+                StringBuilder sb = new StringBuilder(base);
+                for (int i = 0; i < order.length; i++) {
+                    int pos = Integer.parseInt(order[i].trim()) - 1;
+                    if (pos >= 0 && pos < pairs.length) {
+                        if (sb.length() > base.length()) sb.append("&");
+                        sb.append(pairs[pos]);
+                    }
+                }
+                return sb.toString();
+            } catch (Exception e) { return content; }
+        }
         // 🚀 7. 時間戳標籤
         // [time] 生成 10 位秒級時間戳
         if (step.equalsIgnoreCase("[time]")) {
