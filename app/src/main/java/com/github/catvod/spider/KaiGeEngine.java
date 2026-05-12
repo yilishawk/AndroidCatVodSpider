@@ -52,7 +52,25 @@ public class KaiGeEngine {
         // 🚀 3. 過濾與補全
         // 原有的「包含」邏輯
         if (!isEmpty(result.includeKey) && !finalValue.contains(result.includeKey)) finalValue = "";
-
+        if (step.startsWith("xpath:")) {
+            try {
+                String xpath = step.substring(6).trim();
+                org.seimicrawler.xpath.JXDocument doc = org.seimicrawler.xpath.JXDocument.create(content);
+                java.util.List<org.seimicrawler.xpath.JXNode> nodes = doc.selN(xpath);
+                if (nodes != null && !nodes.isEmpty()) {
+                    if (nodes.size() == 1) return nodes.get(0).asString().trim();
+                    StringBuilder sb = new StringBuilder();
+                    for (org.seimicrawler.xpath.JXNode node : nodes) {
+                        String val = node.asString().trim();
+                        if (!TextUtils.isEmpty(val)) {
+                            if (sb.length() > 0) sb.append("#");
+                            sb.append(val);
+                        }
+                    }
+                    return sb.toString();
+                }
+            } catch (Exception e) { return ""; }
+        }
         // 🚀 新增的「排除」邏輯：如果包含排除詞，直接清空結果
         if (!isEmpty(result.excludeKey) && finalValue.contains(result.excludeKey)) finalValue = "";
 
