@@ -74,6 +74,22 @@ public class KG extends Spider {
 
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
             logger("🌐 [系統] 域名自動綁定: " + this.siteUrl);
+
+            // ✅ 自动检测CDN盾，计算cookie写入全局headers
+            try {
+                OkResult homeRes = OkHttp.get(this.siteUrl, null, new HashMap<>());
+                String homeHtml = homeRes.getBody();
+                if (!TextUtils.isEmpty(homeHtml) && homeHtml.contains("cdndefend_js_cookie")) {
+                    String cookie = KaiGeNet.cdnDefendCookie(homeHtml);
+                    if (!TextUtils.isEmpty(cookie)) {
+                        JSONObject headers = rule.optJSONObject("headers");
+                        if (headers == null) headers = new JSONObject();
+                        headers.put("Cookie", cookie);
+                        rule.put("headers", headers);
+                        logger("<span style='color:#2ecc71;'>🍪 [CDN盾] 自动计算cookie成功: </span>" + cookie);
+                    }
+                }
+            } catch (Exception ignored) {}
             
         } catch (Exception e) {
             // 這裡會捕獲到 Unexpected char 報錯並顯示
