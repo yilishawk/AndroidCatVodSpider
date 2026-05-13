@@ -142,16 +142,21 @@ private void logCheck(String title, String html, boolean showSource) {
             // --- 4. 正式發起請求 ---
             OkResult res = KaiGeNet.smartRequest(this.siteUrl, method, url, body, getHeaders(null));
             String html = res.getBody();
-            // 🚀 [新增診斷日誌] 判斷網絡與定位問題
+
+            // 🚀 [修正位置的診斷日誌]
             if (TextUtils.isEmpty(html)) {
                 Proxy.log("<b style='color:red;'>🚨 [網絡層錯誤] 請求返回為 0 字節！請檢查 Referer 或 UA。</b>");
             } else {
                 Proxy.log("<b style='color:#2ecc71;'>📥 [網絡層成功] 收到源碼: " + html.length() + " 字節</b>");
-                // 檢查定位規則
+                
+                // 先解析出 items，再进行逻辑判断
                 String itemRule = rule.optString("cate_item");
-                if (!items.isEmpty()) { // 這裡 items 是調用 parseList 前的預檢
-                    Proxy.log("<b style='color:#2ecc71;'>✅ [定位層成功] 匹配到項目。</b>");
-                } else if (org.jsoup.Jsoup.parse(html).select(itemRule).isEmpty()) {
+                Document doc = Jsoup.parse(html);
+                Elements items = doc.select(itemRule); // 👈 必须先定义 items
+                
+                if (!items.isEmpty()) { 
+                    Proxy.log("<b style='color:#2ecc71;'>✅ [定位層成功] 匹配到項目数量: " + items.size() + "</b>");
+                } else {
                     Proxy.log("<b style='color:red;'>❌ [定位層錯誤] 規則 [" + itemRule + "] 找不到內容，請修改 cate_item！</b>");
                 }
             }
