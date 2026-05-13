@@ -108,11 +108,14 @@ private void logCheck(String title, String html, boolean showSource) {
                     }
                 }
                 if (!TextUtils.isEmpty(redirectCookie)) {
+                    // ✅ 同时存入 rule.headers 和 KaiGeNet.cookieJar，确保所有请求都带上
                     JSONObject hdrs = rule.optJSONObject("headers");
                     if (hdrs == null) hdrs = new JSONObject();
                     String existCookie = hdrs.optString("Cookie", "");
                     hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? redirectCookie : existCookie + "; " + redirectCookie);
                     rule.put("headers", hdrs);
+                    // ✅ 同时写入 cookieJar，后续所有 smartRequest 自动携带
+                    KaiGeNet.putCookie(this.siteUrl, redirectCookie);
                     logger("<span style='color:#2ecc71;'>🍪 [302Token] cookie成功: </span>" + redirectCookie);
                 }
                 // 带cookie预热一次，处理CDN盾
