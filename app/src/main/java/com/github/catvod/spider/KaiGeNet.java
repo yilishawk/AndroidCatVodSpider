@@ -23,72 +23,61 @@ public class KaiGeNet {
      * @param body 請求參數
      * @param headers 自定義頭
      */
-    public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers) {
+public static OkResult smartRequest(String siteUrl, String method, String url, String body, Map<String, String> headers) {
         String host = getHost(url);
         if (headers == null) headers = new HashMap<>();
 
         // 1. 注入萬用 UA
         if (!headers.containsKey("User-Agent")) headers.put("User-Agent", MOBILE_UA);
 
-        // 2. 🚀 凱哥防護：注入安全 Referer (過濾非 ASCII 字符，防止中文路徑崩潰)
+        // 2. 🚀 凱哥防護：注入安全 Referer
         if (!headers.containsKey("Referer")) {
             if (!TextUtils.isEmpty(siteUrl) && siteUrl.matches("^[\\x00-\\x7F]*$")) {
                 headers.put("Referer", siteUrl);
             } else {
-                // 如果路徑有中文，則降級使用該站點的 Host 域名
                 headers.put("Referer", getHost(siteUrl) + "/");
             }
         }
 
-        // 3. 自動注入該站點之前的歷史 Cookie
+        // 3. ✅ 先用禁止跳转模式探测，拿到302的Set-Cookie存入cookieJar
+        try {
+            Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(url, headers);
+            String redirectCookie = getSetCookie(redirectHeaders);
+            if (!TextUtils.isEmpty(redirectCookie)) {
+                String existCookie = cookieJar.getOrDefault(host, "");
+                String mergedCookie = mergeCookies(existCookie, redirectCookie);
+                cookieJar.put(host, mergedCookie);
+            }
+        } catch (Exception ignored) {}
+
+        // 4. 自動注入該站點之前的歷史 Cookie（包含刚才302拿到的）
         if (cookieJar.containsKey(host)) {
             headers.put("Cookie", cookieJar.get(host));
         }
 
-        // 4. 執行第一次請求
+        // 5. 執行正式請求（带着cookie，OkHttp自动跟随重定向）
         OkResult res = execute(method, url, body, headers);
 
-        // 5. 🚀 核心提取：從響應頭拿到新的 Set-Cookie
+        // 6. 🚀 提取正式响应的Set-Cookie继续更新cookieJar
         String setCookie = getSetCookie(res.getResp());
-
         if (!TextUtils.isEmpty(setCookie)) {
-            // 合并新旧cookie
             String existCookie = cookieJar.getOrDefault(host, "");
             String mergedCookie = mergeCookies(existCookie, setCookie);
             cookieJar.put(host, mergedCookie);
 
-            // ✅ 凱哥特技：自動補刀
-            // 条件1：内容太短（5s盾/防火墙）
-            // 条件2：包含重定向特征（302 Token下发）
-            // 条件3：包含CDN盾JS特征
+            // CDN盾JS计算
             String bodyStr = res.getBody() == null ? "" : res.getBody().trim();
-            // ✅ 只要服务端下发了新cookie就重试一次
-            // 因为下发cookie通常意味着需要带上这个cookie才能拿到真实数据
-            boolean needRetry = bodyStr.length() < 1000
-                    || bodyStr.contains("location.reload")
-                    || bodyStr.contains("cdndefend_js_cookie")
-                    || bodyStr.contains("window.onload");
-            // ✅ 有Set-Cookie下发，说明服务端在做验证，无论内容长短都重试
-            if (!TextUtils.isEmpty(setCookie)) needRetry = true;
-
-            if (needRetry) {
-                // ✅ CDN盾：先计算JS cookie再重试
-                if (bodyStr.contains("cdndefend_js_cookie")) {
-                    String jsCookie = cdnDefendCookie(bodyStr);
-                    if (!TextUtils.isEmpty(jsCookie)) {
-                        mergedCookie = mergeCookies(mergedCookie, jsCookie);
-                        cookieJar.put(host, mergedCookie);
-                    }
-                }
-
-                headers.put("Cookie", mergedCookie);
-                res = execute(method, url, body, headers);
-
-                // 二次请求后再次同步最新Cookie
-                String secondCookie = getSetCookie(res.getResp());
-                if (!TextUtils.isEmpty(secondCookie)) {
-                    mergedCookie = mergeCookies(mergedCookie, secondCookie);
+            if (bodyStr.contains("cdndefend_js_cookie")) {
+                String jsCookie = cdnDefendCookie(bodyStr);
+                if (!TextUtils.isEmpty(jsCookie)) {
+                    mergedCookie = mergeCookies(mergedCookie, jsCookie);
                     cookieJar.put(host, mergedCookie);
+                    headers.put("Cookie", mergedCookie);
+                    res = execute(method, url, body, headers);
+                    String thirdCookie = getSetCookie(res.getResp());
+                    if (!TextUtils.isEmpty(thirdCookie)) {
+                        cookieJar.put(host, mergeCookies(mergedCookie, thirdCookie));
+                    }
                 }
             }
         }
