@@ -78,7 +78,7 @@ private void logCheck(String title, String html, boolean showSource) {
 
             // ✅ 自动检测CDN盾，计算cookie写入全局headers
             try {
-                OkResult homeRes = OkHttp.get(this.siteUrl, null, new HashMap<>());
+                OkResult homeRes = KaiGeNet.smartRequest(this.siteUrl, "get", this.siteUrl, null, getHeaders(null));
                 String homeHtml = homeRes.getBody();
                 if (!TextUtils.isEmpty(homeHtml) && homeHtml.contains("cdndefend_js_cookie")) {
                     String cookie = KaiGeNet.cdnDefendCookie(homeHtml);
