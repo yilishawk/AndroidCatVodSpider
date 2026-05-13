@@ -77,54 +77,65 @@ private void logCheck(String title, String html, boolean showSource) {
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
             logger("🌐 [系統] 域名自動綁定: " + this.siteUrl);
 
-            // ✅ 预热首页：手动处理302拿cookie，只做一次
-            try {
-                Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(
-                    this.siteUrl, getHeaders(null));
-                // ✅ 安全检测：如果跳转目标不是同域名则拒绝
-                String location = OkHttp.getLocation(redirectHeaders);
-                if (!TextUtils.isEmpty(location)) {
-                    String locationHost = "";
-                    try { locationHost = new java.net.URL(location).getHost(); } catch (Exception ignored) {}
-                    String siteHost = "";
-                    try { siteHost = new java.net.URL(this.siteUrl).getHost(); } catch (Exception ignored) {}
-                    if (!locationHost.equals(siteHost)) {
-                        logger("<span style='color:#f1c40f;'>⚠️ [预热] 跨域跳转已拒绝: </span>" + location);
-                        throw new Exception("cross domain redirect blocked");
-                    }
-                }
-                String redirectCookie = "";
-                if (redirectHeaders != null) {
-                    List<String> cookies = redirectHeaders.get("Set-Cookie");
-                    if (cookies == null) cookies = redirectHeaders.get("set-cookie");
-                    if (cookies != null && !cookies.isEmpty()) {
-                        StringBuilder sb = new StringBuilder();
-                        for (String c : cookies) {
-                            String part = c.split(";")[0].trim();
-                            if (sb.length() > 0) sb.append("; ");
-                            sb.append(part);
+            // ✅ 仅当规则明确开启 cdndefend 时才触发预热和CDN盾检测
+            if (rule.optBoolean("cdndefend", false)) {
+                try {
+                    Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(
+                        this.siteUrl, getHeaders(null));
+                    // ✅ 安全检测：如果跳转目标不是同域名则拒绝
+                    String location = OkHttp.getLocation(redirectHeaders);
+                    if (!TextUtils.isEmpty(location)) {
+                        String locationHost = "";
+                        try { locationHost = new java.net.URL(location).getHost(); } catch (Exception ignored) {}
+                        String siteHost = "";
+                        try { siteHost = new java.net.URL(this.siteUrl).getHost(); } catch (Exception ignored) {}
+                        if (!locationHost.equals(siteHost)) {
+                            logger("<span style='color:#f1c40f;'>⚠️ [预热] 跨域跳转已拒绝: </span>" + location);
+                            throw new Exception("cross domain redirect blocked");
                         }
-                        redirectCookie = sb.toString();
                     }
+                    String redirectCookie = "";
+                    if (redirectHeaders != null) {
+                        List<String> cookies = redirectHeaders.get("Set-Cookie");
+                        if (cookies == null) cookies = redirectHeaders.get("set-cookie");
+                        if (cookies != null && !cookies.isEmpty()) {
+                            StringBuilder sb = new StringBuilder();
+                            for (String c : cookies) {
+                                String part = c.split(";")[0].trim();
+                                if (sb.length() > 0) sb.append("; ");
+                                sb.append(part);
+                            }
+                            redirectCookie = sb.toString();
+                        }
+                    }
+                    if (!TextUtils.isEmpty(redirectCookie)) {
+                        JSONObject hdrs = rule.optJSONObject("headers");
+                        if (hdrs == null) hdrs = new JSONObject();
+                        String existCookie = hdrs.optString("Cookie", "");
+                        hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? redirectCookie : existCookie + "; " + redirectCookie);
+                        rule.put("headers", hdrs);
+                        KaiGeNet.putCookie(this.siteUrl, redirectCookie);
+                        logger("<span style='color:#2ecc71;'>🍪 [302Token] cookie成功: </span>" + redirectCookie);
+                    }
+                    // 带cookie预热一次，处理CDN盾
+                    String homeHtml = KaiGeNet.smartRequest(this.siteUrl, "get", this.siteUrl, null, getHeaders(null)).getBody();
+                    // ✅ 检测CDN盾
+                    if (!TextUtils.isEmpty(homeHtml) && homeHtml.contains("cdndefend_js_cookie")) {
+                        String cookie = KaiGeNet.cdnDefendCookie(homeHtml);
+                        if (!TextUtils.isEmpty(cookie)) {
+                            JSONObject hdrs = rule.optJSONObject("headers");
+                            if (hdrs == null) hdrs = new JSONObject();
+                            hdrs.put("Cookie", cookie);
+                            rule.put("headers", hdrs);
+                            logger("<span style='color:#2ecc71;'>🍪 [CDN盾] 自动计算cookie成功: </span>" + cookie);
+                        }
+                    }
+                    logger("<span style='color:#2ecc71;'>✅ [首页预热] 完成</span>");
+                } catch (Exception ex) {
+                    logger("<span style='color:#f1c40f;'>⚠️ [首页预热] 异常: </span>" + ex.getMessage());
                 }
-                if (!TextUtils.isEmpty(redirectCookie)) {
-                    // ✅ 同时存入 rule.headers 和 KaiGeNet.cookieJar，确保所有请求都带上
-                    JSONObject hdrs = rule.optJSONObject("headers");
-                    if (hdrs == null) hdrs = new JSONObject();
-                    String existCookie = hdrs.optString("Cookie", "");
-                    hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? redirectCookie : existCookie + "; " + redirectCookie);
-                    rule.put("headers", hdrs);
-                    // ✅ 同时写入 cookieJar，后续所有 smartRequest 自动携带
-                    KaiGeNet.putCookie(this.siteUrl, redirectCookie);
-                    logger("<span style='color:#2ecc71;'>🍪 [302Token] cookie成功: </span>" + redirectCookie);
-                }
-                // 带cookie预热一次，处理CDN盾
-                KaiGeNet.smartRequest(this.siteUrl, "get", this.siteUrl, null, getHeaders(null));
-                logger("<span style='color:#2ecc71;'>🍪 [首页预热] 完成</span>");
-            } catch (Exception ex) {
-                logger("<span style='color:#f1c40f;'>⚠️ [首页预热] 异常: </span>" + ex.getMessage());
             }
-            
+
         } catch (Exception e) {
             // 這裡會捕獲到 Unexpected char 報錯並顯示
             logger("🚨 [系統] 初始化崩潰: " + e.getMessage());
