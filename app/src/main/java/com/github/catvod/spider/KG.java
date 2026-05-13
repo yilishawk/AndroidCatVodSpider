@@ -11,6 +11,7 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import java.util.List;
 import java.net.URLEncoder;
 import java.util.*;
 
@@ -76,8 +77,33 @@ private void logCheck(String title, String html, boolean showSource) {
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
             logger("🌐 [系統] 域名自動綁定: " + this.siteUrl);
 
-            // ✅ 预热首页，让 KaiGeNet 自动处理302和CDN盾
+            // ✅ 预热首页：手动处理302拿cookie，只做一次
             try {
+                Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(
+                    this.siteUrl, getHeaders(null));
+                String redirectCookie = "";
+                if (redirectHeaders != null) {
+                    List<String> cookies = redirectHeaders.get("Set-Cookie");
+                    if (cookies == null) cookies = redirectHeaders.get("set-cookie");
+                    if (cookies != null && !cookies.isEmpty()) {
+                        StringBuilder sb = new StringBuilder();
+                        for (String c : cookies) {
+                            String part = c.split(";")[0].trim();
+                            if (sb.length() > 0) sb.append("; ");
+                            sb.append(part);
+                        }
+                        redirectCookie = sb.toString();
+                    }
+                }
+                if (!TextUtils.isEmpty(redirectCookie)) {
+                    JSONObject hdrs = rule.optJSONObject("headers");
+                    if (hdrs == null) hdrs = new JSONObject();
+                    String existCookie = hdrs.optString("Cookie", "");
+                    hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? redirectCookie : existCookie + "; " + redirectCookie);
+                    rule.put("headers", hdrs);
+                    logger("<span style='color:#2ecc71;'>🍪 [302Token] cookie成功: </span>" + redirectCookie);
+                }
+                // 带cookie预热一次，处理CDN盾
                 KaiGeNet.smartRequest(this.siteUrl, "get", this.siteUrl, null, getHeaders(null));
                 logger("<span style='color:#2ecc71;'>🍪 [首页预热] 完成</span>");
             } catch (Exception ex) {
