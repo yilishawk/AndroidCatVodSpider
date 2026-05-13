@@ -81,6 +81,18 @@ private void logCheck(String title, String html, boolean showSource) {
             try {
                 Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(
                     this.siteUrl, getHeaders(null));
+                // ✅ 安全检测：如果跳转目标不是同域名则拒绝
+                String location = OkHttp.getLocation(redirectHeaders);
+                if (!TextUtils.isEmpty(location)) {
+                    String locationHost = "";
+                    try { locationHost = new java.net.URL(location).getHost(); } catch (Exception ignored) {}
+                    String siteHost = "";
+                    try { siteHost = new java.net.URL(this.siteUrl).getHost(); } catch (Exception ignored) {}
+                    if (!locationHost.equals(siteHost)) {
+                        logger("<span style='color:#f1c40f;'>⚠️ [预热] 跨域跳转已拒绝: </span>" + location);
+                        throw new Exception("cross domain redirect blocked");
+                    }
+                }
                 String redirectCookie = "";
                 if (redirectHeaders != null) {
                     List<String> cookies = redirectHeaders.get("Set-Cookie");
