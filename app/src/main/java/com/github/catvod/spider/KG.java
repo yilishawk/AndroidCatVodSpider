@@ -613,7 +613,6 @@ if (vars != null) {
 
 private String parseList(String html, String pg, boolean isSearch) {
     try {
-        if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
         JSONArray list = new JSONArray();
         String prefix = isSearch ? "sc_" : "cate_";
         String detailTemplate = rule.optString("detail_url", "");
