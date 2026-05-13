@@ -76,21 +76,63 @@ private void logCheck(String title, String html, boolean showSource) {
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
             logger("🌐 [系統] 域名自動綁定: " + this.siteUrl);
 
-            // ✅ 自动检测CDN盾，计算cookie写入全局headers
+// ✅ 自动处理首页Cookie：手动处理302拿token + CDN盾JS计算
             try {
+                // 第一步：用 HttpURLConnection 禁止自动跳转，手动拿302的Set-Cookie
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(this.siteUrl).openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setRequestProperty("User-Agent", rule.optString("ua", "Mozilla/5.0"));
+                conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.connect();
+                int code = conn.getResponseCode();
+                Proxy.log("<span style='color:#3498db;'>[首页检测] 响应码: </span>" + code);
+
+                if (code == 302 || code == 301) {
+                    // 拿302响应里的所有Set-Cookie
+                    StringBuilder cookieBuilder = new StringBuilder();
+                    int i = 0;
+                    while (true) {
+                        String headerName = conn.getHeaderFieldKey(i);
+                        String headerValue = conn.getHeaderField(i);
+                        if (headerName == null && headerValue == null) break;
+                        if ("set-cookie".equalsIgnoreCase(headerName) && !TextUtils.isEmpty(headerValue)) {
+                            String cookiePart = headerValue.split(";")[0].trim();
+                            if (cookieBuilder.length() > 0) cookieBuilder.append("; ");
+                            cookieBuilder.append(cookiePart);
+                        }
+                        i++;
+                    }
+                    String cookieVal = cookieBuilder.toString();
+                    if (!TextUtils.isEmpty(cookieVal)) {
+                        JSONObject hdrs = rule.optJSONObject("headers");
+                        if (hdrs == null) hdrs = new JSONObject();
+                        String existCookie = hdrs.optString("Cookie", "");
+                        hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? cookieVal : existCookie + "; " + cookieVal);
+                        rule.put("headers", hdrs);
+                        logger("<span style='color:#2ecc71;'>🍪 [302Token] cookie成功: </span>" + cookieVal);
+                    }
+                }
+                conn.disconnect();
+
+                // 第二步：带上cookie访问首页，检测CDN盾
                 OkResult homeRes = KaiGeNet.smartRequest(this.siteUrl, "get", this.siteUrl, null, getHeaders(null));
                 String homeHtml = homeRes.getBody();
                 if (!TextUtils.isEmpty(homeHtml) && homeHtml.contains("cdndefend_js_cookie")) {
-                    String cookie = KaiGeNet.cdnDefendCookie(homeHtml);
-                    if (!TextUtils.isEmpty(cookie)) {
-                        JSONObject headers = rule.optJSONObject("headers");
-                        if (headers == null) headers = new JSONObject();
-                        headers.put("Cookie", cookie);
-                        rule.put("headers", headers);
-                        logger("<span style='color:#2ecc71;'>🍪 [CDN盾] 自动计算cookie成功: </span>" + cookie);
+                    String jsCookie = KaiGeNet.cdnDefendCookie(homeHtml);
+                    if (!TextUtils.isEmpty(jsCookie)) {
+                        JSONObject hdrs = rule.optJSONObject("headers");
+                        if (hdrs == null) hdrs = new JSONObject();
+                        String existCookie = hdrs.optString("Cookie", "");
+                        hdrs.put("Cookie", TextUtils.isEmpty(existCookie) ? jsCookie : existCookie + "; " + jsCookie);
+                        rule.put("headers", hdrs);
+                        logger("<span style='color:#2ecc71;'>🍪 [CDN盾] cookie成功: </span>" + jsCookie);
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                logger("<span style='color:#f1c40f;'>⚠️ [首页检测] 异常: </span>" + ex.getMessage());
+            }
             
         } catch (Exception e) {
             // 這裡會捕獲到 Unexpected char 報錯並顯示
