@@ -150,6 +150,14 @@ public static OkResult smartRequest(String siteUrl, String method, String url, S
         }
         return sb.toString();
     }
+    // ✅ 外部写入cookie到cookieJar
+    public static void putCookie(String url, String cookie) {
+        String host = getHost(url);
+        if (!TextUtils.isEmpty(host) && !TextUtils.isEmpty(cookie)) {
+            String existing = cookieJar.getOrDefault(host, "");
+            cookieJar.put(host, mergeCookies(existing, cookie));
+        }
+    }
     // ✅ CDN盾验证：自动计算 cdndefend_js_cookie
     public static String cdnDefendCookie(String html) {
         try {
