@@ -52,23 +52,49 @@ public class KaiGeNet {
         String setCookie = getSetCookie(res.getResp());
 
         if (!TextUtils.isEmpty(setCookie)) {
-            cookieJar.put(host, setCookie);
-            
-            // 🚀 凱哥特技：自動補刀 (解決 5s 盾、防火牆或 Cookie 驗證頁面)
-            // 如果返回內容太短，說明還沒進到正題，帶著新 Cookie 立刻再請求一次
-            if (res.getBody().trim().length() < 1000) {
-                headers.put("Cookie", setCookie);
+            // 合并新旧cookie
+            String existCookie = cookieJar.getOrDefault(host, "");
+            String mergedCookie = mergeCookies(existCookie, setCookie);
+            cookieJar.put(host, mergedCookie);
+
+            // ✅ 凱哥特技：自動補刀
+            // 条件1：内容太短（5s盾/防火墙）
+            // 条件2：包含重定向特征（302 Token下发）
+            // 条件3：包含CDN盾JS特征
+            String bodyStr = res.getBody() == null ? "" : res.getBody().trim();
+            // ✅ 只要服务端下发了新cookie就重试一次
+            // 因为下发cookie通常意味着需要带上这个cookie才能拿到真实数据
+            boolean needRetry = bodyStr.length() < 1000
+                    || bodyStr.contains("location.reload")
+                    || bodyStr.contains("cdndefend_js_cookie")
+                    || bodyStr.contains("window.onload");
+            // ✅ 有Set-Cookie下发，说明服务端在做验证，无论内容长短都重试
+            if (!TextUtils.isEmpty(setCookie)) needRetry = true;
+
+            if (needRetry) {
+                // ✅ CDN盾：先计算JS cookie再重试
+                if (bodyStr.contains("cdndefend_js_cookie")) {
+                    String jsCookie = cdnDefendCookie(bodyStr);
+                    if (!TextUtils.isEmpty(jsCookie)) {
+                        mergedCookie = mergeCookies(mergedCookie, jsCookie);
+                        cookieJar.put(host, mergedCookie);
+                    }
+                }
+
+                headers.put("Cookie", mergedCookie);
                 res = execute(method, url, body, headers);
-                
-                // 二次請求後再次同步最新 Cookie
+
+                // 二次请求后再次同步最新Cookie
                 String secondCookie = getSetCookie(res.getResp());
-                if (!TextUtils.isEmpty(secondCookie)) cookieJar.put(host, secondCookie);
+                if (!TextUtils.isEmpty(secondCookie)) {
+                    mergedCookie = mergeCookies(mergedCookie, secondCookie);
+                    cookieJar.put(host, mergedCookie);
+                }
             }
         }
 
         return res;
     }
-
     // 🚀 內部執行器：支持 POST(JSON/表單) 和 GET 參數自動轉換
     private static OkResult execute(String method, String url, String body, Map<String, String> headers) {
         method = (method == null) ? "get" : method.toLowerCase();
@@ -123,6 +149,28 @@ public class KaiGeNet {
             }
         } catch (Exception ignored) {}
         return map;
+    }
+    // ✅ 合并Cookie：避免新cookie覆盖旧cookie，相同key取新值
+    private static String mergeCookies(String oldCookie, String newCookie) {
+        if (TextUtils.isEmpty(oldCookie)) return newCookie;
+        if (TextUtils.isEmpty(newCookie)) return oldCookie;
+        Map<String, String> cookieMap = new java.util.LinkedHashMap<>();
+        // 先放旧的
+        for (String part : oldCookie.split(";")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length == 2) cookieMap.put(kv[0].trim(), kv[1].trim());
+        }
+        // 新的覆盖旧的（相同key取新值）
+        for (String part : newCookie.split(";")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length == 2) cookieMap.put(kv[0].trim(), kv[1].trim());
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : cookieMap.entrySet()) {
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(entry.getKey()).append("=").append(entry.getValue());
+        }
+        return sb.toString();
     }
     // ✅ CDN盾验证：自动计算 cdndefend_js_cookie
     public static String cdnDefendCookie(String html) {
