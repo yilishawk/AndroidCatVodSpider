@@ -39,26 +39,15 @@ public static OkResult smartRequest(String siteUrl, String method, String url, S
             }
         }
 
-        // 3. ✅ 先用禁止跳转模式探测，拿到302的Set-Cookie存入cookieJar
-        try {
-            Map<String, List<String>> redirectHeaders = OkHttp.getLocationHeader(url, headers);
-            String redirectCookie = getSetCookie(redirectHeaders);
-            if (!TextUtils.isEmpty(redirectCookie)) {
-                String existCookie = cookieJar.getOrDefault(host, "");
-                String mergedCookie = mergeCookies(existCookie, redirectCookie);
-                cookieJar.put(host, mergedCookie);
-            }
-        } catch (Exception ignored) {}
-
-        // 4. 自動注入該站點之前的歷史 Cookie（包含刚才302拿到的）
+        // 3. 自動注入該站點之前的歷史 Cookie
         if (cookieJar.containsKey(host)) {
             headers.put("Cookie", cookieJar.get(host));
         }
 
-        // 5. 執行正式請求（带着cookie，OkHttp自动跟随重定向）
+        // 4. 執行正式請求
         OkResult res = execute(method, url, body, headers);
 
-        // 6. 🚀 提取正式响应的Set-Cookie继续更新cookieJar
+        // 5. 提取Set-Cookie更新cookieJar
         String setCookie = getSetCookie(res.getResp());
         if (!TextUtils.isEmpty(setCookie)) {
             String existCookie = cookieJar.getOrDefault(host, "");
