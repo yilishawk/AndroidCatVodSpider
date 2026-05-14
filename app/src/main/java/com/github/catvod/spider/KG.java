@@ -431,6 +431,9 @@ Document doc = Jsoup.parse(html);
         }
         vod.put("vod_play_from", TextUtils.join("$$$", fList));
         vod.put("vod_play_url", TextUtils.join("$$$", playList));
+        
+// ← 加这行
+Proxy.log("🔍 [最終組裝] from: " + vod.optString("vod_play_from") + " | url前100: " + vod.optString("vod_play_url").substring(0, Math.min(100, vod.optString("vod_play_url").length())));
     }
 
 @Override
