@@ -195,15 +195,17 @@ private void logCheck(String title, String html, boolean showSource) {
                 
                 // 先解析出 items，再进行逻辑判断
                 String itemRule = rule.optString("cate_item");
-                Document doc = Jsoup.parse(html);
-                Elements items = doc.select(itemRule); // 👈 必须先定义 items
-                
-                if (!items.isEmpty()) { 
-                    Proxy.log("<b style='color:#2ecc71;'>✅ [定位層成功] 匹配到項目数量: " + items.size() + "</b>");
+                if (!TextUtils.isEmpty(itemRule)) {
+                    Document doc = Jsoup.parse(html);
+                    Elements items = doc.select(itemRule);
+                    if (!items.isEmpty()) {
+                        Proxy.log("<b style='color:#2ecc71;'>✅ [定位層成功] 匹配到項目数量: " + items.size() + "</b>");
+                    } else {
+                        Proxy.log("<b style='color:red;'>❌ [定位層錯誤] 規則 [" + itemRule + "] 找不到內容，請修改 cate_item！</b>");
+                    }
                 } else {
-                    Proxy.log("<b style='color:red;'>❌ [定位層錯誤] 規則 [" + itemRule + "] 找不到內容，請修改 cate_item！</b>");
+                    Proxy.log("<b style='color:#3498db;'>📋 [定位層] JSON接口模式，跳過CSS選擇器</b>");
                 }
-            }
             // 💡 凱哥監控：顯示返回數據長度
             Proxy.log("<b style='color:#3498db;'>📊 [數據返回]</b> 長度: " + (html != null ? html.length() : 0));
 
