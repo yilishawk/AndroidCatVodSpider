@@ -376,6 +376,16 @@ Document doc = Jsoup.parse(html);
             String[] parts = fromRule.split("&&");
             cssFrom = parts[0].contains("[包含:") ? (parts.length > 1 ? parts[1] : "h3") : parts[0];
         }
+                // ← 加这几行调试
+        Elements allListsDebug = doc.select(listRule);
+        Proxy.log("🔍 [調試] dt_from 規則: " + cssFrom);
+        Proxy.log("🔍 [調試] dt_list 規則: " + listRule);
+        Proxy.log("🔍 [調試] dt_list 匹配到列表数: " + allListsDebug.size());
+        for (int i = 0; i < allListsDebug.size(); i++) {
+            Elements links = allListsDebug.get(i).select("a");
+            Proxy.log("🔍 [調試] 第" + (i+1) + "个列表 链接数: " + links.size() + " 第一个链接: " + (links.isEmpty() ? "空" : links.get(0).attr("href")));
+        }
+        // ← 调试结束
         Elements fromElements = doc.select(cssFrom);
         List<String> fList = new ArrayList<>();
         List<String> pLists = new ArrayList<>();
