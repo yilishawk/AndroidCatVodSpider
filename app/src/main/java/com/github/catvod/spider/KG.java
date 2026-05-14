@@ -393,32 +393,16 @@ Document doc = Jsoup.parse(html);
         for (Element from : fromElements) {
             String sourceName = from.text().trim();
             if (TextUtils.isEmpty(sourceName)) sourceName = "播放線路 " + (fromElements.indexOf(from) + 1);
-            Element nextList = null;
-            Element p = from.parent(); 
-            while (p != null && nextList == null) {
-                Element sibling = p.nextElementSibling();
-                while (sibling != null) {
-                    nextList = sibling.selectFirst(listRule);
-                    if (nextList != null) break;
-                    sibling = sibling.nextElementSibling();
-                }
-                if (nextList != null) break;
-                p = p.parent();
-                if (p != null && p.tagName().equals("body")) break;
-            }
-            if (nextList == null) {
-                Elements allLists = doc.select(listRule);
-                int idx = fromElements.indexOf(from);
-                if (idx < allLists.size()) nextList = allLists.get(idx);
-            }
+
+            // 直接按索引取对应列表
+            Elements allLists = doc.select(listRule);
+            int idx = fromElements.indexOf(from);
+            Element nextList = (idx < allLists.size()) ? allLists.get(idx) : null;
+
             if (nextList != null) {
-    Proxy.log("🔍 [pLists存入] 第" + fList.size() + "条线路 HTML前50: " + nextList.outerHtml().substring(0, Math.min(50, nextList.outerHtml().length())));
-    fList.add(sourceName);
-    pLists.add(nextList.outerHtml()); 
-}
-            if (nextList != null) {
+                Proxy.log("🔍 [pLists存入] 第" + fList.size() + "条线路 HTML前50: " + nextList.outerHtml().substring(0, Math.min(50, nextList.outerHtml().length())));
                 fList.add(sourceName);
-                pLists.add(nextList.outerHtml()); 
+                pLists.add(nextList.outerHtml());
             }
         }
 
@@ -428,19 +412,20 @@ Document doc = Jsoup.parse(html);
             Document listDoc = Jsoup.parse(pLists.get(i));
             Elements aElements = listDoc.select("a");
             for (Element a : aElements) {
-    String pName = a.text().trim();
-    String pUrl = a.attr("href").trim();
-    if (!pName.isEmpty() && !pUrl.isEmpty() && !pUrl.contains("javascript")) {
-        urls.add(pName + "$" + pUrl);
-    }
-}
+                String pName = a.text().trim();
+                String pUrl = a.attr("href").trim();
+                if (!pName.isEmpty() && !pUrl.isEmpty() && !pUrl.contains("javascript")) {
+                    urls.add(pName + "$" + pUrl);
+                }
+            }
             playList.add(TextUtils.join("#", urls));
         }
+
         vod.put("vod_play_from", TextUtils.join("$$$", fList));
         vod.put("vod_play_url", TextUtils.join("$$$", playList));
-        
-// ← 加这行
-Proxy.log("🔍 [最終組裝] from: " + vod.optString("vod_play_from") + " | url前100: " + vod.optString("vod_play_url").substring(0, Math.min(100, vod.optString("vod_play_url").length())));
+
+        // ← 加这行
+        Proxy.log("🔍 [最終組裝] from: " + vod.optString("vod_play_from") + " | url前100: " + vod.optString("vod_play_url").substring(0, Math.min(100, vod.optString("vod_play_url").length())));
     }
 
 @Override
