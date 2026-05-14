@@ -11,7 +11,7 @@ import java.io.ByteArrayInputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.Random;
+import java.util.regex.Pattern;
 
 /**
  * DanmuHelper - 针对 TVSpider 项目优化的弹幕助手
@@ -19,22 +19,16 @@ import java.util.Random;
  */
 public class DanmuHelper {
 
-    private static final Random RANDOM = new Random();
-
     // 弹幕源 API (可扩展)
     private static final String[] DANMU_SOURCES = {
             "https://api.danmu.icu/?ac=dm&url={url}",
             "https://dmku.hls.one/?ac=dm&url={url}"
     };
 
-    // 弹幕颜色池
-    private static final String[] COLORS = {
-            "16711680", "16776960", "65280", "255", "16711935",
-            "65535", "16777215", "8388736", "16753920"
-    };
-
-    // 弹幕内容指纹过滤正则（去除采集站广告）
-    private static final String AD_PATTERN = ".*(请遵守弹幕礼仪|官方弹幕库|微信公众号|云烟小助手|未传入链接|弹幕列队|火花剧场|加群|防走失|备用|联系|侵权).*";
+    // 弹幕内容指纹过滤正则（去除采集站广告）- 预编译提升性能
+    private static final Pattern AD_PATTERN = Pattern.compile(
+            ".*(请遵守弹幕礼仪|官方弹幕库|微信公众号|云烟小助手|未传入链接|弹幕列队|火花剧场|加群|防走失|备用|联系|侵权).*"
+    );
 
     /**
      * 响应 Spider 类的 proxy 调用
@@ -55,7 +49,7 @@ public class DanmuHelper {
                 } catch (Exception ignored) {}
             }
 
-            // 获取视频 URL（可选逻辑，不依赖外部 url）
+            // 获取视频 URL
             String videoUrl = searchVideoUrl(title, episodeNum);
 
             // 获取弹幕并转换为 XML
@@ -88,29 +82,40 @@ public class DanmuHelper {
 
     /**
      * 视频 URL 搜索逻辑
-     * 可根据标题 + 集数匹配播放链接
      */
     private static String searchVideoUrl(String title, int episode) {
         try {
             String searchUrl = "https://api.so.360kan.com/index?force_v=1&kw="
                     + URLEncoder.encode(title, "UTF-8") + "&tab=all";
             String json = OkHttp.string(searchUrl);
-            JsonObject data = Json.safeObject(json).getAsJsonObject("data");
+
+            JsonObject root = Json.safeObject(json);
+            if (root == null || !root.has("data")) return "";
+
+            JsonObject data = root.getAsJsonObject("data");
+            if (data == null || !data.has("longData")) return "";
+
             JsonArray rows = data.getAsJsonObject("longData").getAsJsonArray("rows");
+            if (rows == null) return "";
 
             for (JsonElement el : rows) {
                 JsonObject row = el.getAsJsonObject();
+                if (!row.has("titleTxt")) continue;
+
                 String rowTitle = row.get("titleTxt").getAsString();
                 if (!rowTitle.contains(title) && !title.contains(rowTitle)) continue;
 
-                if ("电影".equals(row.get("cat_name").getAsString())) {
+                if (row.has("cat_name") && "电影".equals(row.get("cat_name").getAsString())) {
+                    if (!row.has("playlinks")) continue;
                     JsonObject playlinks = row.getAsJsonObject("playlinks");
                     if (playlinks.has("qq")) return cleanUrl(playlinks.get("qq").getAsString());
                     if (playlinks.has("qiyi")) return cleanUrl(playlinks.get("qiyi").getAsString());
                 } else {
+                    if (!row.has("seriesPlaylinks")) continue;
                     JsonArray series = row.getAsJsonArray("seriesPlaylinks");
                     if (series.size() >= episode) {
-                        return cleanUrl(series.get(episode - 1).getAsJsonObject().get("url").getAsString());
+                        JsonObject ep = series.get(episode - 1).getAsJsonObject();
+                        if (ep.has("url")) return cleanUrl(ep.get("url").getAsString());
                     }
                 }
             }
@@ -139,24 +144,32 @@ public class DanmuHelper {
 
                 // JSON 格式弹幕
                 JsonObject json = Json.safeObject(res);
-                JsonArray danmuku = json.has("danmuku") ? json.getAsJsonArray("danmuku")
-                        : json.getAsJsonObject("data").getAsJsonArray("danmuku");
+                if (json == null) continue;
 
-                if (danmuku != null) {
-                    StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>\n");
-                    for (JsonElement d : danmuku) {
-                        JsonArray item = d.getAsJsonArray();
-                        String content = item.get(4).getAsString();
-                        if (content.matches(AD_PATTERN)) continue;
-
-                        String time = item.get(0).getAsString();
-                        String color = item.get(3).getAsString();
-                        xml.append(String.format("<d p=\"%s,1,25,%s\">%s</d>\n",
-                                time, color, escape(content)));
-                    }
-                    xml.append("</i>");
-                    return xml.toString();
+                JsonArray danmuku = null;
+                if (json.has("danmuku")) {
+                    danmuku = json.getAsJsonArray("danmuku");
+                } else if (json.has("data") && json.getAsJsonObject("data").has("danmuku")) {
+                    danmuku = json.getAsJsonObject("data").getAsJsonArray("danmuku");
                 }
+
+                if (danmuku == null) continue;
+
+                StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>\n");
+                for (JsonElement d : danmuku) {
+                    JsonArray item = d.getAsJsonArray();
+                    if (item.size() < 5) continue;
+                    String content = item.get(4).getAsString();
+                    if (AD_PATTERN.matcher(content).matches()) continue;
+
+                    String time = item.get(0).getAsString();
+                    String color = item.get(3).getAsString();
+                    xml.append(String.format("<d p=\"%s,1,25,%s\">%s</d>\n",
+                            time, color, escape(content)));
+                }
+                xml.append("</i>");
+                return xml.toString();
+
             } catch (Exception ignored) {}
         }
         return "";
