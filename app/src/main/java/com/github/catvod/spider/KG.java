@@ -412,6 +412,11 @@ Document doc = Jsoup.parse(html);
                 if (idx < allLists.size()) nextList = allLists.get(idx);
             }
             if (nextList != null) {
+    Proxy.log("🔍 [pLists存入] 第" + fList.size() + "条线路 HTML前50: " + nextList.outerHtml().substring(0, Math.min(50, nextList.outerHtml().length())));
+    fList.add(sourceName);
+    pLists.add(nextList.outerHtml()); 
+}
+            if (nextList != null) {
                 fList.add(sourceName);
                 pLists.add(nextList.outerHtml()); 
             }
