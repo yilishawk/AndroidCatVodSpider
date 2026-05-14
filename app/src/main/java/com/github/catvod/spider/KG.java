@@ -206,6 +206,7 @@ private void logCheck(String title, String html, boolean showSource) {
                 } else {
                     Proxy.log("<b style='color:#3498db;'>📋 [定位層] JSON接口模式，跳過CSS選擇器</b>");
                 }
+            }
             // 💡 凱哥監控：顯示返回數據長度
             Proxy.log("<b style='color:#3498db;'>📊 [數據返回]</b> 長度: " + (html != null ? html.length() : 0));
 
