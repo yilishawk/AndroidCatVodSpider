@@ -423,10 +423,12 @@ Document doc = Jsoup.parse(html);
             Document listDoc = Jsoup.parse(pLists.get(i));
             Elements aElements = listDoc.select("a");
             for (Element a : aElements) {
-                String pName = extract(a, rule.optString("dt_list_name")); 
-                String pUrl = extract(a, rule.optString("dt_list_url"));
-                if (!pName.isEmpty() && !pUrl.isEmpty()) urls.add(pName + "$" + pUrl);
-            }
+    String pName = a.text().trim();
+    String pUrl = a.attr("href").trim();
+    if (!pName.isEmpty() && !pUrl.isEmpty() && !pUrl.contains("javascript")) {
+        urls.add(pName + "$" + pUrl);
+    }
+}
             playList.add(TextUtils.join("#", urls));
         }
         vod.put("vod_play_from", TextUtils.join("$$$", fList));
