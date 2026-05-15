@@ -82,23 +82,54 @@ public class Proxy extends Spider {
      * 注意：此方法不是重写父类方法，而是因为 TV 应用会通过反射调用它。
      * 不要加 @Override 注解，否则编译会失败。
      */
+/**
+     * 适配 JS 逻辑的 Proxy 分发方法
+     */
     public Object[] proxy(Map<String, String> params) {
         log("收到 proxy 调用: " + params);
         String doParam = params.get("do");
+
         if ("danmaku".equals(doParam)) {
+            // 1. 获取并解码参数
             String title = params.getOrDefault("title", "");
-            String episode = params.getOrDefault("episode", "1");
-            try { title = URLDecoder.decode(title, "UTF-8"); } catch (Exception ignored) {}
-            try { episode = URLDecoder.decode(episode, "UTF-8"); } catch (Exception ignored) {}
-            log("🎯 [弹幕请求] title=" + title + " episode=" + episode);
+            String episodeRaw = params.getOrDefault("episode", "1");
+
+            try {
+                title = URLDecoder.decode(title, "UTF-8");
+            } catch (Exception ignored) {}
+            try {
+                episodeRaw = URLDecoder.decode(episodeRaw, "UTF-8");
+            } catch (Exception ignored) {}
+
+            // 2. 严格对齐 JS 的集数提取逻辑：只保留数字
             int ep = 1;
-            try { ep = Integer.parseInt(episode.replaceAll("\\D", "")); } catch (Exception ignored) {}
+            try {
+                // 对应 JS 的: parseInt(episode.toString().replace(/\D/g, '')) || 1
+                String digits = episodeRaw.replaceAll("\\D", "");
+                if (!digits.isEmpty()) {
+                    ep = Integer.parseInt(digits);
+                }
+            } catch (Exception e) {
+                ep = 1; // 转换失败默认为第 1 集
+            }
+
+            log("🎯 [弹幕请求] 标题: " + title + " | 识别集数: " + ep);
+
+            // 3. 调用重写后的 DanmuHelper
+            // 如果解析出的标题为空且没有直接传入 URL，Helper 会返回 generateEmptyDanmu
             String xml = DanmuHelper.getDanmuXml(title, ep);
+
+            // 4. 封装响应
             Map<String, String> headers = new HashMap<>();
             headers.put("Content-Type", "application/xml; charset=utf-8");
             headers.put("Connection", "close");
+            
+            // 增加 CORS 跨域支持（防止某些 TV 播放器跨域读取失败）
+            headers.put("Access-Control-Allow-Origin", "*");
+
             return new Object[]{200, headers, xml};
         }
+
         return errorResponse(400, "Missing or invalid 'do' parameter");
     }
 
