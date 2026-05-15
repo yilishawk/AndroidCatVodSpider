@@ -36,7 +36,6 @@ public class Proxy extends Spider {
                         BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
                         String req = in.readLine();
                         if (req == null) continue;
-
                         try (OutputStream out = client.getOutputStream()) {
                             if (req.contains("/?clean")) {
                                 sb.setLength(0);
@@ -85,53 +84,22 @@ public class Proxy extends Spider {
      */
     public Object[] proxy(Map<String, String> params) {
         log("收到 proxy 调用: " + params);
-
         String doParam = params.get("do");
-        if (doParam == null || !doParam.equals("danmu")) {
-            return errorResponse(400, "Missing or invalid 'do' parameter");
+        if ("danmaku".equals(doParam)) {
+            String title = params.getOrDefault("title", "");
+            String episode = params.getOrDefault("episode", "1");
+            try { title = URLDecoder.decode(title, "UTF-8"); } catch (Exception ignored) {}
+            try { episode = URLDecoder.decode(episode, "UTF-8"); } catch (Exception ignored) {}
+            log("🎯 [弹幕请求] title=" + title + " episode=" + episode);
+            int ep = 1;
+            try { ep = Integer.parseInt(episode.replaceAll("\\D", "")); } catch (Exception ignored) {}
+            String xml = DanmuHelper.getDanmuXml(title, ep);
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/xml; charset=utf-8");
+            headers.put("Connection", "close");
+            return new Object[]{200, headers, xml};
         }
-
-        String title = params.get("title");
-        String episode = params.get("episode");
-        if (title == null || title.isEmpty() || episode == null || episode.isEmpty()) {
-            return errorResponse(400, "Missing title or episode");
-        }
-
-        try {
-            title = URLDecoder.decode(title, "UTF-8");
-        } catch (Exception ignored) {}
-        try {
-            episode = URLDecoder.decode(episode, "UTF-8");
-        } catch (Exception ignored) {}
-
-        log("弹幕请求：title=" + title + ", episode=" + episode);
-
-        String xml = generateDanmuXml(title, episode);
-
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/xml; charset=utf-8");
-        headers.put("Connection", "close");
-        return new Object[]{200, headers, xml};
-    }
-
-    private String generateDanmuXml(String title, String episode) {
-        long now = System.currentTimeMillis() / 1000;
-        String p = "5.0,1,25,16777215," + now + ",0,123456,0";
-        String content = "来自代理的弹幕：" + title + " 第" + episode + "集";
-
-        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-               "<i>\n" +
-               "    <d p=\"" + escapeXml(p) + "\">" + escapeXml(content) + "</d>\n" +
-               "</i>";
-    }
-
-    private String escapeXml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&apos;");
+        return errorResponse(400, "Missing or invalid 'do' parameter");
     }
 
     private Object[] errorResponse(int code, String message) {
