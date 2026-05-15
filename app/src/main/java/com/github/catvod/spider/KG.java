@@ -818,18 +818,6 @@ private String extract(Object root, String ruleStr) {
         }
         return hb;
     }
-@Override
-    public Object[] proxyLocal(Map<String, String> params) {
-        try {
-            if ("danmaku".equals(params.get("do"))) {
-                Proxy.log("<b style='color:#2ecc71;'>🎯 [弹幕代理] 收到请求: </b>" + params.toString());
-                return DanmuHelper.getDanmuResponse(params);
-            }
-        } catch (Exception e) {
-            Proxy.log("<b style='color:red;'>🚨 [弹幕代理异常]: </b>" + e.getMessage());
-        }
-        return null;
-    }
     
 @Override
 public String homeContent(boolean filter) {
