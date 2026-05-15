@@ -32,10 +32,12 @@ public class DanmuHelper {
     }
 
     private static String search360kan(String title, int episodeNum) {
-        try {
-            String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
-            String res = OkHttp.string(url);
-            JsonObject root = Json.safeObject(res);
+    try {
+        String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
+        String res = OkHttp.string(url);
+        Proxy.log("🔍 [360kan原始返回] " + (res == null ? "null" : res.substring(0, Math.min(500, res.length()))));
+        JsonObject root = Json.safeObject(res);
+        Proxy.log("🔍 [360kan root解析] " + (root == null ? "null" : root.keySet().toString()));
 
             // 路径安全检查，防止 Attempt to read from null array
             if (root == null || !root.has("data") || root.get("data").isJsonNull()) return null;
