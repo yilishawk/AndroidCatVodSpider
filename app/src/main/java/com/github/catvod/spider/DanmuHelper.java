@@ -12,24 +12,32 @@ import java.security.MessageDigest;
 public class DanmuHelper {
 
     public static String getDanmuXml(String title, int episodeNum) {
-        try {
-            // 1. 搜索获取原始链接 (严格匹配 titleTxt)
-            String rawUrl = search360kan(title, episodeNum);
-            if (rawUrl == null || rawUrl.isEmpty()) return generateEmpty(title, episodeNum);
-
-            // 2. MD5 加密清洗后的链接
-            String md5Id = getMd5(rawUrl);
-
-            // 3. 调用指定接口获取 XML
-            String apiUrl = "https://danmu.zxz.ee/?type=xml&id=" + md5Id;
-            String xml = OkHttp.string(apiUrl);
-
-            if (xml != null && xml.contains("<d")) return xml;
-        } catch (Exception e) {
-            SpiderDebug.log(e);
+    Proxy.log("🎯 [弹幕] 开始请求 title=" + title + " ep=" + episodeNum);
+    try {
+        // 1. 搜索获取原始链接 (严格匹配 titleTxt)
+        String rawUrl = search360kan(title, episodeNum);
+        Proxy.log("🎯 [弹幕] rawUrl=" + rawUrl);
+        if (rawUrl == null || rawUrl.isEmpty()) {
+            Proxy.log("🎯 [弹幕] rawUrl为空，返回空弹幕");
+            return generateEmpty(title, episodeNum);
         }
-        return generateEmpty(title, episodeNum);
+
+        // 2. MD5 加密清洗后的链接
+        String md5Id = getMd5(rawUrl);
+        Proxy.log("🎯 [弹幕] md5=" + md5Id);
+
+        // 3. 调用指定接口获取 XML
+        String apiUrl = "https://danmu.zxz.ee/?type=xml&id=" + md5Id;
+        Proxy.log("🎯 [弹幕] 请求XML: " + apiUrl);
+        String xml = OkHttp.string(apiUrl);
+        Proxy.log("🎯 [弹幕] XML长度=" + (xml == null ? "null" : xml.length()));
+
+        if (xml != null && xml.contains("<d")) return xml;
+    } catch (Exception e) {
+        Proxy.log("🎯 [弹幕] 异常: " + e.getMessage());
     }
+    return generateEmpty(title, episodeNum);
+}
 
     private static String search360kan(String title, int episodeNum) {
     try {
