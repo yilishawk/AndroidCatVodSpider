@@ -126,6 +126,7 @@ public class KaiGe extends Spider {
                     logger("<span style='color:#f1c40f;'>⚠️ [首页预热] 异常: </span>" + ex.getMessage());
                 }
             }
+
         } catch (Exception e) {
             logger("🚨 [系統] 初始化崩潰: " + e.getMessage());
         }
@@ -328,7 +329,7 @@ public class KaiGe extends Spider {
                 String pUrl = a.attr("href").trim();
                 if (!pName.isEmpty() && !pUrl.isEmpty() && !pUrl.contains("javascript")) {
                     urls.add(pName + "$" + pUrl);
-                    urlEpisodeMap.put(pUrl, pName);        // 关键：保存集数名称
+                    urlEpisodeMap.put(pUrl, pName);
                 }
             }
             playList.add(TextUtils.join("#", urls));
@@ -353,7 +354,6 @@ public class KaiGe extends Spider {
                 varPool.put("vod_name", savedVodName);
             }
 
-            // 集数提取
             String episodeStr = "1";
             if (urlEpisodeMap.containsKey(originalUrl)) {
                 episodeStr = urlEpisodeMap.get(originalUrl);
@@ -385,7 +385,7 @@ public class KaiGe extends Spider {
 
             String jx = play.optString("jx", "");
             if (!TextUtils.isEmpty(jx)) {
-                // 这里保留你原来的 jx 处理逻辑，如果没有可以留空
+                // 你的 jx 逻辑（如果有请保留）
             }
 
             if (stepCount == 0) {
@@ -394,10 +394,9 @@ public class KaiGe extends Spider {
                 res.put("parse", isStream ? 0 : 1);
                 res.put("url", originalUrl);
                 res.put("header", getPlayHeaders(play));
-                return addDanmakuToResult(res, savedVodName, episodeStr);
+                return addDanmakuToResult(res).toString();
             }
 
-            // steps 循环（简化版，你可以把你原来的完整循环贴回来）
             String finalUrl = varPool.get("final_url").replace("\\/", "/");
             boolean finalHasStream = finalUrl.toLowerCase().contains(".m3u8") || finalUrl.toLowerCase().contains(".mp4");
             int pValue = finalHasStream ? 0 : 1;
@@ -407,7 +406,7 @@ public class KaiGe extends Spider {
             resJson.put("url", (pValue == 0) ? finalUrl : originalUrl);
             resJson.put("header", getPlayHeaders(play));
 
-            return addDanmakuToResult(resJson, savedVodName, episodeStr);
+            return addDanmakuToResult(resJson).toString();
 
         } catch (Exception e) {
             Proxy.log("<b style='color:red;'>❌ [播放解析崩潰]:</b> " + e.getMessage());
@@ -415,15 +414,18 @@ public class KaiGe extends Spider {
         }
     }
 
-    private JSONObject addDanmakuToResult(JSONObject resJson, String vodName, String episode) {
+    private JSONObject addDanmakuToResult(JSONObject resJson) {
         try {
-            if (rule.optBoolean("danmaku", false) && !TextUtils.isEmpty(vodName)) {
-                String danmakuUrl = Proxy.getUrl() + "?do=danmaku"
-                        + "&title=" + URLEncoder.encode(vodName, "UTF-8")
-                        + "&episode=" + URLEncoder.encode(episode, "UTF-8");
-
-                resJson.put("danmaku", danmakuUrl);
-                Proxy.log("<b style='color:#2ecc71;'>✅ [弹幕注入成功] </b>" + danmakuUrl);
+            if (rule.optBoolean("danmaku", false)) {
+                String vodName = varPool.getOrDefault("vod_name", "");
+                String episode = varPool.getOrDefault("episode", "1");
+                if (!TextUtils.isEmpty(vodName)) {
+                    String danmakuUrl = Proxy.getUrl() + "?do=danmaku"
+                            + "&title=" + URLEncoder.encode(vodName, "UTF-8")
+                            + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+                    resJson.put("danmaku", danmakuUrl);
+                    Proxy.log("<b style='color:#2ecc71;'>✅ [弹幕注入成功] </b>" + danmakuUrl);
+                }
             }
         } catch (Exception e) {
             Proxy.log("❌ [弹幕注入异常]: " + e.getMessage());
@@ -450,22 +452,21 @@ public class KaiGe extends Spider {
             String detailTemplate = rule.optString("detail_url", "");
 
             String itemRule = rule.optString(prefix + "item", rule.optString("cate_item", ""));
-            String idRule     = rule.optString(prefix + "id", rule.optString("cate_id", ""));
-            String nameRule   = rule.optString(prefix + "name", rule.optString("cate_name", ""));
-            String picRule    = rule.optString(prefix + "pic", rule.optString("cate_pic", ""));
+            String idRule     = rule.optString(prefix + "id",      rule.optString("cate_id",      ""));
+            String nameRule   = rule.optString(prefix + "name",    rule.optString("cate_name",    ""));
+            String picRule    = rule.optString(prefix + "pic",     rule.optString("cate_pic",     ""));
             String remarkRule = rule.optString(prefix + "remarks", rule.optString("cate_remarks", ""));
 
-            // 原有逻辑保持
             if (itemRule.toLowerCase().startsWith("json:")) {
-                // JSON模式...
+                // JSON 模式
             } else if (html != null && html.trim().startsWith("{")) {
-                // 苹果CMS兼容...
+                // 苹果CMS 兼容
             } else {
                 Document doc = Jsoup.parse(html);
                 Elements items = doc.select(itemRule);
                 for (Element item : items) {
                     JSONObject vod = new JSONObject();
-                    // ... 你的原有解析逻辑 ...
+                    // 你的原有解析逻辑...
                     list.put(vod);
                 }
             }
@@ -546,7 +547,9 @@ public class KaiGe extends Spider {
             }
             JSONObject result = new JSONObject();
             result.put("class", resultClasses);
-            if (rule.has("filters")) result.put("filters", rule.optJSONObject("filters"));
+            if (rule.has("filters")) {
+                result.put("filters", rule.optJSONObject("filters"));
+            }
             return result.toString();
         } catch (Exception e) {
             logger("🚨 [主頁異常]: " + e.getMessage());
