@@ -7,10 +7,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
-import java.io.ByteArrayInputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -36,49 +34,24 @@ public class DanmuHelper {
      * - title: 视频标题
      * - episode: 集数
      */
-    public static Object[] getDanmuResponse(Map<String, String> params) {
-        try {
-            String title = params.get("title");
-            String episodeStr = params.get("episode");
-
-            if (title == null || title.isEmpty()) title = "未知标题";
-            int episodeNum = 1;
-            if (episodeStr != null) {
-                try {
-                    episodeNum = Integer.parseInt(episodeStr.replaceAll("\\D", ""));
-                } catch (Exception ignored) {}
-            }
-
-            // 获取视频 URL
-            String videoUrl = searchVideoUrl(title, episodeNum);
-
-            // 获取弹幕并转换为 XML
-            String xmlContent = "";
-            if (!videoUrl.isEmpty()) {
-                xmlContent = fetchAndConvert(videoUrl);
-            }
-
-            // 弹幕为空，生成系统提示
-            if (xmlContent.isEmpty()) {
-                xmlContent = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>"
-                        + "<d p=\"0,1,25,16777215\">[代理] " + title + " 弹幕加载完成</d>"
-                        + "</i>";
-            }
-
-            return new Object[]{
-                    200,
-                    "application/xml; charset=utf-8",
-                    new ByteArrayInputStream(xmlContent.getBytes(StandardCharsets.UTF_8))
-            };
-        } catch (Exception e) {
-            SpiderDebug.log(e);
-            return new Object[]{
-                    500,
-                    "text/plain",
-                    new ByteArrayInputStream(e.getMessage().getBytes())
-            };
+    public static String getDanmuXml(String title, int episodeNum) {
+    try {
+        String videoUrl = searchVideoUrl(title, episodeNum);
+        String xmlContent = "";
+        if (!videoUrl.isEmpty()) {
+            xmlContent = fetchAndConvert(videoUrl);
         }
+        if (xmlContent.isEmpty()) {
+            xmlContent = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>"
+                    + "<d p=\"0,1,25,16777215\">[弹幕] " + title + " 加载完成</d>"
+                    + "</i>";
+        }
+        return xmlContent;
+    } catch (Exception e) {
+        SpiderDebug.log(e);
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?><i></i>";
     }
+}
 
     /**
      * 视频 URL 搜索逻辑
