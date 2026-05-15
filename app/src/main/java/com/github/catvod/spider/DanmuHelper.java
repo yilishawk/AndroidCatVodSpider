@@ -40,9 +40,10 @@ public class DanmuHelper {
             // 路径安全检查，防止 Attempt to read from null array
             if (root == null || !root.has("data") || root.get("data").isJsonNull()) return null;
             JsonObject data = root.getAsJsonObject("data");
-            if (!data.has("longData") || data.get("longData").isJsonNull()) return null;
-            JsonArray rows = data.getAsJsonObject("longData").getAsJsonArray("rows");
-            if (rows == null || rows.isJsonNull()) return null;
+            if (!data.has("longData") || !data.get("longData").isJsonObject()) return null;
+            JsonObject longData = data.getAsJsonObject("longData");
+            if (!longData.has("rows") || longData.get("rows").isJsonNull()) return null;
+            JsonArray rows = longData.getAsJsonArray("rows");
 
             for (JsonElement el : rows) {
                 if (!el.isJsonObject()) continue;
