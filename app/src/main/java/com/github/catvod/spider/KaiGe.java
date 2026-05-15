@@ -15,7 +15,7 @@ import java.util.List;
 import java.net.URLEncoder;
 import java.util.*;
 
-public class KG extends Spider {
+public class KaiGe extends Spider {
     private String siteUrl = ""; 
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
