@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class Proxy extends Spider {
-    private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
+    private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
     private static final int MY_LOG_PORT = 10086;
 
