@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 
 /**
- * DanmuHelper - 针对 TVSpider 项目优化的弹幕助手
+ * DanmuHelper - 针对TVSpider 项目优化的弹幕助手
  * 功能：多源搜索弹幕、JSON转XML、广告过滤、本地代理响应
  */
 public class DanmuHelper {
