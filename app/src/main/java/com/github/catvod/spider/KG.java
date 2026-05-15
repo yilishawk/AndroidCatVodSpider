@@ -306,7 +306,9 @@ if (html != null && html.trim().startsWith("{")) {
             JSONObject item = dataList.getJSONObject(0);
             JSONObject vod = new JSONObject();
             vod.put("vod_id",       ids.get(0));
-            vod.put("vod_name",     item.optString("vod_name",     item.optString("name",     "")));
+            String resolvedName = item.optString("vod_name", item.optString("name", ""));
+            vod.put("vod_name", resolvedName);
+            varPool.put("vod_name", resolvedName); // ← 存入varPool供弹幕使用
             vod.put("vod_pic",      item.optString("vod_pic",      item.optString("pic",      "")));
             vod.put("vod_remarks",  item.optString("vod_remarks",  item.optString("remarks",  "")));
             vod.put("vod_actor",    item.optString("vod_actor",    item.optString("actor",    "")));
@@ -334,7 +336,9 @@ Document doc = Jsoup.parse(html);
             
             // 策略：如果規則有寫就用規則，規則沒寫或抓不到就用大腦智慧識別
             String name = extract(doc, rule.optString("dt_name"));
-            vod.put("vod_name", TextUtils.isEmpty(name) ? smartVod.optString("vod_name") : name);
+            String resolvedName = TextUtils.isEmpty(name) ? smartVod.optString("vod_name") : name;
+            vod.put("vod_name", resolvedName);
+            varPool.put("vod_name", resolvedName); // ← 存入varPool供弹幕使用
             
             String pic = extract(doc, rule.optString("dt_pic"));
             vod.put("vod_pic", TextUtils.isEmpty(pic) ? smartVod.optString("vod_pic") : pic);
@@ -435,9 +439,19 @@ Document doc = Jsoup.parse(html);
             // 🎬 啟動日誌
             Proxy.log("<b style='color:#e74c3c;'>🎬 [播放解析啟動]</b> 原始ID: " + originalUrl);
             
+            // clear 前先保存
+            String savedVodName = varPool.getOrDefault("vod_name", "");
+
             varPool.clear();
             varPool.put("play_id", originalUrl);
-            varPool.put("final_url", originalUrl); 
+            varPool.put("final_url", originalUrl);
+
+if (!TextUtils.isEmpty(savedVodName)) varPool.put("vod_name", savedVodName);
+        try {
+                java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\\d+").matcher(flag);
+                if (m.find()) varPool.put("episode", String.valueOf(Integer.parseInt(m.group())));
+            } catch (Exception ignored) {}
 
             JSONObject play = rule.has("play") ? rule.getJSONObject("play") : new JSONObject();
             JSONArray steps = play.optJSONArray("steps");
@@ -594,6 +608,24 @@ if (vars != null) {
             resJson.put("parse", pValue);
             resJson.put("url", (pValue == 0) ? finalUrl : originalUrl);
             resJson.put("header", getPlayHeaders(play));
+
+            // 🎬 弹幕支持（需要在JSON规则里设置 "danmaku": true 才开启）
+            try {
+                boolean danmakuEnabled = rule.optBoolean("danmaku", false);
+                if (danmakuEnabled) {
+                    String vodName = varPool.getOrDefault("vod_name", "");
+                    String episode = varPool.getOrDefault("episode", "1");
+                    if (!TextUtils.isEmpty(vodName)) {
+                        String danmakuUrl = "http://127.0.0.1:9978/proxy?do=danmaku"
+                                + "&title=" + URLEncoder.encode(vodName, "UTF-8")
+                                + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+                        resJson.put("danmaku", danmakuUrl);
+                        Proxy.log("<b style='color:#2ecc71;'>🎯 [弹幕已開啟] URL: </b>" + danmakuUrl);
+                    }
+                } else {
+                    Proxy.log("<span style='color:#95a5a6;'>🎯 [弹幕未開啟] 如需開啟請在規則中加入 \"danmaku\": true</span>");
+                }
+            } catch (Exception ignored) {}
             
             // 🚀 最終推送 JSON 日誌
             String finalPush = resJson.toString();
@@ -786,7 +818,19 @@ private String extract(Object root, String ruleStr) {
         }
         return hb;
     }
-
+@Override
+    public Object[] proxyLocal(Map<String, String> params) {
+        try {
+            if ("danmaku".equals(params.get("do"))) {
+                Proxy.log("<b style='color:#2ecc71;'>🎯 [弹幕代理] 收到请求: </b>" + params.toString());
+                return DanmuHelper.getDanmuResponse(params);
+            }
+        } catch (Exception e) {
+            Proxy.log("<b style='color:red;'>🚨 [弹幕代理异常]: </b>" + e.getMessage());
+        }
+        return null;
+    }
+    
 @Override
 public String homeContent(boolean filter) {
     try {
