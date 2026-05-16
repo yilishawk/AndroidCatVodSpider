@@ -10,7 +10,6 @@ import android.widget.TextView;
 import com.github.catvod.R;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.spider.KaiGe;
 import com.github.catvod.spider.Proxy;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,7 +34,6 @@ public class MainActivity extends Activity {
         executor.execute(() -> {
             try {
                 SpiderDebug.log("🚀 正在加載 KaiGe 引擎...");
-                spider = new KaiGe();
                 // 這裡傳入你的測試配置 JSON
                 spider.init(this, "{\"site_name\":\"凱哥調試站\",\"host\":\"https://www.google.com\"}");
                 
