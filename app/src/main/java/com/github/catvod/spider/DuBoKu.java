@@ -537,9 +537,9 @@ public class DuBoKu extends Spider {
      * 同时混合了 %2C 等 URL 编码
      *
      * 处理步骤：
-     * 1. /uXXXX → \uXXXX（还原标准 Unicode 转义格式）
+     // 1. /uXXXX 转换为标准 Unicode 转义格式
+// 3. Util.unicodeToString 还原 Unicode 转义为实际汉字
      * 2. URLDecode（还原 %2C 等）
-     * 3. Util.unicodeToString（还原 \uXXXX 为实际汉字）
      *
      * 例："/u9ED1/u591C/u544A/u767D" → "黑夜告白"
      *     "/u738B/u9E64/u68E3%2C/u4EFB/u654F" → "王鹤棣,任敏"
