@@ -80,40 +80,38 @@ public class Proxy extends Spider {
 
     /**
      * 注意：此方法不是重写父类方法，而是因为 TV 应用会通过反射调用它。
-     * 不要加 @Override 注解，否则编译会失败。
-     */
 /**
-     * 适配 JS 逻辑的 Proxy 分发方法
-     */
-/**
-     * 适配 FongMi 框架的本地代理入口
+     * 适配 FongMi 框架的反射入口
+     * 必须为 public，参数必须为 Map<String, String>
      */
     public Object[] proxy(Map<String, String> params) {
-        log("🔥 [Proxy] 激活！参数: " + params);
+        // 第一时间打出最显眼的日志
+        log("==========================================");
+        log("🔥 [哨兵-Proxy] 收到框架回调！参数: " + params);
+        
         String doParam = params.get("do");
-
         if ("danmaku".equals(doParam)) {
             String title = params.getOrDefault("title", "");
             String episodeRaw = params.getOrDefault("episode", "1");
 
-            // 1. 解码标题和集数
-            try { title = URLDecoder.decode(title, "UTF-8"); } catch (Exception ignored) {}
-            try { episodeRaw = URLDecoder.decode(episodeRaw, "UTF-8"); } catch (Exception ignored) {}
+            // URL 解码处理
+            try { 
+                title = java.net.URLDecoder.decode(title, "UTF-8"); 
+                episodeRaw = java.net.URLDecoder.decode(episodeRaw, "UTF-8");
+            } catch (Exception ignored) {}
 
-            // 2. 集数映射 (02 -> 2)
+            // 集数强制映射 (02 -> 2)
             int ep = 1;
             try {
                 String digits = episodeRaw.replaceAll("\\D", "");
-                if (!digits.isEmpty()) {
-                    ep = Integer.parseInt(digits);
-                }
+                if (!digits.isEmpty()) ep = Integer.parseInt(digits);
             } catch (Exception e) {
                 ep = 1;
             }
 
-            log("🎯 [Proxy] 准备调取 DanmuHelper: " + title + " EP=" + ep);
+            log("🎯 [哨兵-Proxy] 指令确认：准备搜索弹幕 -> " + title + " EP:" + ep);
 
-            // 3. 调用核心助手
+            // 进入 DanmuHelper 逻辑
             String xml = DanmuHelper.getDanmuXml(title, ep);
             
             Map<String, String> headers = new HashMap<>();
@@ -121,6 +119,8 @@ public class Proxy extends Spider {
             headers.put("Access-Control-Allow-Origin", "*");
             return new Object[]{200, headers, xml};
         }
+        
+        log("⚠️ [哨兵-Proxy] 收到请求但 do 参数不匹配: " + doParam);
         return errorResponse(400, "Invalid Action");
     }
 
