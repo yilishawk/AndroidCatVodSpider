@@ -85,61 +85,44 @@ public class Proxy extends Spider {
 /**
      * 适配 JS 逻辑的 Proxy 分发方法
      */
+/**
+     * 适配 FongMi 框架的本地代理入口
+     */
     public Object[] proxy(Map<String, String> params) {
-    // ================ 强诊断日志（最重要）================
-    log("🔥 [Proxy] 被调用！收到参数: " + params);
-    
-    String doParam = params.get("do");
-    log("📌 [Proxy] do 参数 = " + doParam);
+        log("🔥 [Proxy] 激活！参数: " + params);
+        String doParam = params.get("do");
 
-    if ("danmaku".equals(doParam)) {
-        log("✅ [Proxy] 成功进入 danmaku 分支！");
+        if ("danmaku".equals(doParam)) {
+            String title = params.getOrDefault("title", "");
+            String episodeRaw = params.getOrDefault("episode", "1");
 
-        String title = params.getOrDefault("title", "");
-        String episodeRaw = params.getOrDefault("episode", "1");
+            // 1. 解码标题和集数
+            try { title = URLDecoder.decode(title, "UTF-8"); } catch (Exception ignored) {}
+            try { episodeRaw = URLDecoder.decode(episodeRaw, "UTF-8"); } catch (Exception ignored) {}
 
-        log("📝 [Proxy] 原始 title = " + title + " | episodeRaw = " + episodeRaw);
-
-        // 解码
-        try { 
-            title = java.net.URLDecoder.decode(title, "UTF-8"); 
-        } catch (Exception ignored) {}
-        try { 
-            episodeRaw = java.net.URLDecoder.decode(episodeRaw, "UTF-8"); 
-        } catch (Exception ignored) {}
-
-        log("🔄 [Proxy] 解码后 title = " + title + " | episodeRaw = " + episodeRaw);
-
-        // 集数解析
-        int ep = 1;
-        try {
-            String digits = episodeRaw.replaceAll("\\D", "");
-            if (!digits.isEmpty()) {
-                ep = Integer.parseInt(digits);
+            // 2. 集数映射 (02 -> 2)
+            int ep = 1;
+            try {
+                String digits = episodeRaw.replaceAll("\\D", "");
+                if (!digits.isEmpty()) {
+                    ep = Integer.parseInt(digits);
+                }
+            } catch (Exception e) {
+                ep = 1;
             }
-        } catch (Exception e) {
-            log("⚠️ [Proxy] 集数解析失败，使用默认1");
-            ep = 1;
+
+            log("🎯 [Proxy] 准备调取 DanmuHelper: " + title + " EP=" + ep);
+
+            // 3. 调用核心助手
+            String xml = DanmuHelper.getDanmuXml(title, ep);
+            
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/xml; charset=utf-8");
+            headers.put("Access-Control-Allow-Origin", "*");
+            return new Object[]{200, headers, xml};
         }
-
-        log("🎯 [Proxy] 最终调用 DanmuHelper: " + title + " 第 " + ep + " 集");
-
-        // 调用弹幕核心
-        String xml = DanmuHelper.getDanmuXml(title, ep);
-        
-        log("📤 [Proxy] DanmuHelper 返回 XML 长度: " + (xml == null ? 0 : xml.length()));
-
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/xml; charset=utf-8");
-        headers.put("Access-Control-Allow-Origin", "*");
-        headers.put("Connection", "close");
-        
-        return new Object[]{200, headers, xml};
+        return errorResponse(400, "Invalid Action");
     }
-
-    log("❌ [Proxy] do 参数不是 danmaku，当前do=" + doParam);
-    return errorResponse(400, "Missing or invalid 'do' parameter");
-}
 
     private Object[] errorResponse(int code, String message) {
         Map<String, String> headers = new HashMap<>();
