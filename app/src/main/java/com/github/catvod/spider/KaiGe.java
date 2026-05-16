@@ -610,34 +610,32 @@ if (vars != null) {
             resJson.put("header", getPlayHeaders(play));
 
             // 🎬 弹幕支持（需要在JSON规则里设置 "danmaku": true 才开启）
-            // 在 KG.java 的 playerContent 结尾处替换对应的弹幕块
-    try {
-    boolean danmakuEnabled = rule.optBoolean("danmaku", false);
-    if (danmakuEnabled) {
-        String vodName = varPool.getOrDefault("vod_name", "");
-        String episode = varPool.getOrDefault("episode", "1");
-        if (!TextUtils.isEmpty(vodName)) {
-            String proxyUrl = "proxy://do=danmaku"
-        + "&title=" + URLEncoder.encode(vodName, "UTF-8")
-        + "&episode=" + URLEncoder.encode(episode, "UTF-8");
-            // 试试直接推送字符串
-            resJson.put("danmaku", proxyUrl);
-            
-            JSONArray danmakuArray = new JSONArray();
-            JSONObject danmakuItem = new JSONObject();
-            danmakuItem.put("url", danmakuUrl);
-            danmakuItem.put("name", "凯哥全能弹幕");
-            danmakuArray.put(danmakuItem);
-            
-            resJson.put("danmaku", danmakuUrl);
-            Proxy.log("<b style='color:#2ecc71;'>🎯 [哨兵1-KG] 弹幕地址已装载: </b>" + danmakuUrl);
-        } else {
-            Proxy.log("<b style='color:#f1c40f;'>⚠️ [哨兵1-KG] vod_name 为空，跳过弹幕装载</b>");
-        }
-    }
-} catch (Exception e) {
-    Proxy.log("<b style='color:red;'>❌ [哨兵1-KG] 装载异常: </b>" + e.getMessage());
-}
+            try {
+                boolean danmakuEnabled = rule.optBoolean("danmaku", false);
+                if (danmakuEnabled) {
+                    String vodName = varPool.getOrDefault("vod_name", "");
+                    String episode = varPool.getOrDefault("episode", "1");
+                    
+                    if (!TextUtils.isEmpty(vodName)) {
+                        // ⚡ 关键修正：使用 proxy:// 而非 http 地址
+                        String danmakuUrl = "proxy://do=danmaku"
+                                + "&title=" + URLEncoder.encode(vodName, "UTF-8")
+                                + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+
+                        // ⚡ 按照文档要求包装为数组对象
+                        JSONArray danmakuArray = new JSONArray();
+                        JSONObject danmakuItem = new JSONObject();
+                        danmakuItem.put("url", danmakuUrl);
+                        danmakuItem.put("name", "凯哥弹幕");
+                        danmakuArray.put(danmakuItem);
+
+                        resJson.put("danmaku", danmakuArray);
+                        Proxy.log("<b style='color:#2ecc71;'>🎯 [哨兵1-KG] 协议已修正为 proxy:// 格式</b>");
+                    }
+                }
+            } catch (Exception e) {
+                Proxy.log("<b style='color:red;'>❌ [哨兵1-KG] 装载崩溃: </b>" + e.getMessage());
+            }
             
             // 🚀 最終推送 JSON 日誌
             String finalPush = resJson.toString();
