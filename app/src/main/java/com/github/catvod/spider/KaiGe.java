@@ -614,21 +614,16 @@ if (vars != null) {
                 if (rule.optBoolean("danmaku", false)) {
                     String vodName = varPool.getOrDefault("vod_name", "");
                     String episode = varPool.getOrDefault("episode", "1");
-                    
                     if (!TextUtils.isEmpty(vodName)) {
-                        // ⚡ 同步获取弹幕数据
                         JSONArray danmuResult = getInternalDanmu(vodName, episode);
-                        
                         if (danmuResult != null) {
                             resJson.put("danmaku", danmuResult);
-                            Proxy.log("<b style='color:#2ecc71;'>🎯 [集成模式] 弹幕已成功注入 JSON</b>");
-                        } else {
-                            Proxy.log("<b style='color:#f1c40f;'>⚠️ [集成模式] 未匹配到相关弹幕</b>");
+                            Proxy.log("<b style='color:#2ecc71;'>🎯 [集成模式] 弹幕注入成功</b>");
                         }
                     }
                 }
             } catch (Exception e) {
-                Proxy.log("<b style='color:red;'>❌ [集成模式] 弹幕注入异常: </b>" + e.getMessage());
+                Proxy.log("❌ [集成模式] 注入失败: " + e.getMessage());
             }
             
             // 🚀 最終推送 JSON 日誌
@@ -884,31 +879,29 @@ public String homeContent(boolean filter) {
     }
     /**
      * ⚡ 弹幕集成逻辑：直接在内部完成搜索、匹配与 MD5 生成
-     * 解决外部 DanmuHelper 类无法启动的问题
-     */
     private JSONArray getInternalDanmu(String title, String episode) {
         try {
             if (TextUtils.isEmpty(title)) return null;
 
-            // 1. 集数映射 (如将 "04" 转换为 4)
+            // 1. 集数映射 (如 "04" -> 4)
             int epNum = 1;
             try {
                 String digits = episode.replaceAll("\\D", "");
                 if (!digits.isEmpty()) epNum = Integer.parseInt(digits);
             } catch (Exception ignored) {}
 
-            // 2. 发起 360 搜索请求
+            // 2. 发起 360 搜索
             String searchUrl = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
             OkResult res = KaiGeNet.smartRequest(this.siteUrl, "get", searchUrl, null, getHeaders(null));
             String json = res.getBody();
             if (TextUtils.isEmpty(json)) return null;
 
-            // 3. 严格解析 JSON，防御 Attempt to read from null array
+            // 3. 防御性解析 JSON
             JSONObject root = new JSONObject(json);
             if (root.isNull("data")) return null;
             JSONObject data = root.getJSONObject("data");
-
-            // 🛡️ 核心防御：如果 360 搜不到，longData 会是 null
+            
+            // 🛡️ 核心防御：longData 判空，解决 Attempt to read from null array
             if (data.isNull("longData")) return null;
             JSONObject longData = data.getJSONObject("longData");
 
@@ -923,7 +916,6 @@ public String homeContent(boolean filter) {
 
                 JSONArray series = row.optJSONArray("seriesPlaylinks");
                 if (series != null && series.length() >= epNum) {
-                    // 兼容处理：元素可能是 JSONObject 或 String
                     Object target = series.get(epNum - 1);
                     targetUrl = (target instanceof JSONObject) ? 
                                 ((JSONObject) target).optString("url") : target.toString();
@@ -933,12 +925,20 @@ public String homeContent(boolean filter) {
 
             if (TextUtils.isEmpty(targetUrl)) return null;
 
-            // 4. 生成 MD5 并拼接最终 XML 地址
+            // 4. 原生 MD5 实现 (解决 KaiGeEngine.md5 找不到符号错误)
             String cleanUrl = targetUrl.split("\\?")[0];
-            String md5Id = KaiGeEngine.md5(cleanUrl); 
-            String finalDanmuUrl = "https://danmu.zxz.ee/?type=xml&id=" + md5Id;
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] messageDigest = md.digest(cleanUrl.getBytes("UTF-8"));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : messageDigest) {
+                String hex = Integer.toHexString(0xFF & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            String md5Id = hexString.toString();
 
-            // 5. 按照 FongMi 规范包装为 JSONArray 数组
+            // 5. 封装返回
+            String finalDanmuUrl = "https://danmu.zxz.ee/?type=xml&id=" + md5Id;
             JSONArray danmakuArray = new JSONArray();
             JSONObject danmakuItem = new JSONObject();
             danmakuItem.put("url", finalDanmuUrl);
@@ -948,7 +948,7 @@ public String homeContent(boolean filter) {
             return danmakuArray;
 
         } catch (Exception e) {
-            Proxy.log("❌ [集成模式] 内部崩溃: " + e.getMessage());
+            Proxy.log("❌ [集成模式] 逻辑崩溃: " + e.getMessage());
             return null;
         }
     }
