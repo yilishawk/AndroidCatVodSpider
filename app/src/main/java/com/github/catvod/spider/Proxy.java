@@ -84,43 +84,50 @@ public class Proxy extends Spider {
      * 适配 FongMi 框架的反射入口
      * 必须为 public，参数必须为 Map<String, String>
      */
+/**
+     * 本地代理入口：负责分发弹幕请求
+     */
     public Object[] proxy(Map<String, String> params) {
-        // 第一时间打出最显眼的日志
-        log("==========================================");
-        log("🔥 [哨兵-Proxy] 收到框架回调！参数: " + params);
+        // ⚡ 哨兵日志 A：确认 Proxy 被激活
+        log("🔥 [哨兵-Proxy] 收到请求！参数详情: " + params);
         
         String doParam = params.get("do");
-        if ("danmaku".equals(doParam)) {
-            String title = params.getOrDefault("title", "");
-            String episodeRaw = params.getOrDefault("episode", "1");
+        
+        // ⚡ 兼容性修正：只要包含 danmaku 关键词就强制进入
+        if (doParam != null && (doParam.contains("danmaku") || doParam.contains("danmu"))) {
+            log("✅ [哨兵-Proxy] 动作匹配成功，准备进入 DanmuHelper...");
 
-            // URL 解码处理
-            try { 
-                title = java.net.URLDecoder.decode(title, "UTF-8"); 
-                episodeRaw = java.net.URLDecoder.decode(episodeRaw, "UTF-8");
-            } catch (Exception ignored) {}
+            // 提取参数：兼容 title/vodName, episode/vodIndex
+            String title = params.get("title");
+            if (title == null) title = params.getOrDefault("vodName", "");
+            
+            String epRaw = params.get("episode");
+            if (epRaw == null) epRaw = params.getOrDefault("vodIndex", "1");
 
-            // 集数强制映射 (02 -> 2)
+            // 解码标题
+            try { title = java.net.URLDecoder.decode(title, "UTF-8"); } catch (Exception ignored) {}
+
+            // 集数映射 (02 -> 2)
             int ep = 1;
             try {
-                String digits = episodeRaw.replaceAll("\\D", "");
+                String digits = epRaw.replaceAll("\\D", "");
                 if (!digits.isEmpty()) ep = Integer.parseInt(digits);
-            } catch (Exception e) {
-                ep = 1;
-            }
+            } catch (Exception e) { ep = 1; }
 
-            log("🎯 [哨兵-Proxy] 指令确认：准备搜索弹幕 -> " + title + " EP:" + ep);
+            log("🎯 [哨兵-Proxy] 确认分发 -> 搜索关键词: " + title + " | 目标集数: " + ep);
 
-            // 进入 DanmuHelper 逻辑
+            // ⚡ 核心调用：此时 DanmuHelper 必须启动
             String xml = DanmuHelper.getDanmuXml(title, ep);
             
+            log("📤 [哨兵-Proxy] DanmuHelper 返回 XML 长度: " + (xml == null ? 0 : xml.length()));
+
             Map<String, String> headers = new HashMap<>();
             headers.put("Content-Type", "application/xml; charset=utf-8");
             headers.put("Access-Control-Allow-Origin", "*");
             return new Object[]{200, headers, xml};
         }
         
-        log("⚠️ [哨兵-Proxy] 收到请求但 do 参数不匹配: " + doParam);
+        log("⚠️ [哨兵-Proxy] 动作未匹配 (do=" + doParam + ")，跳过弹幕逻辑");
         return errorResponse(400, "Invalid Action");
     }
 
