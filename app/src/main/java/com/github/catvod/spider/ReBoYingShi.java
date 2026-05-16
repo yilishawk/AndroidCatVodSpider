@@ -17,7 +17,6 @@ import java.util.Map;
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
@@ -62,8 +61,10 @@ public class ReBoYingShi extends Spider {
             }
         }
 
+        String url = baseUrl + path;
+        SpiderDebug.log("[ReBoYingShi] POST: " + url);
         Request request = new Request.Builder()
-                .url(baseUrl + path)
+                .url(url)
                 .post(formBuilder.build())
                 .header("User-Agent", UA)
                 .build();
@@ -71,7 +72,10 @@ public class ReBoYingShi extends Spider {
         try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
                 String body = response.body().string();
+                SpiderDebug.log("[ReBoYingShi] Response: " + body);
                 return new JSONObject(body);
+            } else {
+                SpiderDebug.log("[ReBoYingShi] HTTP error: " + response.code());
             }
         }
         return null;
@@ -81,6 +85,7 @@ public class ReBoYingShi extends Spider {
 
     @Override
     public void init(Context context, String extend) {
+        SpiderDebug.log("[ReBoYingShi] init called");
         if (extend != null && !extend.isEmpty()) {
             try {
                 JSONObject cfg = new JSONObject(extend);
@@ -102,6 +107,7 @@ public class ReBoYingShi extends Spider {
         try {
             JSONObject result = post("/v3/type/top_type", null);
             if (result == null || result.optInt("code") != 1) {
+                SpiderDebug.log("[ReBoYingShi] homeContent failed");
                 return "{\"class\":[], \"filters\":{}}";
             }
 
@@ -234,6 +240,7 @@ public class ReBoYingShi extends Spider {
 
             JSONObject result = post("/v3/home/type_search", params);
             if (result == null || result.optInt("code") != 1) {
+                SpiderDebug.log("[ReBoYingShi] categoryContent failed");
                 return "{\"list\":[], \"page\":" + pg + "}";
             }
 
@@ -441,6 +448,7 @@ public class ReBoYingShi extends Spider {
                 }
             }
 
+            SpiderDebug.log("[ReBoYingShi] play GET: " + reqUrl);
             Request request = new Request.Builder()
                     .url(reqUrl)
                     .header("User-Agent", UA)
