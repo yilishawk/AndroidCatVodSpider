@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +35,8 @@ import okhttp3.Response;
 /**
  * 骚火电影 - 首页秒开版
  * 站点: https://shdy3.com
+ * 
+ * 根据 API 规格文档实现
  */
 public class ShaoHuo extends Spider {
 
@@ -42,7 +45,6 @@ public class ShaoHuo extends Spider {
     private final Map<String, String> headers;
 
     public ShaoHuo() {
-        // 初始化 OkHttpClient
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
@@ -50,7 +52,6 @@ public class ShaoHuo extends Spider {
                 .retryOnConnectionFailure(true)
                 .build();
 
-        // 初始化请求头
         this.headers = new HashMap<>();
         this.headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 12; V2196A) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.5060.129 Mobile Safari/537.36");
         this.headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
@@ -87,16 +88,8 @@ public class ShaoHuo extends Spider {
         }
     }
 
-    @Override
-    public String getName() {
-        return "骚火电影[首页秒开版]";
-    }
-
     // ================== 工具方法 ==================
 
-    /**
-     * 自然排序：确保集数 1, 2, ... 10 顺序正确
-     */
     private List<Object> naturalSortKey(String s) {
         List<Object> result = new ArrayList<>();
         Matcher matcher = Pattern.compile("([0-9]+)").matcher(s);
@@ -114,9 +107,6 @@ public class ShaoHuo extends Spider {
         return result;
     }
 
-    /**
-     * 自然排序比较器
-     */
     private int naturalCompare(String s1, String s2) {
         List<Object> keys1 = naturalSortKey(s1);
         List<Object> keys2 = naturalSortKey(s2);
@@ -137,16 +127,11 @@ public class ShaoHuo extends Spider {
         return Integer.compare(keys1.size(), keys2.size());
     }
 
-    /**
-     * 模拟 JS OKOK 解密逻辑
-     */
     private String decodeKey(String encodedStr, Map<String, String> eeDict) {
         try {
             SpiderDebug.log("[骚火电影] 开始解密 OKOK key...");
-            // Base64 解码
             String decodedBase64 = new String(Base64.getDecoder().decode(encodedStr), StandardCharsets.UTF_8);
             
-            // 按 key 长度降序排序
             List<String> sortedKeys = new ArrayList<>(eeDict.keySet());
             sortedKeys.sort((a, b) -> Integer.compare(b.length(), a.length()));
             
@@ -175,9 +160,6 @@ public class ShaoHuo extends Spider {
         }
     }
 
-    /**
-     * 带重试的 GET 请求
-     */
     private String retryGet(String url, Map<String, String> extraHeaders, int maxRetries) throws IOException {
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -194,15 +176,12 @@ public class ShaoHuo extends Spider {
                     if (response.isSuccessful() && response.body() != null) {
                         SpiderDebug.log("[骚火电影] 请求成功，状态码: " + response.code());
                         return response.body().string();
-                    } else {
-                        SpiderDebug.log("[骚火电影] 请求失败，状态码: " + response.code());
                     }
                 }
             } catch (IOException e) {
                 SpiderDebug.log("[骚火电影] 请求失败 (尝试 " + attempt + "): " + e.getMessage());
                 if (attempt == maxRetries) throw e;
                 long wait = (long) Math.pow(2, attempt - 1);
-                SpiderDebug.log("[骚火电影] 等待 " + wait + " 秒后重试...");
                 try {
                     Thread.sleep(wait * 1000);
                 } catch (InterruptedException ie) {
@@ -218,9 +197,6 @@ public class ShaoHuo extends Spider {
         return retryGet(url, null, maxRetries);
     }
 
-    /**
-     * 带重试的 POST 请求
-     */
     private String retryPost(String url, Map<String, String> data, Map<String, String> extraHeaders, int maxRetries) throws IOException {
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -230,7 +206,6 @@ public class ShaoHuo extends Spider {
                     allHeaders.putAll(extraHeaders);
                 }
                 
-                // 构建表单数据
                 StringBuilder formBody = new StringBuilder();
                 for (Map.Entry<String, String> entry : data.entrySet()) {
                     if (formBody.length() > 0) formBody.append("&");
@@ -269,9 +244,6 @@ public class ShaoHuo extends Spider {
         return null;
     }
 
-    /**
-     * 解析视频列表
-     */
     private JSONArray parseList(Document doc) {
         JSONArray videos = new JSONArray();
         Elements items = doc.select("ul.v_list li");
@@ -311,7 +283,7 @@ public class ShaoHuo extends Spider {
         return videos;
     }
 
-    // ================== 首页 ==================
+    // ================== 首页分类 ==================
 
     @Override
     public String homeContent(boolean filter) {
@@ -319,7 +291,6 @@ public class ShaoHuo extends Spider {
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
             
-            // 分类配置
             String[][] classArr = {
                 {"20", "国产剧"},
                 {"1", "电影"},
@@ -428,8 +399,6 @@ public class ShaoHuo extends Spider {
             result.put("list", videoList);
             result.put("page", Integer.parseInt(pg));
             result.put("pagecount", 999);
-            result.put("limit", 20);
-            result.put("total", 9999);
             return result.toString();
             
         } catch (Exception e) {
@@ -457,7 +426,6 @@ public class ShaoHuo extends Spider {
             
             Document doc = Jsoup.parse(html);
             
-            // 提取信息
             Element vInfoBox = doc.selectFirst(".v_info_box");
             if (vInfoBox == null) {
                 return "{\"list\":[]}";
@@ -465,7 +433,6 @@ public class ShaoHuo extends Spider {
             
             String infoText = vInfoBox.selectFirst("p") != null ? vInfoBox.selectFirst("p").text() : "";
             
-            // 提取地区
             String area = "";
             Pattern areaPattern = Pattern.compile("^(.*?)\\s*/");
             Matcher areaMatcher = areaPattern.matcher(infoText);
@@ -473,7 +440,6 @@ public class ShaoHuo extends Spider {
                 area = areaMatcher.group(1).trim();
             }
             
-            // 提取年份
             String year = "";
             Pattern yearPattern = Pattern.compile("(\\d{4})");
             Matcher yearMatcher = yearPattern.matcher(infoText);
@@ -481,7 +447,6 @@ public class ShaoHuo extends Spider {
                 year = yearMatcher.group(1);
             }
             
-            // 提取类型
             String vodType = "";
             Pattern typePattern = Pattern.compile("\\d{4}\\s*/\\s*(.*?)\\s*/");
             Matcher typeMatcher = typePattern.matcher(infoText);
@@ -489,7 +454,6 @@ public class ShaoHuo extends Spider {
                 vodType = typeMatcher.group(1).trim();
             }
             
-            // 提取导演
             String director = "";
             Pattern directorPattern = Pattern.compile("导演:(.*?)(?= / 主演:|$)");
             Matcher directorMatcher = directorPattern.matcher(infoText);
@@ -497,7 +461,6 @@ public class ShaoHuo extends Spider {
                 director = directorMatcher.group(1).trim();
             }
             
-            // 提取演员
             String actor = "";
             Pattern actorPattern = Pattern.compile("主演:(.*?)$");
             Matcher actorMatcher = actorPattern.matcher(infoText);
@@ -505,11 +468,9 @@ public class ShaoHuo extends Spider {
                 actor = actorMatcher.group(1).trim();
             }
             
-            // 标题
             Element titleElem = vInfoBox.selectFirst("h1.v_title a");
             String title = titleElem != null ? titleElem.text() : "";
             
-            // 图片
             Element imgElem = doc.selectFirst(".v_img img");
             String pic = "";
             if (imgElem != null) {
@@ -519,21 +480,18 @@ public class ShaoHuo extends Spider {
                 }
             }
             
-            // 简介
             Element contentElem = doc.selectFirst(".p_txt.show_part");
             String content = "";
             if (contentElem != null) {
                 content = contentElem.text().replace("剧情介绍", "").trim();
             }
             
-            // 播放来源
             StringBuilder playFrom = new StringBuilder();
             for (Element li : doc.select(".play_from ul li")) {
                 if (playFrom.length() > 0) playFrom.append("$$$");
                 playFrom.append(li.text());
             }
             
-            // 播放链接
             List<String> playUrlGroups = new ArrayList<>();
             for (Element group : doc.select("#play_link li")) {
                 List<Map<String, String>> currentLineLinks = new ArrayList<>();
@@ -546,7 +504,6 @@ public class ShaoHuo extends Spider {
                     item.put("url", fullLink);
                     currentLineLinks.add(item);
                 }
-                // 自然排序
                 currentLineLinks.sort((x, y) -> naturalCompare(x.get("name"), y.get("name")));
                 
                 List<String> formatted = new ArrayList<>();
@@ -586,10 +543,10 @@ public class ShaoHuo extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        return searchContentPg(key, quick, "1");
+        return searchContent(key, quick, "1");
     }
     
-    public String searchContentPg(String key, boolean quick, String pg) {
+    public String searchContent(String key, boolean quick, String pg) {
         try {
             String searchUrl = host + "/s----------.html?wd=" + URLEncoder.encode(key, "UTF-8");
             SpiderDebug.log("[骚火电影] search URL: " + searchUrl);
@@ -604,10 +561,6 @@ public class ShaoHuo extends Spider {
             
             JSONObject result = new JSONObject();
             result.put("list", videoList);
-            result.put("page", Integer.parseInt(pg));
-            result.put("pagecount", 1);
-            result.put("limit", videoList.length());
-            result.put("total", videoList.length());
             return result.toString();
             
         } catch (Exception e) {
@@ -624,7 +577,6 @@ public class ShaoHuo extends Spider {
         SpiderDebug.log("[骚火电影] 传入参数: flag=" + flag + ", id=" + id);
         
         try {
-            // 1. 请求播放页
             SpiderDebug.log("[骚火电影] 步骤1: 请求播放页 " + id);
             String html = retryGet(id, headers, 3);
             if (html == null) {
@@ -632,7 +584,6 @@ public class ShaoHuo extends Spider {
                 return "{\"parse\":1,\"url\":\"" + id + "\"}";
             }
             
-            // 提取 iframe
             Pattern iframePattern = Pattern.compile("iframe src=\"(.*?)\"");
             Matcher iframeMatcher = iframePattern.matcher(html);
             if (!iframeMatcher.find()) {
@@ -646,7 +597,6 @@ public class ShaoHuo extends Spider {
             }
             SpiderDebug.log("[骚火电影] 获取到 iframe 解析地址: " + jxUrl);
             
-            // 2. 请求 iframe 页
             SpiderDebug.log("[骚火电影] 步骤2: 请求 iframe 页 " + jxUrl);
             Map<String, String> jxHeaders = new HashMap<>(headers);
             jxHeaders.put("Referer", host + "/");
@@ -656,9 +606,7 @@ public class ShaoHuo extends Spider {
                 SpiderDebug.log("[骚火电影] iframe 页请求失败");
                 return "{\"parse\":1,\"url\":\"" + id + "\"}";
             }
-            SpiderDebug.log("[骚火电影] iframe 页长度: " + jxHtml.length() + " 字符");
             
-            // 3. 提取参数
             SpiderDebug.log("[骚火电影] 步骤3: 提取加密参数");
             
             Pattern urlPattern = Pattern.compile("var url = \"(.*?)\";");
@@ -687,14 +635,14 @@ public class ShaoHuo extends Spider {
             
             SpiderDebug.log("[骚火电影] 提取参数: url=" + urlVal + ", t=" + tVal);
             
-            // 解析 ee 字典
             JSONObject eeJson = new JSONObject(eeStr);
             Map<String, String> eeDict = new HashMap<>();
-            for (String key : eeJson.keySet()) {
+            Iterator<String> keys = eeJson.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
                 eeDict.put(key, eeJson.getString(key));
             }
             
-            // 4. 解密 key
             String realKey = decodeKey(encodedKey, eeDict);
             if (realKey.isEmpty()) {
                 SpiderDebug.log("[骚火电影] 解密失败");
@@ -702,7 +650,6 @@ public class ShaoHuo extends Spider {
             }
             SpiderDebug.log("[骚火电影] 解密后的 key: " + realKey);
             
-            // 5. POST 到解析 API
             SpiderDebug.log("[骚火电影] 步骤4: 请求解析 API");
             String apiUrl = "https://hhjx.hhplayer.com/api.php";
             Map<String, String> payload = new HashMap<>();
