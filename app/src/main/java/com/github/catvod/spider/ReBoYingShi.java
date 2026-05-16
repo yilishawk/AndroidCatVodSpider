@@ -1,5 +1,7 @@
 package com.github.catvod.spider;
 
+import android.content.Context;
+
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 
@@ -13,17 +15,16 @@ import java.util.List;
 import java.util.Map;
 
 import okhttp3.FormBody;
-import okhttp3.Headers;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * AppRJ 爬虫
+ * ReBoYingShi 爬虫 (原 AppRJ)
  * 站点: http://v.rbotv.cn
  */
-public class AppRJ extends Spider {
+public class ReBoYingShi extends Spider {
 
     private String baseUrl = "http://v.rbotv.cn";
     private static final String SECRET = "7gp0bnd2sr85ydii2j32pcypscoc4w6c5g7spl";
@@ -46,13 +47,12 @@ public class AppRJ extends Spider {
     }
 
     /**
-     * 通用 POST 请求
+     * 通用 POST 请求，自动附加 timestamp 和 sign
      */
     private JSONObject post(String path, Map<String, String> params) throws Exception {
         String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
         String sign = makeSign(timestamp);
 
-        // 构建表单，必须包含 timestamp 和 sign
         FormBody.Builder formBuilder = new FormBody.Builder();
         formBuilder.add("timestamp", timestamp);
         formBuilder.add("sign", sign);
@@ -80,7 +80,7 @@ public class AppRJ extends Spider {
     // ================== 初始化 ==================
 
     @Override
-    public void init(String extend) {
+    public void init(Context context, String extend) {
         if (extend != null && !extend.isEmpty()) {
             try {
                 JSONObject cfg = new JSONObject(extend);
@@ -94,6 +94,8 @@ public class AppRJ extends Spider {
             }
         }
     }
+
+    // ================== 首页 ==================
 
     @Override
     public String homeContent(boolean filter) {
@@ -139,7 +141,7 @@ public class AppRJ extends Spider {
                         filterItems.put(createFilter("class", "类型", options));
                     }
 
-                    // area (地区)
+                    // area
                     JSONArray areaList = item.optJSONArray("area");
                     if (areaList != null && areaList.length() > 1) {
                         JSONArray options = new JSONArray();
@@ -155,7 +157,7 @@ public class AppRJ extends Spider {
                         filterItems.put(createFilter("area", "地区", options));
                     }
 
-                    // year (年份)
+                    // year
                     JSONArray yearList = item.optJSONArray("year");
                     if (yearList != null && yearList.length() > 1) {
                         JSONArray options = new JSONArray();
@@ -171,7 +173,7 @@ public class AppRJ extends Spider {
                         filterItems.put(createFilter("year", "年份", options));
                     }
 
-                    // lang (语言)
+                    // lang
                     JSONArray langList = item.optJSONArray("lang");
                     if (langList != null && langList.length() > 1) {
                         JSONArray options = new JSONArray();
@@ -254,7 +256,7 @@ public class AppRJ extends Spider {
             JSONObject ret = new JSONObject();
             ret.put("list", videos);
             ret.put("page", Integer.parseInt(pg));
-            ret.put("pagecount", 99999); // 无分页信息，给大数
+            ret.put("pagecount", 99999);
             return ret.toString();
         } catch (Exception e) {
             SpiderDebug.log(e);
@@ -290,7 +292,7 @@ public class AppRJ extends Spider {
                     String sourceName = source.optString("name");
                     if (sourceName.isEmpty()) sourceName = source.optString("title", "未知源");
 
-                    // 处理 parse_urls
+                    // parse_urls
                     JSONArray parseUrls = source.optJSONArray("parse_urls");
                     String parseParam = "";
                     if (parseUrls != null && parseUrls.length() > 0) {
@@ -309,21 +311,8 @@ public class AppRJ extends Spider {
                             JSONObject urlItem = urls.getJSONObject(j);
                             String name = urlItem.optString("name", "");
                             String rawUrl = urlItem.optString("url", "");
-                            // 清洗：去首尾竖线，取第一个竖线前的内容
-                            String encrypted;
-                            if (rawUrl != null) {
-                                String cleaned = rawUrl;
-                                if (cleaned.startsWith("|")) cleaned = cleaned.substring(1);
-                                if (cleaned.endsWith("|")) cleaned = cleaned.substring(0, cleaned.length() - 1);
-                                int idx = cleaned.indexOf('|');
-                                if (idx != -1) {
-                                    encrypted = cleaned.substring(0, idx);
-                                } else {
-                                    encrypted = cleaned;
-                                }
-                            } else {
-                                encrypted = "";
-                            }
+                            // 清洗加密串
+                            String encrypted = cleanEncrypted(rawUrl);
                             episodes.add(name + "$" + parseParam + "|" + encrypted);
                         }
                         if (!episodes.isEmpty()) {
@@ -356,6 +345,15 @@ public class AppRJ extends Spider {
             SpiderDebug.log(e);
             return "{\"list\":[]}";
         }
+    }
+
+    private String cleanEncrypted(String raw) {
+        if (raw == null) return "";
+        String cleaned = raw;
+        if (cleaned.startsWith("|")) cleaned = cleaned.substring(1);
+        if (cleaned.endsWith("|")) cleaned = cleaned.substring(0, cleaned.length() - 1);
+        int idx = cleaned.indexOf('|');
+        return idx != -1 ? cleaned.substring(0, idx) : cleaned;
     }
 
     // ================== 搜索 ==================
@@ -405,7 +403,7 @@ public class AppRJ extends Spider {
 
             String parts;
             if (id.contains("$")) {
-                parts = id.split("\\$", 2)[1]; // 取 $ 后的部分
+                parts = id.split("\\$", 2)[1];
             } else {
                 parts = id;
             }
