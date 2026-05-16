@@ -27,7 +27,6 @@ import okhttp3.Response;
 public class ReBoYingShi extends Spider {
 
     private String baseUrl = "http://v.rbotv.cn";
-    // 注意：Python 版本 secret 最后是 'spl' 不是 'pl'，需保持一致
     private static final String SECRET = "7gp0bnd2sr85ydii2j32pcypscoc4w6c7g5spl";
     private static final String UA = "okhttp-okgo/jeasonlzy";
 
@@ -63,12 +62,12 @@ public class ReBoYingShi extends Spider {
         }
     }
 
-    @Override
+    // 移除 getName 和 isVideoCast 的 @Override，如果父类没有这些方法
+    
     public String getName() {
         return "AppRJ";
     }
 
-    @Override
     public boolean isVideoCast() {
         return true;
     }
@@ -99,7 +98,6 @@ public class ReBoYingShi extends Spider {
 
     /**
      * 通用 POST 请求 - 与 Python 版本保持一致
-     * Python 版本中 params 包含 timestamp 和 sign
      */
     private JSONObject post(String path, Map<String, String> params) {
         if (client == null) {
@@ -110,7 +108,6 @@ public class ReBoYingShi extends Spider {
         String url = baseUrl + path;
         SpiderDebug.log("[AppRJ] POST: " + url);
 
-        // 构建表单数据 - 与 Python 版本一致
         FormBody.Builder formBuilder = new FormBody.Builder();
         for (Map.Entry<String, String> e : params.entrySet()) {
             if (e.getValue() != null && !e.getValue().isEmpty()) {
@@ -396,7 +393,7 @@ public class ReBoYingShi extends Spider {
                         sourceName = source.optString("title", "未知源");
                     }
 
-                    // 构建 parse_param - 与 Python 版本一致，用 @ 连接
+                    // 构建 parse_param - 用 @ 连接
                     JSONArray parseUrls = source.optJSONArray("parse_urls");
                     String parseParam = "";
                     if (parseUrls != null && parseUrls.length() > 0) {
@@ -421,21 +418,17 @@ public class ReBoYingShi extends Spider {
                             String rawUrl = urlItem.optString("url", "");
                             
                             // 清洗：去掉首尾竖线，取竖线前的内容作为加密串
-                            // 与 Python 版本一致: cleaned = raw_url.strip('|'); if '|' in cleaned: encrypted = cleaned.split('|')[0]
                             String cleaned = rawUrl;
                             if (cleaned != null) {
-                                // 去掉首尾竖线
                                 while (cleaned.startsWith("|")) {
                                     cleaned = cleaned.substring(1);
                                 }
                                 while (cleaned.endsWith("|")) {
                                     cleaned = cleaned.substring(0, cleaned.length() - 1);
                                 }
-                                // 取竖线前的内容
                                 int idx = cleaned.indexOf('|');
                                 String encrypted = (idx != -1) ? cleaned.substring(0, idx) : cleaned;
                                 
-                                // 格式: 名称$解析参数|加密串
                                 String epStr = name + "$" + parseParam + "|" + encrypted;
                                 episodes.add(epStr);
                             }
@@ -539,7 +532,7 @@ public class ReBoYingShi extends Spider {
                 return "{\"parse\":0,\"url\":\"\"}";
             }
 
-            // 与 Python 版本一致: 提取 $ 后的部分
+            // 提取 $ 后的部分
             String parts = id;
             if (id.contains("$")) {
                 String[] idParts = id.split("\\$", 2);
@@ -558,7 +551,6 @@ public class ReBoYingShi extends Spider {
                     String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
                     String sign = makeSign(timestamp);
                     
-                    // 拼接请求 URL
                     String reqUrl;
                     if (parseParam.contains("?url=") || parseParam.contains("&url=")) {
                         reqUrl = parseParam + encrypted;
@@ -566,7 +558,6 @@ public class ReBoYingShi extends Spider {
                         reqUrl = parseParam + "?url=" + encrypted;
                     }
                     
-                    // 添加签名
                     if (!reqUrl.contains("&sign=") && !reqUrl.contains("?sign=")) {
                         reqUrl += "&sign=" + sign + "&timestamp=" + timestamp;
                     }
@@ -595,7 +586,6 @@ public class ReBoYingShi extends Spider {
                     }
                 }
             } else if (segments.length == 1) {
-                // 可能是直接 URL
                 String url = segments[0];
                 if (url.startsWith("http")) {
                     JSONObject ret = new JSONObject();
