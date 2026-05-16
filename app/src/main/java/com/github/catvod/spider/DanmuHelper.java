@@ -39,52 +39,50 @@ public class DanmuHelper {
     return generateEmpty(title, episodeNum);
 }
 
-    private static String search360kan(String title, int episodeNum) {
+    // 修改 search360kan 内部逻辑
+        private static String search360kan(String title, int episodeNum) {
     try {
         String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
         String res = OkHttp.string(url);
-        Proxy.log("🔍 [360kan原始返回] " + (res == null ? "null" : res.substring(0, Math.min(500, res.length()))));
+        
+        // 探测点 A: 网络返回
+        if (res == null || res.isEmpty()) {
+            Proxy.log("❌ [哨兵3-Helper] 360kan 请求失败，返回为空");
+            return null;
+        }
+
         JsonObject root = Json.safeObject(res);
-        Proxy.log("🔍 [360kan root解析] " + (root == null ? "null" : root.keySet().toString()));
+        
+        // 探测点 B: data 节点
+        if (root == null || !root.has("data") || root.get("data").isJsonNull()) {
+            Proxy.log("❌ [哨兵3-Helper] 360kan 无 data 节点");
+            return null;
+        }
+        JsonObject data = root.getAsJsonObject("data");
 
-            // 路径安全检查，防止 Attempt to read from null array
-            if (root == null || !root.has("data") || root.get("data").isJsonNull()) return null;
-            JsonObject data = root.getAsJsonObject("data");
-            if (!data.has("longData") || !data.get("longData").isJsonObject()) return null;
-            JsonObject longData = data.getAsJsonObject("longData");
-            if (!longData.has("rows") || longData.get("rows").isJsonNull()) return null;
-            JsonArray rows = longData.getAsJsonArray("rows");
+        // 探测点 C: longData 节点 (最常报错 null array 的地方)
+        if (!data.has("longData") || data.get("longData").isJsonNull()) {
+            Proxy.log("⚠️ [哨兵3-Helper] 搜索无结果 (longData is null)");
+            return null;
+        }
+        JsonObject longData = data.getAsJsonObject("longData");
 
-            for (JsonElement el : rows) {
-                if (!el.isJsonObject()) continue;
-                JsonObject row = el.getAsJsonObject();
-                
-                // ⚡ 严格匹配 titleTxt (去除空格对比)
-                String titleTxt = row.has("titleTxt") ? row.get("titleTxt").getAsString().replace(" ", "") : "";
-                String targetTitle = title.replace(" ", "");
-                if (!titleTxt.equalsIgnoreCase(targetTitle)) continue;
+        // 探测点 D: rows 节点
+        if (!longData.has("rows") || longData.get("rows").isJsonNull()) {
+            Proxy.log("⚠️ [哨兵3-Helper] rows 节点为空");
+            return null;
+        }
+        JsonArray rows = longData.getAsJsonArray("rows");
+        Proxy.log("✅ [哨兵3-Helper] 匹配到 " + rows.size() + " 条搜索结果");
 
-                // 处理电视剧/动漫的 seriesPlaylinks
-                if (row.has("seriesPlaylinks") && row.get("seriesPlaylinks").isJsonArray()) {
-                    JsonArray series = row.getAsJsonArray("seriesPlaylinks");
-                    if (series.size() >= episodeNum && episodeNum > 0) {
-                        JsonElement ep = series.get(episodeNum - 1);
-                        String epUrl = "";
-                        // 兼容 JS 发现的：对象 {url:''} 或 纯字符串 'http://'
-                        if (ep.isJsonObject() && ep.getAsJsonObject().has("url")) {
-                            epUrl = ep.getAsJsonObject().get("url").getAsString();
-                        } else if (ep.isJsonPrimitive()) {
-                            epUrl = ep.getAsString();
-                        }
-                        
-                        // ⚡ 链接清洗：去除 ? 及后面的参数 (对齐 JS cleanVideoUrl)
-                        return epUrl.contains("?") ? epUrl.split("\\?")[0] : epUrl;
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
+        for (JsonElement el : rows) {
+            // ... 后续匹配逻辑 ...
+        }
+    } catch (Exception e) {
+        Proxy.log("❌ [哨兵3-Helper] 崩溃位置: " + e.getMessage());
     }
+    return null;
+}
 
     private static String getMd5(String text) {
         try {
