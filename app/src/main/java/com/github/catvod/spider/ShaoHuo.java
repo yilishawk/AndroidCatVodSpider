@@ -41,7 +41,7 @@ public class ShaoHuo extends Spider {
     private final OkHttpClient client;
     private final Map<String, String> headers;
 
-    public ShaoHuoMovie() {
+    public ShaoHuo() {
         // 初始化 OkHttpClient
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
