@@ -617,10 +617,11 @@ if (vars != null) {
         String vodName = varPool.getOrDefault("vod_name", "");
         String episode = varPool.getOrDefault("episode", "1");
         if (!TextUtils.isEmpty(vodName)) {
-            // 修正：按照你提供的文档，danmaku 需要是一个 JSONArray
-            String danmakuUrl = "http://127.0.0.1:9978/proxy?do=danmaku"
-                    + "&title=" + URLEncoder.encode(vodName, "UTF-8")
-                    + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+            String proxyUrl = "proxy://do=danmaku"
+        + "&title=" + URLEncoder.encode(vodName, "UTF-8")
+        + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+            // 试试直接推送字符串
+            resJson.put("danmaku", proxyUrl);
             
             JSONArray danmakuArray = new JSONArray();
             JSONObject danmakuItem = new JSONObject();
@@ -628,7 +629,7 @@ if (vars != null) {
             danmakuItem.put("name", "凯哥全能弹幕");
             danmakuArray.put(danmakuItem);
             
-            resJson.put("danmaku", danmakuArray);
+            resJson.put("danmaku", danmakuUrl);
             Proxy.log("<b style='color:#2ecc71;'>🎯 [哨兵1-KG] 弹幕地址已装载: </b>" + danmakuUrl);
         } else {
             Proxy.log("<b style='color:#f1c40f;'>⚠️ [哨兵1-KG] vod_name 为空，跳过弹幕装载</b>");
