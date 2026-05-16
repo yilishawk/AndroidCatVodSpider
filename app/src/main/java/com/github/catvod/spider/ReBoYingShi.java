@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
@@ -26,43 +27,97 @@ import okhttp3.Response;
 public class ReBoYingShi extends Spider {
 
     private String baseUrl = "http://v.rbotv.cn";
-    private static final String SECRET = "7gp0bnd2sr85ydii2j32pcypscoc4w6c5g7spl";
+    // 注意：Python 版本 secret 最后是 'spl' 不是 'pl'，需保持一致
+    private static final String SECRET = "7gp0bnd2sr85ydii2j32pcypscoc4w6c7g5spl";
     private static final String UA = "okhttp-okgo/jeasonlzy";
 
-    private final OkHttpClient client = new OkHttpClient();
+    private OkHttpClient client;
+
+    // ================== 初始化 ==================
+
+    @Override
+    public void init(Context context, String extend) {
+        SpiderDebug.log("[AppRJ] init called");
+
+        client = new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build();
+
+        if (extend != null && !extend.isEmpty()) {
+            try {
+                JSONObject cfg = new JSONObject(extend);
+                if (cfg.has("url")) {
+                    String u = cfg.optString("url");
+                    if (u.endsWith("/")) {
+                        u = u.substring(0, u.length() - 1);
+                    }
+                    baseUrl = u;
+                    SpiderDebug.log("[AppRJ] baseUrl updated to: " + baseUrl);
+                }
+            } catch (Exception e) {
+                SpiderDebug.log("[AppRJ] Failed to parse extend: " + e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public String getName() {
+        return "AppRJ";
+    }
+
+    @Override
+    public boolean isVideoCast() {
+        return true;
+    }
 
     // ================== 工具方法 ==================
 
-    private String md5(String input) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("MD5");
-        byte[] digest = md.digest(input.getBytes("UTF-8"));
-        StringBuilder sb = new StringBuilder();
-        for (byte b : digest) sb.append(String.format("%02x", b));
-        return sb.toString();
+    private String md5(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            SpiderDebug.log("[AppRJ] MD5 error: " + e.getMessage());
+            return "";
+        }
     }
 
-    private String makeSign(String timestamp) throws Exception {
+    private String makeSign(String timestamp) {
         return md5(SECRET + timestamp);
     }
 
     /**
-     * 通用 POST 请求，自动附加 timestamp 和 sign
+     * 通用 POST 请求 - 与 Python 版本保持一致
+     * Python 版本中 params 包含 timestamp 和 sign
      */
-    private JSONObject post(String path, Map<String, String> params) throws Exception {
-        String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
-        String sign = makeSign(timestamp);
+    private JSONObject post(String path, Map<String, String> params) {
+        if (client == null) {
+            SpiderDebug.log("[AppRJ] client not initialized");
+            return null;
+        }
 
+        String url = baseUrl + path;
+        SpiderDebug.log("[AppRJ] POST: " + url);
+
+        // 构建表单数据 - 与 Python 版本一致
         FormBody.Builder formBuilder = new FormBody.Builder();
-        formBuilder.add("timestamp", timestamp);
-        formBuilder.add("sign", sign);
-        if (params != null) {
-            for (Map.Entry<String, String> e : params.entrySet()) {
+        for (Map.Entry<String, String> e : params.entrySet()) {
+            if (e.getValue() != null && !e.getValue().isEmpty()) {
                 formBuilder.add(e.getKey(), e.getValue());
             }
         }
 
-        String url = baseUrl + path;
-        SpiderDebug.log("[ReBoYingShi] POST: " + url);
         Request request = new Request.Builder()
                 .url(url)
                 .post(formBuilder.build())
@@ -72,31 +127,21 @@ public class ReBoYingShi extends Spider {
         try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
                 String body = response.body().string();
-                SpiderDebug.log("[ReBoYingShi] Response: " + body);
-                return new JSONObject(body);
-            } else {
-                SpiderDebug.log("[ReBoYingShi] HTTP error: " + response.code());
-            }
-        }
-        return null;
-    }
-
-    // ================== 初始化 ==================
-
-    @Override
-    public void init(Context context, String extend) {
-        SpiderDebug.log("[ReBoYingShi] init called");
-        if (extend != null && !extend.isEmpty()) {
-            try {
-                JSONObject cfg = new JSONObject(extend);
-                if (cfg.has("url")) {
-                    String u = cfg.optString("url");
-                    if (u.endsWith("/")) u = u.substring(0, u.length() - 1);
-                    baseUrl = u;
+                SpiderDebug.log("[AppRJ] Response: " + body);
+                JSONObject result = new JSONObject(body);
+                int code = result.optInt("code");
+                if (code != 1) {
+                    SpiderDebug.log("[AppRJ] API error code: " + code);
+                    return null;
                 }
-            } catch (Exception e) {
-                SpiderDebug.log(e);
+                return result;
+            } else {
+                SpiderDebug.log("[AppRJ] HTTP error: " + response.code());
+                return null;
             }
+        } catch (Exception e) {
+            SpiderDebug.log("[AppRJ] Request failed: " + e.getMessage());
+            return null;
         }
     }
 
@@ -105,14 +150,22 @@ public class ReBoYingShi extends Spider {
     @Override
     public String homeContent(boolean filter) {
         try {
-            JSONObject result = post("/v3/type/top_type", null);
-            if (result == null || result.optInt("code") != 1) {
-                SpiderDebug.log("[ReBoYingShi] homeContent failed");
+            String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
+            String sign = makeSign(timestamp);
+            
+            Map<String, String> params = new HashMap<>();
+            params.put("timestamp", timestamp);
+            params.put("sign", sign);
+            
+            JSONObject result = post("/v3/type/top_type", params);
+            if (result == null) {
                 return "{\"class\":[], \"filters\":{}}";
             }
 
             JSONObject data = result.optJSONObject("data");
-            if (data == null) return "{\"class\":[], \"filters\":{}}";
+            if (data == null) {
+                return "{\"class\":[], \"filters\":{}}";
+            }
 
             JSONArray classArr = new JSONArray();
             JSONObject filtersObj = new JSONObject();
@@ -121,78 +174,102 @@ public class ReBoYingShi extends Spider {
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
                     JSONObject item = list.getJSONObject(i);
-                    String typeId = item.optString("type_id");
+                    String typeId = String.valueOf(item.optInt("type_id"));
                     String typeName = item.optString("type_name");
+                    
                     JSONObject cls = new JSONObject();
                     cls.put("type_id", typeId);
                     cls.put("type_name", typeName);
                     classArr.put(cls);
 
-                    // 构建筛选器
                     JSONArray filterItems = new JSONArray();
 
-                    // extend (类型)
+                    // extend 筛选 (类型)
                     JSONArray extendList = item.optJSONArray("extend");
                     if (extendList != null && extendList.length() > 1) {
                         JSONArray options = new JSONArray();
                         for (int j = 0; j < extendList.length(); j++) {
-                            String val = extendList.optString(j).trim();
-                            if (!val.isEmpty()) {
+                            String val = extendList.optString(j);
+                            if (val != null && !val.trim().isEmpty()) {
                                 JSONObject opt = new JSONObject();
-                                opt.put("n", val);
-                                opt.put("v", val);
+                                opt.put("n", val.trim());
+                                opt.put("v", val.trim());
                                 options.put(opt);
                             }
                         }
-                        filterItems.put(createFilter("class", "类型", options));
+                        if (options.length() > 0) {
+                            JSONObject filterItem = new JSONObject();
+                            filterItem.put("key", "class");
+                            filterItem.put("name", "类型");
+                            filterItem.put("value", options);
+                            filterItems.put(filterItem);
+                        }
                     }
 
-                    // area
+                    // area 筛选
                     JSONArray areaList = item.optJSONArray("area");
                     if (areaList != null && areaList.length() > 1) {
                         JSONArray options = new JSONArray();
                         for (int j = 0; j < areaList.length(); j++) {
-                            String val = areaList.optString(j).trim();
-                            if (!val.isEmpty()) {
+                            String val = areaList.optString(j);
+                            if (val != null && !val.trim().isEmpty()) {
                                 JSONObject opt = new JSONObject();
-                                opt.put("n", val);
-                                opt.put("v", val);
+                                opt.put("n", val.trim());
+                                opt.put("v", val.trim());
                                 options.put(opt);
                             }
                         }
-                        filterItems.put(createFilter("area", "地区", options));
+                        if (options.length() > 0) {
+                            JSONObject filterItem = new JSONObject();
+                            filterItem.put("key", "area");
+                            filterItem.put("name", "地区");
+                            filterItem.put("value", options);
+                            filterItems.put(filterItem);
+                        }
                     }
 
-                    // year
+                    // year 筛选
                     JSONArray yearList = item.optJSONArray("year");
                     if (yearList != null && yearList.length() > 1) {
                         JSONArray options = new JSONArray();
                         for (int j = 0; j < yearList.length(); j++) {
-                            String val = yearList.optString(j).trim();
-                            if (!val.isEmpty()) {
+                            String val = yearList.optString(j);
+                            if (val != null && !val.trim().isEmpty()) {
                                 JSONObject opt = new JSONObject();
-                                opt.put("n", val);
-                                opt.put("v", val);
+                                opt.put("n", val.trim());
+                                opt.put("v", val.trim());
                                 options.put(opt);
                             }
                         }
-                        filterItems.put(createFilter("year", "年份", options));
+                        if (options.length() > 0) {
+                            JSONObject filterItem = new JSONObject();
+                            filterItem.put("key", "year");
+                            filterItem.put("name", "年份");
+                            filterItem.put("value", options);
+                            filterItems.put(filterItem);
+                        }
                     }
 
-                    // lang
+                    // lang 筛选
                     JSONArray langList = item.optJSONArray("lang");
                     if (langList != null && langList.length() > 1) {
                         JSONArray options = new JSONArray();
                         for (int j = 0; j < langList.length(); j++) {
-                            String val = langList.optString(j).trim();
-                            if (!val.isEmpty()) {
+                            String val = langList.optString(j);
+                            if (val != null && !val.trim().isEmpty()) {
                                 JSONObject opt = new JSONObject();
-                                opt.put("n", val);
-                                opt.put("v", val);
+                                opt.put("n", val.trim());
+                                opt.put("v", val.trim());
                                 options.put(opt);
                             }
                         }
-                        filterItems.put(createFilter("lang", "语言", options));
+                        if (options.length() > 0) {
+                            JSONObject filterItem = new JSONObject();
+                            filterItem.put("key", "lang");
+                            filterItem.put("name", "语言");
+                            filterItem.put("value", options);
+                            filterItems.put(filterItem);
+                        }
                     }
 
                     if (filterItems.length() > 0) {
@@ -205,18 +282,11 @@ public class ReBoYingShi extends Spider {
             home.put("class", classArr);
             home.put("filters", filtersObj);
             return home.toString();
+
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[AppRJ] homeContent error: " + e.getMessage());
             return "{\"class\":[], \"filters\":{}}";
         }
-    }
-
-    private JSONObject createFilter(String key, String name, JSONArray value) throws Exception {
-        JSONObject f = new JSONObject();
-        f.put("key", key);
-        f.put("name", name);
-        f.put("value", value);
-        return f;
     }
 
     // ================== 分类列表 ==================
@@ -224,49 +294,59 @@ public class ReBoYingShi extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
+            String sign = makeSign(timestamp);
+            
             Map<String, String> params = new HashMap<>();
+            params.put("timestamp", timestamp);
+            params.put("sign", sign);
             params.put("type_id", tid);
             params.put("page", pg);
             params.put("limit", "12");
 
             if (extend != null) {
-                for (String k : new String[]{"area", "class", "lang", "year"}) {
-                    String v = extend.get(k);
-                    if (v != null && !v.isEmpty()) {
-                        params.put(k, v);
+                String[] keys = {"area", "class", "lang", "year"};
+                for (String key : keys) {
+                    String value = extend.get(key);
+                    if (value != null && !value.isEmpty()) {
+                        params.put(key, value);
                     }
                 }
             }
 
             JSONObject result = post("/v3/home/type_search", params);
-            if (result == null || result.optInt("code") != 1) {
-                SpiderDebug.log("[ReBoYingShi] categoryContent failed");
+            if (result == null) {
                 return "{\"list\":[], \"page\":" + pg + "}";
             }
 
             JSONObject data = result.optJSONObject("data");
-            JSONArray list = data != null ? data.optJSONArray("list") : null;
+            JSONArray list = (data != null) ? data.optJSONArray("list") : null;
+            
             JSONArray videos = new JSONArray();
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
                     JSONObject item = list.getJSONObject(i);
                     String pic = item.optString("vod_pic");
-                    if (pic.isEmpty()) pic = item.optString("vod_pic_thumb", "");
+                    if (pic == null || pic.isEmpty()) {
+                        pic = item.optString("vod_pic_thumb", "");
+                    }
+                    
                     JSONObject vod = new JSONObject();
-                    vod.put("vod_id", item.optString("vod_id"));
+                    vod.put("vod_id", String.valueOf(item.optInt("vod_id")));
                     vod.put("vod_name", item.optString("vod_name"));
                     vod.put("vod_pic", pic);
                     vod.put("vod_remarks", item.optString("vod_remarks", ""));
                     videos.put(vod);
                 }
             }
+            
             JSONObject ret = new JSONObject();
             ret.put("list", videos);
             ret.put("page", Integer.parseInt(pg));
-            ret.put("pagecount", 99999);
             return ret.toString();
+            
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[AppRJ] categoryContent error: " + e.getMessage());
             return "{\"list\":[], \"page\":" + pg + "}";
         }
     }
@@ -276,18 +356,33 @@ public class ReBoYingShi extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         try {
-            if (ids == null || ids.isEmpty()) return "{\"list\":[]}";
+            if (ids == null || ids.isEmpty()) {
+                return "{\"list\":[]}";
+            }
+            
             String vodId = ids.get(0);
+            String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
+            String sign = makeSign(timestamp);
+            
             Map<String, String> params = new HashMap<>();
+            params.put("timestamp", timestamp);
+            params.put("sign", sign);
             params.put("vod_id", vodId);
+            
             JSONObject result = post("/v3/home/vod_details", params);
-            if (result == null || result.optInt("code") != 1) return "{\"list\":[]}";
+            if (result == null) {
+                return "{\"list\":[]}";
+            }
 
             JSONObject data = result.optJSONObject("data");
-            if (data == null) return "{\"list\":[]}";
+            if (data == null) {
+                return "{\"list\":[]}";
+            }
 
             String pic = data.optString("vod_pic");
-            if (pic.isEmpty()) pic = data.optString("vod_pic_thumb", "");
+            if (pic == null || pic.isEmpty()) {
+                pic = data.optString("vod_pic_thumb", "");
+            }
 
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
@@ -297,20 +392,26 @@ public class ReBoYingShi extends Spider {
                 for (int i = 0; i < playSources.length(); i++) {
                     JSONObject source = playSources.getJSONObject(i);
                     String sourceName = source.optString("name");
-                    if (sourceName.isEmpty()) sourceName = source.optString("title", "未知源");
+                    if (sourceName == null || sourceName.isEmpty()) {
+                        sourceName = source.optString("title", "未知源");
+                    }
 
-                    // parse_urls
+                    // 构建 parse_param - 与 Python 版本一致，用 @ 连接
                     JSONArray parseUrls = source.optJSONArray("parse_urls");
                     String parseParam = "";
                     if (parseUrls != null && parseUrls.length() > 0) {
                         StringBuilder sb = new StringBuilder();
                         for (int j = 0; j < parseUrls.length(); j++) {
                             if (j > 0) sb.append("@");
-                            sb.append(parseUrls.optString(j));
+                            String url = parseUrls.optString(j);
+                            if (url != null) {
+                                sb.append(url);
+                            }
                         }
                         parseParam = sb.toString();
                     }
 
+                    // 处理播放列表
                     JSONArray urls = source.optJSONArray("urls");
                     if (urls != null && urls.length() > 0) {
                         List<String> episodes = new ArrayList<>();
@@ -318,9 +419,26 @@ public class ReBoYingShi extends Spider {
                             JSONObject urlItem = urls.getJSONObject(j);
                             String name = urlItem.optString("name", "");
                             String rawUrl = urlItem.optString("url", "");
-                            // 清洗加密串
-                            String encrypted = cleanEncrypted(rawUrl);
-                            episodes.add(name + "$" + parseParam + "|" + encrypted);
+                            
+                            // 清洗：去掉首尾竖线，取竖线前的内容作为加密串
+                            // 与 Python 版本一致: cleaned = raw_url.strip('|'); if '|' in cleaned: encrypted = cleaned.split('|')[0]
+                            String cleaned = rawUrl;
+                            if (cleaned != null) {
+                                // 去掉首尾竖线
+                                while (cleaned.startsWith("|")) {
+                                    cleaned = cleaned.substring(1);
+                                }
+                                while (cleaned.endsWith("|")) {
+                                    cleaned = cleaned.substring(0, cleaned.length() - 1);
+                                }
+                                // 取竖线前的内容
+                                int idx = cleaned.indexOf('|');
+                                String encrypted = (idx != -1) ? cleaned.substring(0, idx) : cleaned;
+                                
+                                // 格式: 名称$解析参数|加密串
+                                String epStr = name + "$" + parseParam + "|" + encrypted;
+                                episodes.add(epStr);
+                            }
                         }
                         if (!episodes.isEmpty()) {
                             playFromList.add(sourceName);
@@ -338,29 +456,23 @@ public class ReBoYingShi extends Spider {
             vod.put("vod_year", data.optString("vod_year", ""));
             vod.put("vod_actor", data.optString("vod_actor", ""));
             vod.put("vod_director", data.optString("vod_director", ""));
-            vod.put("type_name", data.optString("vod_class", ""));
+            vod.put("vod_class", data.optString("vod_class", ""));
             vod.put("vod_remarks", data.optString("vod_remarks", ""));
             vod.put("vod_play_from", String.join("$$$", playFromList));
             vod.put("vod_play_url", String.join("$$$", playUrlList));
 
             JSONArray list = new JSONArray();
             list.put(vod);
+            
             JSONObject ret = new JSONObject();
             ret.put("list", list);
             return ret.toString();
+            
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[AppRJ] detailContent error: " + e.getMessage());
+            e.printStackTrace();
             return "{\"list\":[]}";
         }
-    }
-
-    private String cleanEncrypted(String raw) {
-        if (raw == null) return "";
-        String cleaned = raw;
-        if (cleaned.startsWith("|")) cleaned = cleaned.substring(1);
-        if (cleaned.endsWith("|")) cleaned = cleaned.substring(0, cleaned.length() - 1);
-        int idx = cleaned.indexOf('|');
-        return idx != -1 ? cleaned.substring(0, idx) : cleaned;
     }
 
     // ================== 搜索 ==================
@@ -368,35 +480,52 @@ public class ReBoYingShi extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
+            if (key == null || key.trim().isEmpty()) {
+                return "{\"list\":[]}";
+            }
+            
+            String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
+            String sign = makeSign(timestamp);
+            
             Map<String, String> params = new HashMap<>();
-            params.put("keyword", key);
+            params.put("timestamp", timestamp);
+            params.put("sign", sign);
+            params.put("keyword", key.trim());
             params.put("limit", "12");
             params.put("page", "1");
+            
             JSONObject result = post("/v3/home/search", params);
-            if (result == null || result.optInt("code") != 1) return "{\"list\":[]}";
+            if (result == null) {
+                return "{\"list\":[]}";
+            }
 
             JSONObject data = result.optJSONObject("data");
-            JSONArray list = data != null ? data.optJSONArray("list") : null;
+            JSONArray list = (data != null) ? data.optJSONArray("list") : null;
+            
             JSONArray videos = new JSONArray();
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
                     JSONObject item = list.getJSONObject(i);
                     String pic = item.optString("vod_pic");
-                    if (pic.isEmpty()) pic = item.optString("vod_pic_thumb", "");
+                    if (pic == null || pic.isEmpty()) {
+                        pic = item.optString("vod_pic_thumb", "");
+                    }
+                    
                     JSONObject vod = new JSONObject();
-                    vod.put("vod_id", item.optString("vod_id"));
+                    vod.put("vod_id", String.valueOf(item.optInt("vod_id")));
                     vod.put("vod_name", item.optString("vod_name"));
                     vod.put("vod_pic", pic);
                     vod.put("vod_remarks", item.optString("vod_remarks", ""));
                     videos.put(vod);
                 }
             }
+            
             JSONObject ret = new JSONObject();
             ret.put("list", videos);
-            ret.put("page", 1);
             return ret.toString();
+            
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[AppRJ] searchContent error: " + e.getMessage());
             return "{\"list\":[]}";
         }
     }
@@ -406,68 +535,80 @@ public class ReBoYingShi extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            if (id == null) return "{\"parse\":0,\"url\":\"\"}";
-
-            String parts;
-            if (id.contains("$")) {
-                parts = id.split("\\$", 2)[1];
-            } else {
-                parts = id;
-            }
-
-            String parseParam = "";
-            String encrypted = "";
-            String[] segments = parts.split("\\|");
-            if (segments.length >= 2) {
-                parseParam = segments[0];
-                encrypted = segments[1];
-            } else {
-                return "{\"parse\":0,\"url\":\"" + id.replace("\"", "\\\"") + "\"}";
-            }
-
-            if (!parseParam.startsWith("http")) {
+            if (id == null || id.isEmpty()) {
                 return "{\"parse\":0,\"url\":\"\"}";
             }
 
-            // 拼接请求地址
-            String reqUrl;
-            if (parseParam.contains("?url=") || parseParam.contains("&url=")) {
-                reqUrl = parseParam + encrypted;
-            } else {
-                reqUrl = parseParam + "?url=" + encrypted;
-            }
-
-            // 附加签名
-            String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
-            String sign = makeSign(timestamp);
-            if (!reqUrl.contains("&sign=") && !reqUrl.contains("?sign=")) {
-                if (reqUrl.contains("?")) {
-                    reqUrl += "&sign=" + sign + "&timestamp=" + timestamp;
-                } else {
-                    reqUrl += "?sign=" + sign + "&timestamp=" + timestamp;
+            // 与 Python 版本一致: 提取 $ 后的部分
+            String parts = id;
+            if (id.contains("$")) {
+                String[] idParts = id.split("\\$", 2);
+                if (idParts.length >= 2) {
+                    parts = idParts[1];
                 }
             }
-
-            SpiderDebug.log("[ReBoYingShi] play GET: " + reqUrl);
-            Request request = new Request.Builder()
-                    .url(reqUrl)
-                    .header("User-Agent", UA)
-                    .build();
-            try (Response response = client.newCall(request).execute()) {
-                if (response.isSuccessful() && response.body() != null) {
-                    JSONObject json = new JSONObject(response.body().string());
-                    String realUrl = json.optString("url");
-                    if (realUrl != null && realUrl.startsWith("http")) {
-                        JSONObject ret = new JSONObject();
-                        ret.put("parse", 0);
-                        ret.put("url", realUrl);
-                        return ret.toString();
+            
+            // 分离 parse_param 和 encrypted
+            String[] segments = parts.split("\\|");
+            if (segments.length >= 2) {
+                String parseParam = segments[0];
+                String encrypted = segments[1];
+                
+                if (parseParam != null && parseParam.startsWith("http")) {
+                    String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
+                    String sign = makeSign(timestamp);
+                    
+                    // 拼接请求 URL
+                    String reqUrl;
+                    if (parseParam.contains("?url=") || parseParam.contains("&url=")) {
+                        reqUrl = parseParam + encrypted;
+                    } else {
+                        reqUrl = parseParam + "?url=" + encrypted;
+                    }
+                    
+                    // 添加签名
+                    if (!reqUrl.contains("&sign=") && !reqUrl.contains("?sign=")) {
+                        reqUrl += "&sign=" + sign + "&timestamp=" + timestamp;
+                    }
+                    
+                    SpiderDebug.log("[AppRJ] Player request: " + reqUrl);
+                    
+                    Request request = new Request.Builder()
+                            .url(reqUrl)
+                            .header("User-Agent", UA)
+                            .get()
+                            .build();
+                            
+                    try (Response response = client.newCall(request).execute()) {
+                        if (response.isSuccessful() && response.body() != null) {
+                            String body = response.body().string();
+                            JSONObject json = new JSONObject(body);
+                            String realUrl = json.optString("url");
+                            
+                            if (realUrl != null && realUrl.startsWith("http")) {
+                                JSONObject ret = new JSONObject();
+                                ret.put("parse", 0);
+                                ret.put("url", realUrl);
+                                return ret.toString();
+                            }
+                        }
                     }
                 }
+            } else if (segments.length == 1) {
+                // 可能是直接 URL
+                String url = segments[0];
+                if (url.startsWith("http")) {
+                    JSONObject ret = new JSONObject();
+                    ret.put("parse", 0);
+                    ret.put("url", url);
+                    return ret.toString();
+                }
             }
+            
             return "{\"parse\":0,\"url\":\"\"}";
+            
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[AppRJ] playerContent error: " + e.getMessage());
             return "{\"parse\":0,\"url\":\"\"}";
         }
     }
