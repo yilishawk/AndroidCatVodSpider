@@ -35,7 +35,9 @@ public class DuBoKu extends Spider {
             .add("Referer", HOST + "/")
             .build();
 
-    private final OkHttpClient client = new OkHttpClient();
+    private final OkHttpClient client = new OkHttpClient.Builder()
+            .followRedirects(true)
+            .build();
 
     private String fetch(String url) throws Exception {
         Request request = new Request.Builder().url(url).headers(HEADERS).build();
@@ -48,7 +50,7 @@ public class DuBoKu extends Spider {
     }
 
     private String encode(String s) throws Exception {
-        return URLEncoder.encode(s, "UTF-8");
+        return s == null || s.isEmpty() ? "" : URLEncoder.encode(s, "UTF-8");
     }
 
     @Override
@@ -156,9 +158,7 @@ public class DuBoKu extends Spider {
             Document doc = Jsoup.parse(html);
             Elements items = doc.select("ul.myui-vodlist li");
             if (items.isEmpty()) {
-                // 尝试其他可能的选择器
-                items = doc.select("ul li a.myui-vodlist__thumb").isEmpty() ?
-                        doc.select("li .myui-vodlist__thumb") : items;
+                items = doc.select("li .myui-vodlist__thumb").parents();
                 SpiderDebug.log("[DuBoKu] no items found, trying fallback selectors");
             }
             JSONArray videoList = new JSONArray();
@@ -167,7 +167,8 @@ public class DuBoKu extends Spider {
                 if (a == null) a = li.selectFirst("a[data-original]");
                 if (a == null) continue;
                 JSONObject vod = new JSONObject();
-                vod.put("vod_id", a.attr("href"));
+                String href = a.attr("href");
+                vod.put("vod_id", href.startsWith("/") ? href : "/" + href);
                 vod.put("vod_name", a.attr("title"));
                 vod.put("vod_pic", a.attr("data-original"));
                 Element picText = li.selectFirst(".pic-text");
@@ -197,7 +198,8 @@ public class DuBoKu extends Spider {
             Element detail = doc.selectFirst(".myui-content__detail");
             if (detail == null) return "{\"list\":[]}";
 
-            String title = detail.selectFirst("h1.title").text().trim();
+            Element titleElem = detail.selectFirst("h1.title");
+            String title = titleElem != null ? titleElem.text().trim() : "";
             Element img = doc.selectFirst(".myui-content__thumb img");
             String pic = img != null ? img.attr("data-original") : "";
             Element sketch = doc.selectFirst(".sketch.content");
@@ -206,8 +208,9 @@ public class DuBoKu extends Spider {
             String director = "", actor = "", typeName = "", area = "", year = "", remarks = "";
             for (Element p : detail.select("p.data")) {
                 String text = p.text().trim();
-                if (text.contains("导演：")) director = text.replace("导演：", "");
-                else if (text.contains("主演：")) {
+                if (text.contains("导演：")) {
+                    director = text.replace("导演：", "");
+                } else if (text.contains("主演：")) {
                     StringBuilder sb = new StringBuilder();
                     for (Element a : p.select("a")) {
                         if (sb.length() > 0) sb.append(" / ");
@@ -219,11 +222,17 @@ public class DuBoKu extends Spider {
                     if (aTags.size() > 0) typeName = aTags.get(0).text().trim();
                     if (aTags.size() > 1) area = aTags.get(1).text().trim();
                     if (aTags.size() > 2) year = aTags.get(2).text().trim();
-                } else if (text.contains("更新：")) remarks = text.replace("更新：", "");
+                } else if (text.contains("更新：")) {
+                    remarks = text.replace("更新：", "");
+                }
             }
 
             StringBuilder playUrl = new StringBuilder();
-            for (Element a : doc.select(".myui-content__list li a")) {
+            Elements playList = doc.select(".myui-content__list li a");
+            if (playList.isEmpty()) {
+                playList = doc.select(".tab-content .myui-content__list li a");
+            }
+            for (Element a : playList) {
                 String name = a.text().trim();
                 String href = a.attr("href");
                 if (playUrl.length() > 0) playUrl.append("#");
@@ -266,7 +275,8 @@ public class DuBoKu extends Spider {
                 Element a = li.selectFirst("a.myui-vodlist__thumb");
                 if (a == null) continue;
                 JSONObject vod = new JSONObject();
-                vod.put("vod_id", a.attr("href"));
+                String href = a.attr("href");
+                vod.put("vod_id", href.startsWith("/") ? href : "/" + href);
                 vod.put("vod_name", a.attr("title"));
                 vod.put("vod_pic", a.attr("data-original"));
                 Element tag = a.selectFirst(".tag");
@@ -285,71 +295,274 @@ public class DuBoKu extends Spider {
     /**
      * 播放解析 - 修复版
      * 1. 从 <script>var player_data = {...}</script> 中提取 url 字段
-     * 2. Base64 解码 -> URL 解码 -> 真实播放地址
-     * 3. 失败时返回 parse=1 + 完整播放页 URL，让壳子嗅探
+     * 2. 处理多种编码格式：直接 URL、Base64、二次 Base64
+     * 3. 支持 next 字段递归解析
+     * 4. 失败时返回 parse=1 + 完整播放页 URL，让壳子嗅探
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
             String url = id.startsWith("http") ? id : HOST + id;
+            SpiderDebug.log("[DuBoKu] playerContent url: " + url);
+            
             String html = fetch(url);
+            if (html == null || html.isEmpty()) {
+                SpiderDebug.log("[DuBoKu] Failed to fetch page");
+                return "{\"parse\":1,\"url\":\"" + url + "\"}";
+            }
+            
+            // 方法1: 尝试从 player_data 中提取 url
+            String realUrl = extractPlayerUrl(html);
+            if (realUrl != null && realUrl.startsWith("http")) {
+                SpiderDebug.log("[DuBoKu] Extracted real URL: " + realUrl);
+                JSONObject result = new JSONObject();
+                result.put("parse", 0);
+                result.put("url", realUrl);
+                JSONObject header = new JSONObject();
+                header.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                header.put("Referer", HOST + "/");
+                header.put("Origin", HOST);
+                result.put("header", header);
+                return result.toString();
+            }
+            
+            // 方法2: 尝试从 iframe 中提取 src
+            realUrl = extractIframeUrl(html);
+            if (realUrl != null && realUrl.startsWith("http")) {
+                SpiderDebug.log("[DuBoKu] Extracted iframe URL: " + realUrl);
+                JSONObject result = new JSONObject();
+                result.put("parse", 1);
+                result.put("url", realUrl);
+                return result.toString();
+            }
+            
+            // 方法3: 尝试从 video 标签中提取 src
+            realUrl = extractVideoUrl(html);
+            if (realUrl != null && realUrl.startsWith("http")) {
+                SpiderDebug.log("[DuBoKu] Extracted video URL: " + realUrl);
+                JSONObject result = new JSONObject();
+                result.put("parse", 0);
+                result.put("url", realUrl);
+                return result.toString();
+            }
+            
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] playerContent error: " + e.getMessage());
+            e.printStackTrace();
+        }
 
-            // 尝试从 player_data 中提取 url
+        // 全部失败 → 让壳子嗅探
+        String fullPlayUrl = id.startsWith("http") ? id : HOST + id;
+        SpiderDebug.log("[DuBoKu] Fallback to sniffing: " + fullPlayUrl);
+        return "{\"parse\":1,\"url\":\"" + fullPlayUrl + "\"}";
+    }
+
+    /**
+     * 从 player_data 中提取真实播放地址
+     */
+    private String extractPlayerUrl(String html) {
+        try {
+            // 正则匹配 var player_data = {...};
             Pattern p = Pattern.compile("var player_data\\s*=\\s*(\\{[^;]+\\})\\s*;");
             Matcher m = p.matcher(html);
             if (m.find()) {
                 String jsonStr = m.group(1);
+                SpiderDebug.log("[DuBoKu] player_data found");
                 JSONObject playerData = new JSONObject(jsonStr);
-                String encUrl = playerData.optString("url");
-                if (encUrl != null && !encUrl.isEmpty()) {
-                    // Base64 解码
-                    int padding = 4 - encUrl.length() % 4;
-                    if (padding != 4) for (int i = 0; i < padding; i++) encUrl += "=";
-                    byte[] decoded = Base64.getDecoder().decode(encUrl);
-                    String decodedUrl = new String(decoded, StandardCharsets.UTF_8);
-                    // URL 解码（因为可能含有 %3A 等编码）
-                    String realUrl = URLDecoder.decode(decodedUrl, "UTF-8");
-
-                    if (realUrl.startsWith("http")) {
-                        JSONObject result = new JSONObject();
-                        result.put("parse", 0);
-                        result.put("url", realUrl);
-                        JSONObject header = new JSONObject();
-                        header.put("User-Agent", "Mozilla/5.0");
-                        header.put("Referer", HOST + "/");
-                        result.put("header", header);
-                        return result.toString();
+                
+                // 尝试多种可能的字段名
+                String[] urlFields = {"url", "Url", "URL", "video", "Video", "src", "Src", "SrcUrl", "link", "Link"};
+                for (String field : urlFields) {
+                    if (playerData.has(field)) {
+                        String encUrl = playerData.optString(field);
+                        if (encUrl != null && !encUrl.isEmpty()) {
+                            SpiderDebug.log("[DuBoKu] Found field '" + field + "': " + encUrl.substring(0, Math.min(100, encUrl.length())));
+                            String decoded = decodeVideoUrl(encUrl);
+                            if (decoded != null && decoded.startsWith("http")) {
+                                return decoded;
+                            }
+                        }
+                    }
+                }
+                
+                // 尝试 next 字段（可能需要二次请求）
+                if (playerData.has("next")) {
+                    String nextUrl = playerData.optString("next");
+                    if (nextUrl != null && !nextUrl.isEmpty()) {
+                        SpiderDebug.log("[DuBoKu] Following next URL: " + nextUrl);
+                        return fetchAndExtractPlayerUrl(nextUrl);
                     }
                 }
             }
-
-            // 尝试旧版正则 "url":"..."（作为备用）
-            Pattern oldP = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
-            Matcher oldM = oldP.matcher(html);
-            if (oldM.find()) {
-                String encUrl = oldM.group(1);
-                int padding = 4 - encUrl.length() % 4;
-                if (padding != 4) for (int i = 0; i < padding; i++) encUrl += "=";
-                byte[] decoded = Base64.getDecoder().decode(encUrl);
-                String realUrl = URLDecoder.decode(new String(decoded, StandardCharsets.UTF_8), "UTF-8");
-                if (realUrl.startsWith("http")) {
-                    JSONObject result = new JSONObject();
-                    result.put("parse", 0);
-                    result.put("url", realUrl);
-                    JSONObject header = new JSONObject();
-                    header.put("User-Agent", "Mozilla/5.0");
-                    header.put("Referer", HOST + "/");
-                    result.put("header", header);
-                    return result.toString();
+            
+            // 备用正则：直接匹配 "url":"xxx"
+            Pattern p2 = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"");
+            Matcher m2 = p2.matcher(html);
+            if (m2.find()) {
+                String encUrl = m2.group(1);
+                SpiderDebug.log("[DuBoKu] Found url via fallback regex");
+                String decoded = decodeVideoUrl(encUrl);
+                if (decoded != null && decoded.startsWith("http")) {
+                    return decoded;
                 }
             }
-
+            
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            SpiderDebug.log("[DuBoKu] extractPlayerUrl error: " + e.getMessage());
         }
+        return null;
+    }
 
-        // 全部失败 → 让壳子嗅探（必须用完整播放页 URL）
-        String fullPlayUrl = id.startsWith("http") ? id : HOST + id;
-        return "{\"parse\":1,\"url\":\"" + fullPlayUrl + "\"}";
+    /**
+     * 递归获取 next 链接中的播放地址
+     */
+    private String fetchAndExtractPlayerUrl(String nextUrl) {
+        try {
+            if (!nextUrl.startsWith("http")) {
+                if (nextUrl.startsWith("/")) {
+                    nextUrl = HOST + nextUrl;
+                } else {
+                    nextUrl = HOST + "/" + nextUrl;
+                }
+            }
+            String html = fetch(nextUrl);
+            if (html != null) {
+                return extractPlayerUrl(html);
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] fetchAndExtractPlayerUrl error: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 解码视频 URL - 支持多种编码格式
+     */
+    private String decodeVideoUrl(String encUrl) {
+        if (encUrl == null || encUrl.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            // 情况1: 已经是完整的 HTTP URL
+            if (encUrl.startsWith("http://") || encUrl.startsWith("https://")) {
+                // 可能被 URL 编码了，需要解码
+                String decoded = URLDecoder.decode(encUrl, "UTF-8");
+                if (decoded.startsWith("http")) {
+                    return decoded;
+                }
+                return encUrl;
+            }
+            
+            // 情况2: Base64 编码（可能需要补全 padding）
+            String base64 = encUrl;
+            int padding = 4 - base64.length() % 4;
+            if (padding != 4 && padding > 0 && padding < 4) {
+                for (int i = 0; i < padding; i++) {
+                    base64 += "=";
+                }
+            }
+            
+            try {
+                byte[] decoded = Base64.getDecoder().decode(base64);
+                String decodedStr = new String(decoded, StandardCharsets.UTF_8);
+                SpiderDebug.log("[DuBoKu] Base64 decoded: " + decodedStr.substring(0, Math.min(100, decodedStr.length())));
+                
+                // 情况2.1: 解码后是完整 URL
+                if (decodedStr.startsWith("http://") || decodedStr.startsWith("https://")) {
+                    return URLDecoder.decode(decodedStr, "UTF-8");
+                }
+                
+                // 情况2.2: 解码后可能又是 Base64（二次编码）
+                try {
+                    int padding2 = 4 - decodedStr.length() % 4;
+                    if (padding2 != 4 && padding2 > 0 && padding2 < 4) {
+                        for (int i = 0; i < padding2; i++) {
+                            decodedStr += "=";
+                        }
+                    }
+                    byte[] decoded2 = Base64.getDecoder().decode(decodedStr);
+                    String decodedStr2 = new String(decoded2, StandardCharsets.UTF_8);
+                    if (decodedStr2.startsWith("http://") || decodedStr2.startsWith("https://")) {
+                        SpiderDebug.log("[DuBoKu] Double Base64 decoded");
+                        return URLDecoder.decode(decodedStr2, "UTF-8");
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    // 不是二次 Base64，忽略
+                }
+                
+                // 情况2.3: 解码后的字符串可能是 URL 编码的
+                if (decodedStr.contains("%")) {
+                    String urlDecoded = URLDecoder.decode(decodedStr, "UTF-8");
+                    if (urlDecoded.startsWith("http://") || urlDecoded.startsWith("https://")) {
+                        return urlDecoded;
+                    }
+                }
+                
+            } catch (IllegalArgumentException e) {
+                SpiderDebug.log("[DuBoKu] Base64 decode failed: " + e.getMessage());
+            }
+            
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] decodeVideoUrl error: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 从 iframe 中提取 src
+     */
+    private String extractIframeUrl(String html) {
+        try {
+            Document doc = Jsoup.parse(html);
+            Element iframe = doc.selectFirst("iframe");
+            if (iframe != null) {
+                String src = iframe.attr("src");
+                if (src != null && !src.isEmpty() && src.startsWith("http")) {
+                    return src;
+                }
+            }
+            
+            // 正则匹配 iframe
+            Pattern p = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']");
+            Matcher m = p.matcher(html);
+            if (m.find()) {
+                String src = m.group(1);
+                if (src != null && src.startsWith("http")) {
+                    return src;
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] extractIframeUrl error: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 从 video 标签中提取 src
+     */
+    private String extractVideoUrl(String html) {
+        try {
+            Document doc = Jsoup.parse(html);
+            Element video = doc.selectFirst("video");
+            if (video != null) {
+                String src = video.attr("src");
+                if (src != null && !src.isEmpty() && src.startsWith("http")) {
+                    return src;
+                }
+                
+                // 检查 source 标签
+                Element source = video.selectFirst("source");
+                if (source != null) {
+                    src = source.attr("src");
+                    if (src != null && !src.isEmpty() && src.startsWith("http")) {
+                        return src;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] extractVideoUrl error: " + e.getMessage());
+        }
+        return null;
     }
 }
