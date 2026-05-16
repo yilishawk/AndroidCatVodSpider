@@ -2,6 +2,7 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
+import com.github.catvod.utils.Util;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -12,8 +13,6 @@ import org.jsoup.select.Elements;
 
 import java.net.URLDecoder;
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -28,14 +27,17 @@ import okhttp3.Response;
  * 独播库[全功能筛选版]
  * 站点: https://www.dbku.tv
  *
- * 根据 API 规格文档实现
- * 修复: encrypt=2 时需要 Base64 decode → URL decode 两步解码
+ * 修复记录:
+ * 1. encrypt=2 时需要 Base64 decode → URLDecode 两步解码
+ * 2. 使用 Util.base64Decode() 替代 java.util.Base64（Android 兼容）
+ * 3. 使用 Util.unicodeToString() 还原 vod_data 内的 Unicode 转义字段
+ * 4. User-Agent 复用 Util.CHROME 常量
  */
 public class DuBoKu extends Spider {
 
     private static final String HOST = "https://www.dbku.tv";
     private static final Headers HEADERS = new Headers.Builder()
-            .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+            .add("User-Agent", Util.CHROME)
             .add("Referer", HOST + "/")
             .build();
 
@@ -44,6 +46,10 @@ public class DuBoKu extends Spider {
             .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .build();
+
+    // ──────────────────────────────────────────────
+    // 网络请求
+    // ──────────────────────────────────────────────
 
     private String fetch(String url) throws Exception {
         Request request = new Request.Builder().url(url).headers(HEADERS).build();
@@ -58,6 +64,10 @@ public class DuBoKu extends Spider {
     private String encode(String s) throws Exception {
         return s == null || s.isEmpty() ? "" : URLEncoder.encode(s, "UTF-8");
     }
+
+    // ──────────────────────────────────────────────
+    // homeContent
+    // ──────────────────────────────────────────────
 
     @Override
     public String homeContent(boolean filter) {
@@ -166,15 +176,19 @@ public class DuBoKu extends Spider {
         return f;
     }
 
+    // ──────────────────────────────────────────────
+    // categoryContent
+    // ──────────────────────────────────────────────
+
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             if (extend == null) extend = new HashMap<>();
-            String area = extend.getOrDefault("area", "");
-            String by = extend.getOrDefault("by", "time");
+            String area   = extend.getOrDefault("area", "");
+            String by     = extend.getOrDefault("by", "time");
             String class_ = extend.getOrDefault("class", "");
-            String lang = extend.getOrDefault("lang", "");
-            String year = extend.getOrDefault("year", "");
+            String lang   = extend.getOrDefault("lang", "");
+            String year   = extend.getOrDefault("year", "");
 
             String url = HOST + "/vodshow/" + tid + "-" + encode(area) + "-" + by + "-" +
                          encode(class_) + "-" + encode(lang) + "----" + pg + "---" + year + ".html";
@@ -215,6 +229,10 @@ public class DuBoKu extends Spider {
         }
         return "";
     }
+
+    // ──────────────────────────────────────────────
+    // detailContent
+    // ──────────────────────────────────────────────
 
     @Override
     public String detailContent(List<String> ids) {
@@ -293,6 +311,10 @@ public class DuBoKu extends Spider {
         return "{\"list\":[]}";
     }
 
+    // ──────────────────────────────────────────────
+    // searchContent
+    // ──────────────────────────────────────────────
+
     @Override
     public String searchContent(String key, boolean quick) {
         try {
@@ -321,9 +343,13 @@ public class DuBoKu extends Spider {
         return "{\"list\":[]}";
     }
 
+    // ──────────────────────────────────────────────
+    // playerContent
+    // ──────────────────────────────────────────────
+
     /**
-     * 播放解析 - 完整修复版
-     * 修复: 正确处理 encrypt=2 的 Base64+URLDecode 两步解码
+     * 播放解析
+     * 解析优先级：player_data(encrypt) > iframe > video标签 > m3u8直链 > 嗅探兜底
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
@@ -337,7 +363,7 @@ public class DuBoKu extends Spider {
                 return "{\"parse\":1,\"url\":\"" + url + "\"}";
             }
 
-            // 方式1: 优先从 player_data 提取（支持 encrypt 字段）
+            // 方式1: 优先从 player_data 提取（支持 encrypt 字段三种解码方式）
             String realUrl = extractPlayerUrl(html);
             if (realUrl != null && realUrl.startsWith("http")) {
                 SpiderDebug.log("[DuBoKu] Extracted player_data URL: " + realUrl);
@@ -385,18 +411,34 @@ public class DuBoKu extends Spider {
             e.printStackTrace();
         }
 
+        // 兜底：交给嗅探
         String fullPlayUrl = id.startsWith("http") ? id : HOST + id;
         SpiderDebug.log("[DuBoKu] Fallback to sniffing: " + fullPlayUrl);
         return "{\"parse\":1,\"url\":\"" + fullPlayUrl + "\"}";
     }
 
+    // ──────────────────────────────────────────────
+    // 解析工具方法
+    // ──────────────────────────────────────────────
+
     /**
      * 从 player_data 中提取真实播放地址
-     * 支持 encrypt=0（明文）、encrypt=1（Base64）、encrypt=2（Base64 + URL decode）
+     *
+     * 站点 player_data 结构：
+     * {
+     *   "flag": "play",
+     *   "encrypt": 2,          // 0=明文, 1=Base64, 2=Base64+URLDecode
+     *   "url": "aHR0cHMlM0Ev...",
+     *   "vod_data": {
+     *     "vod_name": "/u9ED1/u591C/u544A/u767D",   // Unicode 转义（/ 替代 \）
+     *     "vod_actor": "/u738B/u9E64/u68E3%2C...",  // Unicode + URL 编码混合
+     *     ...
+     *   }
+     * }
      */
     private String extractPlayerUrl(String html) {
         try {
-            // 主正则：宽松匹配，支持多行 JSON
+            // 主正则：支持多行 JSON
             Pattern p = Pattern.compile(
                 "var\\s+player_data\\s*=\\s*(\\{[\\s\\S]*?\\})\\s*(?:</script>|;\\s*(?:var\\s|window\\.|</))",
                 Pattern.MULTILINE
@@ -404,7 +446,7 @@ public class DuBoKu extends Spider {
             Matcher m = p.matcher(html);
 
             if (!m.find()) {
-                // 备用正则：从 script 标签内直接抓取
+                // 备用正则：直接从 <script> 标签内抓取
                 p = Pattern.compile(
                     "<script[^>]*>\\s*var\\s+player_data\\s*=\\s*(\\{[\\s\\S]*?\\})\\s*;?\\s*</script>",
                     Pattern.MULTILINE
@@ -421,8 +463,6 @@ public class DuBoKu extends Spider {
 
             JSONObject playerData = new JSONObject(jsonStr);
 
-            // 读取 encrypt 字段，决定解码策略
-            // encrypt=0: 明文; encrypt=1: Base64; encrypt=2: Base64 + URLDecode
             int encrypt = playerData.optInt("encrypt", 0);
             String encUrl = playerData.optString("url", "");
 
@@ -435,6 +475,7 @@ public class DuBoKu extends Spider {
 
             String decoded = decodeVideoUrl(encUrl, encrypt);
             if (decoded != null && decoded.startsWith("http")) {
+                SpiderDebug.log("[DuBoKu] decoded url: " + decoded);
                 return decoded;
             }
 
@@ -450,43 +491,37 @@ public class DuBoKu extends Spider {
     /**
      * 根据 encrypt 类型解码视频 URL
      *
+     * encrypt=0 → 明文（或仅 URLDecode）
+     * encrypt=1 → Base64 decode（复用 Util.base64Decode，内部使用 android.util.Base64）
+     * encrypt=2 → Base64 decode → URLDecode（两步）
+     *
      * @param encUrl  原始编码字符串
-     * @param encrypt 加密类型: 0=明文, 1=Base64, 2=Base64后再URL编码
+     * @param encrypt 加密类型
      * @return 解码后的 http(s) 地址，失败返回 null
      */
     private String decodeVideoUrl(String encUrl, int encrypt) {
         if (encUrl == null || encUrl.isEmpty()) return null;
 
         try {
-            // encrypt=0: 明文，直接返回
+            // encrypt=0: 明文
             if (encrypt == 0) {
                 String plain = encUrl.startsWith("http") ? encUrl : URLDecoder.decode(encUrl, "UTF-8");
                 return plain.startsWith("http") ? plain : null;
             }
 
-            // encrypt=1 或 encrypt=2: 第一步 Base64 解码
-            String base64 = encUrl.replaceAll("\\s", ""); // 去除空白字符
-            // 补齐 Base64 padding
-            int mod = base64.length() % 4;
-            if (mod == 2) {
-                base64 += "==";
-            } else if (mod == 3) {
-                base64 += "=";
-            }
-
-            byte[] decodedBytes = Base64.getDecoder().decode(base64);
-            String step1 = new String(decodedBytes, StandardCharsets.UTF_8);
+            // encrypt=1 / encrypt=2: 第一步 Base64 decode
+            // 复用 Util.base64Decode，内部使用 android.util.Base64，Android 全版本兼容
+            String step1 = Util.base64Decode(encUrl.replaceAll("\\s", ""));
             SpiderDebug.log("[DuBoKu] after base64 decode: " + step1.substring(0, Math.min(120, step1.length())));
 
-            // encrypt=2: 第二步 URL decode（Base64 解出来的内容本身是 URL 编码的）
-            // encrypt=1 但内容含 % 也需要 URL decode 兜底
+            // encrypt=2 或内容含 % 编码：第二步 URLDecode
             if (encrypt == 2 || step1.contains("%")) {
                 String step2 = URLDecoder.decode(step1, "UTF-8");
                 SpiderDebug.log("[DuBoKu] after url decode: " + step2.substring(0, Math.min(120, step2.length())));
                 if (step2.startsWith("http")) return step2;
             }
 
-            // encrypt=1 且无需 URL decode 的情况
+            // encrypt=1 且无 URL 编码
             if (step1.startsWith("http")) return step1;
 
         } catch (Exception e) {
@@ -496,10 +531,29 @@ public class DuBoKu extends Spider {
     }
 
     /**
-     * 兼容旧调用 — 默认按 Base64 (encrypt=1) 处理
+     * 解码 vod_data 内的字段值
+     *
+     * 站点对 vod_data 字段使用 /uXXXX Unicode 转义（用 / 替代标准的 \）
+     * 同时混合了 %2C 等 URL 编码
+     *
+     * 处理步骤：
+     * 1. /uXXXX → \uXXXX（还原标准 Unicode 转义格式）
+     * 2. URLDecode（还原 %2C 等）
+     * 3. Util.unicodeToString（还原 \uXXXX 为实际汉字）
+     *
+     * 例："/u9ED1/u591C/u544A/u767D" → "黑夜告白"
+     *     "/u738B/u9E64/u68E3%2C/u4EFB/u654F" → "王鹤棣,任敏"
      */
-    private String decodeVideoUrl(String encUrl) {
-        return decodeVideoUrl(encUrl, 1);
+    private String decodeVodField(String raw) {
+        if (raw == null || raw.isEmpty()) return raw;
+        try {
+            String step1 = raw.replace("/u", "\\u");
+            String step2 = URLDecoder.decode(step1, "UTF-8");
+            return Util.unicodeToString(step2);
+        } catch (Exception e) {
+            SpiderDebug.log("[DuBoKu] decodeVodField error: " + e.getMessage());
+            return raw;
+        }
     }
 
     /**
