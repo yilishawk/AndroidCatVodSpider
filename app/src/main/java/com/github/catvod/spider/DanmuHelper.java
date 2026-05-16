@@ -40,49 +40,52 @@ public class DanmuHelper {
 }
 
     // 修改 search360kan 内部逻辑
-        private static String search360kan(String title, int episodeNum) {
-    try {
-        String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
-        String res = OkHttp.string(url);
-        
-        // 探测点 A: 网络返回
-        if (res == null || res.isEmpty()) {
-            Proxy.log("❌ [哨兵3-Helper] 360kan 请求失败，返回为空");
-            return null;
-        }
+    private static String search360kan(String title, int episodeNum) {
+        try {
+            String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
+            String res = OkHttp.string(url);
+            JsonObject root = Json.safeObject(res);
 
-        JsonObject root = Json.safeObject(res);
-        
-        // 探测点 B: data 节点
-        if (root == null || !root.has("data") || root.get("data").isJsonNull()) {
-            Proxy.log("❌ [哨兵3-Helper] 360kan 无 data 节点");
-            return null;
-        }
-        JsonObject data = root.getAsJsonObject("data");
+            // 🛡️ 防御 A: 检查 root 和 data 节点
+            if (root == null || !root.has("data") || root.get("data").isJsonNull()) return null;
+            JsonObject data = root.getAsJsonObject("data");
 
-        // 探测点 C: longData 节点 (最常报错 null array 的地方)
-        if (!data.has("longData") || data.get("longData").isJsonNull()) {
-            Proxy.log("⚠️ [哨兵3-Helper] 搜索无结果 (longData is null)");
-            return null;
-        }
-        JsonObject longData = data.getAsJsonObject("longData");
+            // 🛡️ 防御 B: 检查 longData 是否搜到结果
+            if (!data.has("longData") || data.get("longData").isJsonNull()) {
+                Proxy.log("⚠️ [Helper] 360未搜到该剧: " + title);
+                return null;
+            }
+            JsonObject longData = data.getAsJsonObject("longData");
 
-        // 探测点 D: rows 节点
-        if (!longData.has("rows") || longData.get("rows").isJsonNull()) {
-            Proxy.log("⚠️ [哨兵3-Helper] rows 节点为空");
-            return null;
-        }
-        JsonArray rows = longData.getAsJsonArray("rows");
-        Proxy.log("✅ [哨兵3-Helper] 匹配到 " + rows.size() + " 条搜索结果");
+            // 🛡️ 防御 C: 检查 rows 数组
+            if (!longData.has("rows") || longData.get("rows").isJsonNull()) return null;
+            JsonArray rows = longData.getAsJsonArray("rows");
 
-        for (JsonElement el : rows) {
-            // ... 后续匹配逻辑 ...
+            for (JsonElement el : rows) {
+                if (!el.isJsonObject()) continue;
+                JsonObject row = el.getAsJsonObject();
+                
+                // 严格匹配 titleTxt
+                String titleTxt = row.has("titleTxt") ? row.get("titleTxt").getAsString().replace(" ", "") : "";
+                if (!titleTxt.equalsIgnoreCase(title.replace(" ", ""))) continue;
+
+                // 提取剧集链接
+                if (row.has("seriesPlaylinks") && row.get("seriesPlaylinks").isJsonArray()) {
+                    JsonArray series = row.getAsJsonArray("seriesPlaylinks");
+                    if (series.size() >= episodeNum && episodeNum > 0) {
+                        JsonElement target = series.get(episodeNum - 1);
+                        String epUrl = target.isJsonObject() ? target.getAsJsonObject().get("url").getAsString() : target.getAsString();
+                        
+                        // 清洗 URL 参数对齐 MD5 逻辑
+                        return epUrl.contains("?") ? epUrl.split("\\?")[0] : epUrl;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Proxy.log("❌ [Helper] 解析崩溃: " + e.getMessage());
         }
-    } catch (Exception e) {
-        Proxy.log("❌ [哨兵3-Helper] 崩溃位置: " + e.getMessage());
+        return null;
     }
-    return null;
-}
 
     private static String getMd5(String text) {
         try {
