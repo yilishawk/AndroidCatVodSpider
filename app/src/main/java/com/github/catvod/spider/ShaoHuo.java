@@ -12,13 +12,9 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -30,7 +26,7 @@ import okhttp3.Response;
 
 /**
  * 骚火电影 - 首页秒开版
- * 站点: https://shdy3.com
+ * 完全对齐 Python 版本实现
  */
 public class ShaoHuo extends Spider {
 
@@ -39,13 +35,12 @@ public class ShaoHuo extends Spider {
     private Map<String, String> headers;
 
     public ShaoHuo() {
-        // 配置 OkHttpClient 支持自动解压
+        // 配置 OkHttpClient - 自动解压 gzip
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-                // 添加拦截器处理 gzip（OkHttp 默认支持，但确保 Accept-Encoding 头）
                 .addInterceptor(chain -> {
                     Request original = chain.request();
                     Request request = original.newBuilder()
@@ -55,11 +50,11 @@ public class ShaoHuo extends Spider {
                 })
                 .build();
 
-        // 初始化请求头 - 模拟浏览器
+        // 初始化请求头 - 使用手机 UA（关键！）
         this.headers = new HashMap<>();
-        this.headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        this.headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
-        this.headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+        this.headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 12; V2196A) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.5060.129 Mobile Safari/537.36");
+        this.headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        this.headers.put("Accept-Language", "zh-CN,zh;q=0.9");
         this.headers.put("Accept-Encoding", "gzip, deflate");
         this.headers.put("Connection", "keep-alive");
     }
@@ -74,9 +69,7 @@ public class ShaoHuo extends Spider {
                     .build();
             try (Response response = client.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
-                    // 注意：这里可能返回的是 GBK 编码
-                    byte[] bytes = response.body().bytes();
-                    String html = new String(bytes, detectCharset(bytes, response));
+                    String html = new String(response.body().bytes(), StandardCharsets.UTF_8);
                     Pattern pattern = Pattern.compile("(https://.*?\\.com).*?最新网址");
                     Matcher matcher = pattern.matcher(html);
                     if (matcher.find()) {
@@ -95,64 +88,24 @@ public class ShaoHuo extends Spider {
         }
     }
 
-    /**
-     * 检测字符集
-     */
-    private String detectCharset(byte[] data, Response response) {
-        // 先从 Content-Type 头获取
-        String contentType = response.header("Content-Type");
-        if (contentType != null && contentType.contains("charset=")) {
-            Pattern p = Pattern.compile("charset=([^;]+)");
-            Matcher m = p.matcher(contentType);
-            if (m.find()) {
-                String charset = m.group(1).trim();
-                SpiderDebug.log("[骚火电影] 检测到字符集: " + charset);
-                return charset;
-            }
-        }
-        
-        // 从 HTML meta 标签检测
-        String html = new String(data, StandardCharsets.ISO_8859_1);
-        Pattern p = Pattern.compile("<meta[^>]+charset=[\"']?([^\"'\\s>]+)");
-        Matcher m = p.matcher(html);
-        if (m.find()) {
-            String charset = m.group(1).trim();
-            SpiderDebug.log("[骚火电影] 从 meta 检测到字符集: " + charset);
-            return charset;
-        }
-        
-        // 默认 UTF-8
-        SpiderDebug.log("[骚火电影] 使用默认字符集: UTF-8");
-        return "UTF-8";
-    }
-
-    private String fetch(String url) throws IOException {
-        return fetch(url, null);
-    }
-
-    private String fetch(String url, Map<String, String> extraHeaders) throws IOException {
-        SpiderDebug.log("[骚火电影] 请求: " + url);
-        
-        Map<String, String> allHeaders = new HashMap<>(headers);
-        if (extraHeaders != null) {
-            allHeaders.putAll(extraHeaders);
-        }
-        
+    private String fetch(String url) throws Exception {
         Request request = new Request.Builder()
                 .url(url)
-                .headers(Headers.of(allHeaders))
+                .headers(Headers.of(headers))
                 .build();
-        
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
-                throw new IOException("HTTP " + response.code());
+                throw new Exception("HTTP " + response.code());
             }
-            
+            // 自动检测编码
             byte[] bytes = response.body().bytes();
-            String charset = detectCharset(bytes, response);
+            String contentType = response.header("Content-Type");
+            String charset = "UTF-8";
+            if (contentType != null && contentType.toLowerCase().contains("charset=gbk")) {
+                charset = "GBK";
+            }
             String html = new String(bytes, charset);
-            
-            SpiderDebug.log("[骚火电影] 响应长度: " + html.length() + " 字符");
+            SpiderDebug.log("[骚火电影] fetch " + url + " 成功, 长度: " + html.length());
             return html;
         }
     }
@@ -162,47 +115,35 @@ public class ShaoHuo extends Spider {
     }
 
     /**
-     * 自然排序比较器
+     * 自然排序 - 与 Python 版完全一致
      */
-    private int naturalCompare(String s1, String s2) {
-        Pattern p = Pattern.compile("\\d+");
-        Matcher m1 = p.matcher(s1);
-        Matcher m2 = p.matcher(s2);
-        
-        while (m1.find() && m2.find()) {
-            int num1 = Integer.parseInt(m1.group());
-            int num2 = Integer.parseInt(m2.group());
-            if (num1 != num2) {
-                return Integer.compare(num1, num2);
+    private List<Object> naturalSortKey(String s) {
+        List<Object> result = new ArrayList<>();
+        Matcher matcher = Pattern.compile("([0-9]+)").matcher(s);
+        int lastIndex = 0;
+        while (matcher.find()) {
+            if (matcher.start() > lastIndex) {
+                result.add(s.substring(lastIndex, matcher.start()).toLowerCase());
             }
+            result.add(Integer.parseInt(matcher.group(1)));
+            lastIndex = matcher.end();
         }
-        return s1.compareTo(s2);
+        if (lastIndex < s.length()) {
+            result.add(s.substring(lastIndex).toLowerCase());
+        }
+        return result;
     }
 
+    /**
+     * 解析视频列表 - 与 Python 版 parse_list 完全一致
+     */
     private JSONArray parseList(Document doc) {
         JSONArray videos = new JSONArray();
-        
-        // 调试：输出页面标题
-        String title = doc.title();
-        SpiderDebug.log("[骚火电影] 页面标题: " + title);
-        
-        // 尝试多种选择器
         Elements items = doc.select("ul.v_list li");
-        if (items.isEmpty()) {
-            items = doc.select(".v_list li");
-        }
-        if (items.isEmpty()) {
-            items = doc.select("li.v_item");
-        }
-        if (items.isEmpty()) {
-            items = doc.select(".video-item");
-        }
-        
         SpiderDebug.log("[骚火电影] 找到 " + items.size() + " 个视频项");
         
         for (Element item : items) {
             Element link = item.selectFirst(".v_img a");
-            if (link == null) link = item.selectFirst("a[href*=/v/]");
             if (link == null) continue;
             
             String href = link.attr("href");
@@ -215,35 +156,30 @@ public class ShaoHuo extends Spider {
                 if (pic == null || pic.isEmpty()) {
                     pic = img.attr("src");
                 }
-                if (pic != null && !pic.startsWith("http") && pic.startsWith("/")) {
-                    pic = host + pic;
-                }
             }
             
             Element titleElem = item.selectFirst(".v_title a");
-            String titleText = titleElem != null ? titleElem.text().trim() : "";
-            if (titleText.isEmpty()) {
-                titleText = link.attr("title");
-            }
+            String title = titleElem != null ? titleElem.text() : "";
             
             Element noteElem = item.selectFirst(".v_note");
-            String remarks = noteElem != null ? noteElem.text().trim() : "";
+            String remarks = noteElem != null ? noteElem.text() : "";
             
             try {
                 JSONObject vod = new JSONObject();
                 vod.put("vod_id", fullId);
-                vod.put("vod_name", titleText);
+                vod.put("vod_name", title);
                 vod.put("vod_pic", pic != null ? pic : "");
                 vod.put("vod_remarks", remarks);
                 videos.put(vod);
-                SpiderDebug.log("[骚火电影] 解析视频: " + titleText);
+                SpiderDebug.log("[骚火电影] 解析视频: " + title);
             } catch (Exception e) {
                 SpiderDebug.log("[骚火电影] 解析失败: " + e.getMessage());
             }
         }
-        
         return videos;
     }
+
+    // ================== 首页 ==================
 
     @Override
     public String homeContent(boolean filter) {
@@ -251,76 +187,59 @@ public class ShaoHuo extends Spider {
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
             
-            String[][] classArr = {
-                {"20", "国产剧"},
-                {"1", "电影"},
-                {"2", "电视剧"},
-                {"4", "动漫"}
-            };
-            
-            for (String[] c : classArr) {
-                JSONObject cls = new JSONObject();
-                cls.put("type_id", c[0]);
-                cls.put("type_name", c[1]);
-                classes.put(cls);
-            }
+            // 与 Python 版完全一致的分类
+            classes.put(createClass("20", "国产剧"));
+            classes.put(createClass("1", "电影"));
+            classes.put(createClass("2", "电视剧"));
+            classes.put(createClass("4", "动漫"));
             result.put("class", classes);
-            
+
             if (filter) {
                 JSONObject filters = new JSONObject();
                 
+                // 电视剧筛选器
                 JSONArray tvFilters = new JSONArray();
-                JSONObject tvTypeFilter = new JSONObject();
-                tvTypeFilter.put("key", "cateId");
-                tvTypeFilter.put("name", "类型");
-                JSONArray tvOptions = new JSONArray();
-                String[][] tvTypes = {
-                    {"全部", "2"}, {"大陆", "20"}, {"TVB", "21"},
-                    {"韩剧", "22"}, {"美剧", "23"}
-                };
-                for (String[] opt : tvTypes) {
-                    JSONObject option = new JSONObject();
-                    option.put("n", opt[0]);
-                    option.put("v", opt[1]);
-                    tvOptions.put(option);
-                }
-                tvTypeFilter.put("value", tvOptions);
-                tvFilters.put(tvTypeFilter);
-                filters.put("20", tvFilters);
-                filters.put("2", tvFilters);
+                JSONObject tvFilter = new JSONObject();
+                tvFilter.put("key", "cateId");
+                tvFilter.put("name", "类型");
+                JSONArray tvValues = new JSONArray();
+                tvValues.put(createOption("全部", "2"));
+                tvValues.put(createOption("大陆", "20"));
+                tvValues.put(createOption("TVB", "21"));
+                tvValues.put(createOption("韩剧", "22"));
+                tvValues.put(createOption("美剧", "23"));
+                tvFilter.put("value", tvValues);
+                tvFilters.put(tvFilter);
                 
+                // 电影筛选器
                 JSONArray movieFilters = new JSONArray();
-                JSONObject movieTypeFilter = new JSONObject();
-                movieTypeFilter.put("key", "cateId");
-                movieTypeFilter.put("name", "类型");
-                JSONArray movieOptions = new JSONArray();
-                String[][] movieTypes = {
-                    {"全部", "1"}, {"喜剧", "6"}, {"爱情", "7"},
-                    {"动作", "9"}, {"科幻", "10"}, {"剧情", "15"}
-                };
-                for (String[] opt : movieTypes) {
-                    JSONObject option = new JSONObject();
-                    option.put("n", opt[0]);
-                    option.put("v", opt[1]);
-                    movieOptions.put(option);
-                }
-                movieTypeFilter.put("value", movieOptions);
-                movieFilters.put(movieTypeFilter);
-                filters.put("1", movieFilters);
+                JSONObject movieFilter = new JSONObject();
+                movieFilter.put("key", "cateId");
+                movieFilter.put("name", "类型");
+                JSONArray movieValues = new JSONArray();
+                movieValues.put(createOption("全部", "1"));
+                movieValues.put(createOption("喜剧", "6"));
+                movieValues.put(createOption("爱情", "7"));
+                movieValues.put(createOption("动作", "9"));
+                movieValues.put(createOption("科幻", "10"));
+                movieValues.put(createOption("剧情", "15"));
+                movieFilter.put("value", movieValues);
+                movieFilters.put(movieFilter);
                 
+                // 动漫筛选器
                 JSONArray animeFilters = new JSONArray();
-                JSONObject animeTypeFilter = new JSONObject();
-                animeTypeFilter.put("key", "cateId");
-                animeTypeFilter.put("name", "类型");
-                JSONArray animeOptions = new JSONArray();
-                JSONObject animeOption = new JSONObject();
-                animeOption.put("n", "全部");
-                animeOption.put("v", "4");
-                animeOptions.put(animeOption);
-                animeTypeFilter.put("value", animeOptions);
-                animeFilters.put(animeTypeFilter);
-                filters.put("4", animeFilters);
+                JSONObject animeFilter = new JSONObject();
+                animeFilter.put("key", "cateId");
+                animeFilter.put("name", "类型");
+                JSONArray animeValues = new JSONArray();
+                animeValues.put(createOption("全部", "4"));
+                animeFilter.put("value", animeValues);
+                animeFilters.put(animeFilter);
                 
+                filters.put("20", tvFilters);
+                filters.put("1", movieFilters);
+                filters.put("2", tvFilters);
+                filters.put("4", animeFilters);
                 result.put("filters", filters);
             }
             
@@ -330,6 +249,22 @@ public class ShaoHuo extends Spider {
             return "{\"class\":[], \"filters\":{}}";
         }
     }
+
+    private JSONObject createClass(String id, String name) throws Exception {
+        JSONObject cls = new JSONObject();
+        cls.put("type_id", id);
+        cls.put("type_name", name);
+        return cls;
+    }
+
+    private JSONObject createOption(String n, String v) throws Exception {
+        JSONObject opt = new JSONObject();
+        opt.put("n", n);
+        opt.put("v", v);
+        return opt;
+    }
+
+    // ================== 分类列表 ==================
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
@@ -344,17 +279,16 @@ public class ShaoHuo extends Spider {
             
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
-            
-            // 调试：保存 HTML 到文件
-            // saveDebugHtml(html, "category_" + currTid + "_" + pg);
-            
             JSONArray videoList = parseList(doc);
+            
             SpiderDebug.log("[骚火电影] 解析到 " + videoList.length() + " 个视频");
             
             JSONObject result = new JSONObject();
             result.put("list", videoList);
             result.put("page", Integer.parseInt(pg));
-            result.put("pagecount", 99);
+            result.put("pagecount", 999);
+            result.put("limit", 20);
+            result.put("total", 9999);
             return result.toString();
             
         } catch (Exception e) {
@@ -363,6 +297,8 @@ public class ShaoHuo extends Spider {
             return "{\"list\":[], \"page\":" + pg + "}";
         }
     }
+
+    // ================== 详情页 ==================
 
     @Override
     public String detailContent(List<String> ids) {
@@ -377,13 +313,15 @@ public class ShaoHuo extends Spider {
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
             
-            Element vInfoBox = doc.selectFirst(".v_info_box");
-            if (vInfoBox == null) {
+            // 使用 pyquery 风格的选择器
+            Element vInfo = doc.selectFirst(".v_info_box");
+            if (vInfo == null) {
                 SpiderDebug.log("[骚火电影] 未找到 .v_info_box");
                 return "{\"list\":[]}";
             }
             
-            String infoText = vInfoBox.selectFirst("p") != null ? vInfoBox.selectFirst("p").text() : "";
+            Element pElem = vInfo.selectFirst("p");
+            String infoText = pElem != null ? pElem.text().trim() : "";
             
             // 提取地区
             String area = "";
@@ -425,9 +363,11 @@ public class ShaoHuo extends Spider {
                 actor = actorMatcher.group(1).trim();
             }
             
-            Element titleElem = vInfoBox.selectFirst("h1.v_title a");
+            // 标题
+            Element titleElem = vInfo.selectFirst("h1.v_title a");
             String title = titleElem != null ? titleElem.text().trim() : "";
             
+            // 图片
             Element imgElem = doc.selectFirst(".v_img img");
             String pic = "";
             if (imgElem != null) {
@@ -437,6 +377,7 @@ public class ShaoHuo extends Spider {
                 }
             }
             
+            // 简介
             Element contentElem = doc.selectFirst(".p_txt.show_part");
             String content = "";
             if (contentElem != null) {
@@ -444,33 +385,51 @@ public class ShaoHuo extends Spider {
             }
             
             // 播放来源
-            StringBuilder playFrom = new StringBuilder();
+            List<String> playFromList = new ArrayList<>();
             for (Element li : doc.select(".play_from ul li")) {
-                if (playFrom.length() > 0) playFrom.append("$$$");
-                playFrom.append(li.text().trim());
+                playFromList.add(li.text());
             }
-            if (playFrom.length() == 0) {
-                playFrom.append("云播");
-            }
+            String playFrom = playFromList.isEmpty() ? "云播" : String.join("$$$", playFromList);
             
             // 播放链接
             List<String> playUrlGroups = new ArrayList<>();
-            Elements playLinks = doc.select("#play_link li a");
-            if (playLinks.isEmpty()) {
-                playLinks = doc.select(".play_list a");
+            for (Element group : doc.select("#play_link li")) {
+                List<Map<String, String>> currentLineLinks = new ArrayList<>();
+                for (Element a : group.select("a")) {
+                    String name = a.text();
+                    String link = a.attr("href");
+                    String fullLink = link.startsWith("http") ? link : host + link;
+                    Map<String, String> item = new HashMap<>();
+                    item.put("name", name);
+                    item.put("url", fullLink);
+                    currentLineLinks.add(item);
+                }
+                // 自然排序
+                currentLineLinks.sort((x, y) -> {
+                    List<Object> k1 = naturalSortKey(x.get("name"));
+                    List<Object> k2 = naturalSortKey(y.get("name"));
+                    for (int i = 0; i < Math.min(k1.size(), k2.size()); i++) {
+                        Object o1 = k1.get(i);
+                        Object o2 = k2.get(i);
+                        if (o1 instanceof Integer && o2 instanceof Integer) {
+                            int cmp = ((Integer) o1).compareTo((Integer) o2);
+                            if (cmp != 0) return cmp;
+                        } else {
+                            int cmp = o1.toString().compareTo(o2.toString());
+                            if (cmp != 0) return cmp;
+                        }
+                    }
+                    return Integer.compare(k1.size(), k2.size());
+                });
+                
+                List<String> formatted = new ArrayList<>();
+                for (Map<String, String> item : currentLineLinks) {
+                    formatted.add(item.get("name") + "$" + item.get("url"));
+                }
+                if (!formatted.isEmpty()) {
+                    playUrlGroups.add(String.join("#", formatted));
+                }
             }
-            
-            List<String> episodes = new ArrayList<>();
-            for (Element a : playLinks) {
-                String name = a.text().trim();
-                String link = a.attr("href");
-                String fullLink = link.startsWith("http") ? link : host + link;
-                episodes.add(name + "$" + fullLink);
-            }
-            
-            // 自然排序
-            episodes.sort((x, y) -> naturalCompare(x.split("\\$")[0], y.split("\\$")[0]));
-            playUrlGroups.add(String.join("#", episodes));
             
             JSONObject vod = new JSONObject();
             vod.put("vod_id", url);
@@ -482,7 +441,7 @@ public class ShaoHuo extends Spider {
             vod.put("vod_director", director);
             vod.put("vod_actor", actor);
             vod.put("vod_content", content);
-            vod.put("vod_play_from", playFrom.toString());
+            vod.put("vod_play_from", playFrom);
             vod.put("vod_play_url", String.join("$$$", playUrlGroups));
             
             JSONArray list = new JSONArray();
@@ -498,12 +457,14 @@ public class ShaoHuo extends Spider {
         }
     }
 
+    // ================== 搜索 ==================
+
     @Override
     public String searchContent(String key, boolean quick) {
-        return searchContent(key, quick, "1");
+        return searchContentPg(key, quick, "1");
     }
     
-    public String searchContent(String key, boolean quick, String pg) {
+    public String searchContentPg(String key, boolean quick, String pg) {
         try {
             String searchUrl = host + "/s----------.html?wd=" + encode(key);
             SpiderDebug.log("[骚火电影] search URL: " + searchUrl);
@@ -514,6 +475,10 @@ public class ShaoHuo extends Spider {
             
             JSONObject result = new JSONObject();
             result.put("list", videoList);
+            result.put("page", Integer.parseInt(pg));
+            result.put("pagecount", 1);
+            result.put("limit", videoList.length());
+            result.put("total", videoList.length());
             return result.toString();
             
         } catch (Exception e) {
@@ -521,6 +486,8 @@ public class ShaoHuo extends Spider {
             return "{\"list\":[]}";
         }
     }
+
+    // ================== 播放解析 ==================
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
@@ -530,7 +497,7 @@ public class ShaoHuo extends Spider {
             String html = fetch(id);
             
             // 提取 iframe
-            Pattern iframePattern = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']");
+            Pattern iframePattern = Pattern.compile("iframe src=\"(.*?)\"");
             Matcher iframeMatcher = iframePattern.matcher(html);
             if (iframeMatcher.find()) {
                 String jxUrl = iframeMatcher.group(1);
@@ -557,14 +524,13 @@ public class ShaoHuo extends Spider {
                 }
             }
             
-            // 提取 m3u8 链接
+            // 提取 m3u8
             Pattern m3u8Pattern = Pattern.compile("https?://[^\\s\"'<>]+\\.m3u8[^\\s\"'<>]*");
             Matcher m3u8Matcher = m3u8Pattern.matcher(html);
             if (m3u8Matcher.find()) {
-                String m3u8Url = m3u8Matcher.group();
                 JSONObject result = new JSONObject();
                 result.put("parse", 0);
-                result.put("url", m3u8Url);
+                result.put("url", m3u8Matcher.group());
                 return result.toString();
             }
             
@@ -573,22 +539,5 @@ public class ShaoHuo extends Spider {
         }
         
         return "{\"parse\":1,\"url\":\"" + id + "\"}";
-    }
-    
-    /**
-     * 调试方法：保存 HTML 到文件
-     */
-    private void saveDebugHtml(String html, String name) {
-        try {
-            java.io.File dir = new java.io.File("/sdcard/shaohuo_debug");
-            if (!dir.exists()) dir.mkdirs();
-            java.io.File file = new java.io.File(dir, name + ".html");
-            java.io.FileWriter fw = new java.io.FileWriter(file);
-            fw.write(html);
-            fw.close();
-            SpiderDebug.log("[骚火电影] 已保存到: " + file.getAbsolutePath());
-        } catch (Exception e) {
-            SpiderDebug.log("[骚火电影] 保存失败: " + e.getMessage());
-        }
     }
 }
