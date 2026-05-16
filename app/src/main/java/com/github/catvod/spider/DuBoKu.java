@@ -24,7 +24,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 /**
- * 独播库[全功能筛选版]
+ * 独播[全功能筛选版]
  * 站点: https://www.dbku.tv
  */
 public class DuBoKu extends Spider {
