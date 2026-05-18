@@ -41,14 +41,41 @@ public class Y03YY extends Spider {
     private OkHttpClient client;
 
     public Y03YY() {
-        // 初始化 OkHttpClient，自动管理 Cookie
+    try {
+        javax.net.ssl.TrustManager[] trustAllCerts = new javax.net.ssl.TrustManager[]{
+            new javax.net.ssl.X509TrustManager() {
+                public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) {}
+                public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) {}
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                    return new java.security.cert.X509Certificate[]{};
+                }
+            }
+        };
+
+        javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("SSL");
+        sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .followRedirects(true)
+                .sslSocketFactory(
+                        sslContext.getSocketFactory(),
+                        (javax.net.ssl.X509TrustManager) trustAllCerts[0]
+                )
+                .hostnameVerifier((hostname, session) -> true)
                 .build();
+
+    } catch (Exception e) {
+        this.client = new OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .followRedirects(true)
+                .build();
+        SpiderDebug.log("[Y03YY] SSL初始化失败: " + e.getMessage());
     }
+}
 
     @Override
     public void init(Context context, String extend) throws Exception {
