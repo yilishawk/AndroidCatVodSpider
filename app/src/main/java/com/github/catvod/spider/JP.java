@@ -2,6 +2,7 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
+import com.github.catvod.net.OkHttp; // 引入系统最稳的网络框架
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -14,14 +15,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import okhttp3.Headers;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
 /**
- * @author 九州空间全修复版
+ * @author 九州空间全修复版（电视防崩溃稳定版）
  * 站点: m.9zhoukj.com
  */
 public class JP extends Spider {
@@ -31,7 +26,18 @@ public class JP extends Spider {
     private static final String DEVICE_ID = "7dbc13a7-7976-4d7b-89d2-c110d09d7410";
     private static final String UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
-    private final OkHttpClient client = new OkHttpClient();
+    // ================== 电视兼容：最稳字符串拼接工具 ==================
+    private String safeJoin(String delimiter, List<String> list) {
+        if (list == null || list.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            sb.append(list.get(i));
+            if (i < list.size() - 1) {
+                sb.append(delimiter);
+            }
+        }
+        return sb.toString();
+    }
 
     // ================== 签名工具 ==================
     private String md5(String input) throws Exception {
@@ -51,15 +57,15 @@ public class JP extends Spider {
     }
 
     private String generateSign(Map<String, String> params) throws Exception {
-        // 过滤空值
         Map<String, String> valid = new HashMap<>();
         for (Map.Entry<String, String> e : params.entrySet()) {
             String v = e.getValue();
             if (v != null && !v.isEmpty()) valid.put(e.getKey(), v);
         }
-        // 排序拼接
         List<String> keys = new ArrayList<>(valid.keySet());
         Collections.sort(keys);
+        
+        // 电视兼容：改用 StringBuilder 拼接 URL 参数
         StringBuilder query = new StringBuilder();
         for (int i = 0; i < keys.size(); i++) {
             if (i > 0) query.append("&");
@@ -70,43 +76,46 @@ public class JP extends Spider {
         String signStr = query.toString() + "&key=" + KEY + "&t=" + t;
         String md5hex = md5(signStr);
         String sign = sha1(md5hex);
-        // 返回 t 和 sign 拼接，方便 headers 使用
         return t + "|" + sign;
     }
 
-    private Headers buildHeaders(Map<String, String> params) throws Exception {
+    private Map<String, String> buildHeaders(Map<String, String> params) throws Exception {
         String[] ts = generateSign(params).split("\\|");
         String t = ts[0];
         String sign = ts[1];
-        return new Headers.Builder()
-                .add("Host", "m.9zhoukj.com")
-                .add("client-type", "3")
-                .add("deviceId", DEVICE_ID)
-                .add("sign", sign)
-                .add("t", t)
-                .add("User-Agent", UA)
-                .add("Referer", HOST + "/")
-                .build();
+        
+        // 电视兼容：直接用最常规的 Map 传递请求头
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Host", "m.9zhoukj.com");
+        headers.put("client-type", "3");
+        headers.put("deviceId", DEVICE_ID);
+        headers.put("sign", sign);
+        headers.put("t", t);
+        headers.put("User-Agent", UA);
+        headers.put("Referer", HOST + "/");
+        return headers;
     }
 
-    // 通用请求方法
+    // 通用请求方法：全面改用系统内置 OkHttp 工具类
     private String fetch(String path, Map<String, String> params) throws Exception {
-        HttpUrl.Builder urlBuilder = HttpUrl.parse(HOST + path).newBuilder();
-        if (params != null) {
-            for (Map.Entry<String, String> e : params.entrySet()) {
-                urlBuilder.addQueryParameter(e.getKey(), e.getValue());
+        // 电视兼容：手工安全拼接带有 Query 参数的 URL
+        StringBuilder urlBuilder = new StringBuilder(HOST).append(path);
+        if (params != null && !params.isEmpty()) {
+            urlBuilder.append("?");
+            List<String> keys = new ArrayList<>(params.keySet());
+            for (int i = 0; i < keys.size(); i++) {
+                String key = keys.get(i);
+                urlBuilder.append(key).append("=").append(URLEncoder.encode(params.get(key), "UTF-8"));
+                if (i < keys.size() - 1) {
+                    urlBuilder.append("&");
+                }
             }
         }
-        Request request = new Request.Builder()
-                .url(urlBuilder.build())
-                .headers(buildHeaders(params != null ? params : new HashMap<>()))
-                .build();
-        try (Response response = client.newCall(request).execute()) {
-            if (response.isSuccessful() && response.body() != null) {
-                return response.body().string();
-            }
-            throw new Exception("HTTP " + response.code());
-        }
+        
+        Map<String, String> reqHeaders = buildHeaders(params != null ? params : new HashMap<>());
+        
+        // 关键点：直接调用系统封装，自带低版本证书和防崩溃处理
+        return OkHttp.string(urlBuilder.toString(), reqHeaders);
     }
 
     // ================== 首页 ==================
@@ -142,7 +151,6 @@ public class JP extends Spider {
                 sorts.put(createOption("最新", "1"));
                 sorts.put(createOption("最热", "2"));
 
-                // 电视剧筛选器
                 JSONArray tvFilter = new JSONArray();
                 tvFilter.put(createFilter("v_class", "剧情", new String[][]{
                         {"全部", ""}, {"古装", "古装"}, {"战争", "战争"}, {"喜剧", "喜剧"},
@@ -155,7 +163,6 @@ public class JP extends Spider {
                 tvFilter.put(createFilter("year", "年代", years));
                 tvFilter.put(createFilter("sort", "排序", sorts));
 
-                // 电影筛选器
                 JSONArray movFilter = new JSONArray();
                 movFilter.put(createFilter("type", "类型", new String[][]{
                         {"全部", ""}, {"喜剧", "22"}, {"动作", "23"}, {"科幻", "30"},
@@ -175,7 +182,6 @@ public class JP extends Spider {
                 movFilter.put(createFilter("year", "年代", years));
                 movFilter.put(createFilter("sort", "排序", sorts));
 
-                // 综艺筛选器
                 JSONArray zyFilter = new JSONArray();
                 zyFilter.put(createFilter("type", "类型", new String[][]{
                         {"全部", ""}, {"国产综艺", "69"}, {"港台综艺", "70"}, {"日韩综艺", "72"}
@@ -237,7 +243,6 @@ public class JP extends Spider {
             params.put("sort", extend.getOrDefault("sort", "1"));
             params.put("sortBy", "1");
 
-            // 核心修复：动态决定 type 参数
             String finalType = extend.getOrDefault("type", subType);
             if (finalType != null && !finalType.isEmpty()) {
                 params.put("type", finalType);
@@ -248,6 +253,8 @@ public class JP extends Spider {
             if (extend.containsKey("year")) params.put("year", extend.get("year"));
 
             String json = fetch("/api/mw-movie/anonymous/video/list", params);
+            if (json == null || json.isEmpty()) return "{\"list\":[], \"page\":" + pg + "}";
+
             JSONObject data = new JSONObject(json).optJSONObject("data");
             JSONArray list = data != null ? data.optJSONArray("list") : null;
             JSONArray videos = new JSONArray();
@@ -265,12 +272,12 @@ public class JP extends Spider {
             JSONObject result = new JSONObject();
             result.put("list", videos);
             result.put("page", Integer.parseInt(pg));
-            result.put("pagecount", 9999); // 站点未返回总页数，给一个较大值
+            result.put("pagecount", 9999);
             return result.toString();
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        return "";
+        return "{\"list\":[], \"page\":" + pg + "}";
     }
 
     // ================== 详情 ==================
@@ -281,8 +288,10 @@ public class JP extends Spider {
             Map<String, String> params = new HashMap<>();
             params.put("id", vodId);
             String json = fetch("/api/mw-movie/anonymous/video/detail", params);
+            if (json == null || json.isEmpty()) return "{\"list\":[]}";
+
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return "";
+            if (data == null) return "{\"list\":[]}";
 
             JSONObject vod = new JSONObject();
             vod.put("vod_id", data.optString("vodId", vodId));
@@ -297,19 +306,19 @@ public class JP extends Spider {
             vod.put("vod_play_from", "九州空间");
 
             JSONArray episodes = data.optJSONArray("episodeList");
-            StringBuilder playUrl = new StringBuilder();
+            List<String> epList = new ArrayList<>();
             if (episodes != null && episodes.length() > 0) {
                 for (int i = 0; i < episodes.length(); i++) {
                     JSONObject ep = episodes.getJSONObject(i);
                     String name = ep.optString("name", "正片");
                     String nid = ep.optString("nid", "0");
-                    if (playUrl.length() > 0) playUrl.append("#");
-                    playUrl.append(name).append("$").append(vodId).append("@@").append(nid);
+                    epList.add(name + "$" + vodId + "@@" + nid);
                 }
             } else {
-                playUrl.append("正片$").append(vodId).append("@@0");
+                epList.add("正片$" + vodId + "@@0");
             }
-            vod.put("vod_play_url", playUrl.toString());
+            // 电视兼容：改用安全拼接
+            vod.put("vod_play_url", safeJoin("#", epList));
 
             JSONArray list = new JSONArray();
             list.put(vod);
@@ -319,7 +328,7 @@ public class JP extends Spider {
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        return "";
+        return "{\"list\":[]}";
     }
 
     // ================== 搜索 ==================
@@ -330,10 +339,9 @@ public class JP extends Spider {
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        return "";
+        return "{\"list\":[]}";
     }
 
-    // 支持分页的搜索（可扩展）
     private String searchContentWithPage(String key, String pg) throws Exception {
         Map<String, String> params = new HashMap<>();
         params.put("keyword", key);
@@ -342,6 +350,8 @@ public class JP extends Spider {
         params.put("sourceCode", "1");
 
         String json = fetch("/api/mw-movie/anonymous/video/searchByWord", params);
+        if (json == null || json.isEmpty()) return "{\"list\":[]}";
+
         JSONObject data = new JSONObject(json).optJSONObject("data");
         JSONObject resultObj = data != null ? data.optJSONObject("result") : null;
         JSONArray rawList = resultObj != null ? resultObj.optJSONArray("list") : null;
@@ -370,9 +380,7 @@ public class JP extends Spider {
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
             String[] parts = id.split("@@");
-            if (parts.length < 2) {
-                return fallbackParse();
-            }
+            if (parts.length < 2) return fallbackParse();
             String vodId = parts[0];
             String nid = parts[1];
 
@@ -382,12 +390,13 @@ public class JP extends Spider {
             params.put("nid", nid);
 
             String json = fetch("/api/mw-movie/anonymous/v2/video/episode/url", params);
+            if (json == null || json.isEmpty()) return fallbackParse();
+
             JSONObject data = new JSONObject(json).optJSONObject("data");
             if (data == null) return fallbackParse();
             JSONArray list = data.optJSONArray("list");
             if (list == null || list.length() == 0) return fallbackParse();
 
-            // 优先 1080，否则取第一条
             String url = null;
             for (int i = 0; i < list.length(); i++) {
                 JSONObject v = list.getJSONObject(i);
@@ -419,9 +428,9 @@ public class JP extends Spider {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 1);
-            result.put("url", ""); // 壳自行嗅探
+            result.put("url", "");
             return result.toString();
-        } catch (Exception ignored) {
+        } catch (annotation ignored) {
             return "{\"parse\":1,\"url\":\"\"}";
         }
     }
