@@ -52,7 +52,6 @@ public class Jianpian extends Spider {
         SpiderDebug.log("[ZT-API] 初始化完成，host: " + host);
     }
 
-    @Override
     public String getName() {
         return "ZT-API(详情加速版)";
     }
