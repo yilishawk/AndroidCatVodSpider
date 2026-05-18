@@ -5,6 +5,7 @@ import android.text.TextUtils;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
+import com.github.catvod.net.OkHttpWithCookie;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -19,10 +20,9 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import okhttp3.Headers;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.HttpUrl;
 
 /**
  * 03影院
@@ -32,79 +32,22 @@ public class Y03YY extends Spider {
 
     private String host = "https://www.03yy.live";
     private String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    private String cookie = "";
-    private OkHttpClient client;
 
-    public Y03YY() {
-        try {
-            javax.net.ssl.TrustManager[] trustAllCerts = new javax.net.ssl.TrustManager[]{
-                new javax.net.ssl.X509TrustManager() {
-                    public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) {}
-                    public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) {}
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                        return new java.security.cert.X509Certificate[]{};
-                    }
-                }
-            };
+    // 使用框架内置 CookieJar，自动管理 Cookie；OkHttpWithCookie 内置 SSLCompat 解决握手失败
+    private final CookieJar cookieJar = new CookieJar() {
+        private final Map<String, List<Cookie>> store = new HashMap<>();
 
-            javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("SSL");
-            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-
-            this.client = new OkHttpClient.Builder()
-                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .followRedirects(true)
-                    .sslSocketFactory(
-                            sslContext.getSocketFactory(),
-                            (javax.net.ssl.X509TrustManager) trustAllCerts[0]
-                    )
-                    .hostnameVerifier((hostname, session) -> true)
-                    .build();
-
-        } catch (Exception e) {
-            this.client = new OkHttpClient.Builder()
-                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .followRedirects(true)
-                    .build();
-            SpiderDebug.log("[Y03YY] SSL初始化失败: " + e.getMessage());
+        @Override
+        public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+            store.put(url.host(), cookies);
         }
-    }
 
-    @Override
-    public void init(Context context, String extend) throws Exception {
-        SpiderDebug.log("[Y03YY] init called");
-        fetchHomePageCookie();
-    }
-
-    private void fetchHomePageCookie() {
-        try {
-            SpiderDebug.log("[Y03YY] 访问首页获取 Cookie: " + host);
-            Request request = new Request.Builder()
-                    .url(host + "/")
-                    .header("User-Agent", userAgent)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-                    .header("Accept-Language", "zh-CN,zh;q=0.9")
-                    .build();
-            try (Response response = client.newCall(request).execute()) {
-                if (response.isSuccessful()) {
-                    List<String> cookies = response.headers().values("Set-Cookie");
-                    StringBuilder sb = new StringBuilder();
-                    for (String c : cookies) {
-                        if (sb.length() > 0) sb.append("; ");
-                        sb.append(c.split(";")[0]);
-                    }
-                    cookie = sb.toString();
-                    SpiderDebug.log("[Y03YY] 获取到 Cookie: " + cookie);
-                } else {
-                    SpiderDebug.log("[Y03YY] 首页请求失败: " + response.code());
-                }
-            }
-        } catch (Exception e) {
-            SpiderDebug.log("[Y03YY] 获取 Cookie 失败: " + e.getMessage());
+        @Override
+        public List<Cookie> loadForRequest(HttpUrl url) {
+            List<Cookie> cookies = store.get(url.host());
+            return cookies != null ? cookies : new ArrayList<>();
         }
-    }
+    };
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
@@ -112,35 +55,23 @@ public class Y03YY extends Spider {
         headers.put("Referer", host + "/");
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-        if (!TextUtils.isEmpty(cookie)) {
-            headers.put("Cookie", cookie);
-        }
         return headers;
     }
 
     private String get(String url) {
         try {
-            Map<String, String> hdrs = getHeaders();
-            Request.Builder builder = new Request.Builder().url(url);
-            for (Map.Entry<String, String> entry : hdrs.entrySet()) {
-                builder.header(entry.getKey(), entry.getValue());
-            }
-            try (Response response = client.newCall(builder.build()).execute()) {
-                if (response.isSuccessful() && response.body() != null) {
-                    return response.body().string();
-                }
-                SpiderDebug.log("[Y03YY] 请求失败: " + url + ", code=" + response.code());
-                return "";
-            }
+            return OkHttpWithCookie.string(url, getHeaders(), cookieJar);
         } catch (Exception e) {
             SpiderDebug.log("[Y03YY] 请求异常: " + url + ", " + e.getMessage());
             return "";
         }
     }
 
-    private void refreshCookie() {
-        SpiderDebug.log("[Y03YY] 刷新 Cookie");
-        fetchHomePageCookie();
+    @Override
+    public void init(Context context, String extend) throws Exception {
+        SpiderDebug.log("[Y03YY] init: 访问首页初始化 Cookie");
+        get(host + "/");
+        SpiderDebug.log("[Y03YY] init 完成");
     }
 
     // ==================== 首页 ====================
@@ -172,8 +103,8 @@ public class Y03YY extends Spider {
             };
 
             filters.add("13", createFilterArray("class", "类型", tvTypes));
-            filters.add("1", createFilterArray("class", "类型", movieTypes));
-            filters.add("3", createFilterArray("class", "类型", varietyTypes));
+            filters.add("1",  createFilterArray("class", "类型", movieTypes));
+            filters.add("3",  createFilterArray("class", "类型", varietyTypes));
             filters.add("48", createFilterArray("class", "类型", tvTypes));
             result.add("filters", filters);
         }
@@ -216,17 +147,9 @@ public class Y03YY extends Spider {
         SpiderDebug.log("[Y03YY] category URL: " + url);
 
         String html = get(url);
-        if (TextUtils.isEmpty(html) || html.contains("window.location") || html.contains("document.location")) {
-            SpiderDebug.log("[Y03YY] 请求失败，刷新 Cookie 重试");
-            refreshCookie();
-            html = get(url);
-        }
-        if (TextUtils.isEmpty(html)) {
-            return emptyCategoryResult(page);
-        }
+        if (TextUtils.isEmpty(html)) return emptyCategoryResult(page);
 
         Document doc = Jsoup.parse(html);
-        // 对齐Python: .Pic-list .pic-content
         Elements items = doc.select(".Pic-list .pic-content");
         SpiderDebug.log("[Y03YY] 找到列表项: " + items.size());
 
@@ -235,23 +158,19 @@ public class Y03YY extends Spider {
             Element a = item.selectFirst("a");
             if (a == null) continue;
 
-            String href = a.attr("href");
-            String vid = extractVid(href);
+            String vid = extractVid(a.attr("href"));
             if (vid.isEmpty()) continue;
 
-            // 对齐Python: a.get('title') 或 h4 a
             String title = a.attr("title");
             if (TextUtils.isEmpty(title)) {
                 Element h4a = item.selectFirst("h4 a");
                 if (h4a != null) title = h4a.text();
             }
 
-            // 对齐Python: img src
             Element img = item.selectFirst("img");
             String pic = img != null ? img.attr("src") : "";
             if (!pic.isEmpty() && !pic.startsWith("http")) pic = host + pic;
 
-            // 对齐Python: span 或 i
             String remark = "";
             Element span = item.selectFirst("span");
             if (span != null) remark = span.text();
@@ -280,8 +199,7 @@ public class Y03YY extends Spider {
     private String extractVid(String href) {
         if (TextUtils.isEmpty(href)) return "";
         Matcher m = Pattern.compile("/movie/index(\\d+)\\.html").matcher(href);
-        if (m.find()) return m.group(1);
-        return "";
+        return m.find() ? m.group(1) : "";
     }
 
     // ==================== 详情页 ====================
@@ -295,20 +213,13 @@ public class Y03YY extends Spider {
         SpiderDebug.log("[Y03YY] detail URL: " + url);
 
         String html = get(url);
-        if (TextUtils.isEmpty(html) || html.contains("window.location") || html.contains("document.location")) {
-            SpiderDebug.log("[Y03YY] 详情页请求失败，刷新 Cookie 重试");
-            refreshCookie();
-            html = get(url);
-        }
         if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
 
         Document doc = Jsoup.parse(html);
 
-        // 标题
         Element h1 = doc.selectFirst("h1");
         String title = h1 != null ? h1.text().trim() : "";
 
-        // 封面 - 对齐Python: .m-pic-l img
         String pic = "";
         Element imgElem = doc.selectFirst(".m-pic-l img");
         if (imgElem != null) {
@@ -316,7 +227,6 @@ public class Y03YY extends Spider {
             if (!pic.isEmpty() && !pic.startsWith("http")) pic = host + pic;
         }
 
-        // 导演、主演、地区、类型、年份 - 对齐Python: .m-content ul li
         String director = "", actor = "", area = "", typeName = "", year = "";
         for (Element li : doc.select(".m-content ul li")) {
             String text = li.text();
@@ -335,22 +245,18 @@ public class Y03YY extends Spider {
             }
         }
 
-        // 简介 - 对齐Python: .m-intro p
         StringBuilder contentBuilder = new StringBuilder();
         for (Element p : doc.select(".m-intro p")) {
             if (contentBuilder.length() > 0) contentBuilder.append(" ");
             contentBuilder.append(p.text().trim());
         }
 
-        // 播放源 - 对齐Python: .playfrom #playlist li + #stab8{idx+1} ul li a
         List<String> playFromList = new ArrayList<>();
         List<String> playUrlList = new ArrayList<>();
-
         Elements lineTabs = doc.select(".playfrom #playlist li");
         for (int idx = 0; idx < lineTabs.size(); idx++) {
             String lineName = lineTabs.get(idx).text().trim();
-            String listId = "stab8" + (idx + 1);
-            Element listDiv = doc.selectFirst("#" + listId);
+            Element listDiv = doc.selectFirst("#stab8" + (idx + 1));
             if (listDiv == null) continue;
 
             List<String> episodes = new ArrayList<>();
@@ -396,14 +302,9 @@ public class Y03YY extends Spider {
         SpiderDebug.log("[Y03YY] search URL: " + url);
 
         String html = get(url);
-        if (TextUtils.isEmpty(html) || html.contains("window.location") || html.contains("document.location")) {
-            refreshCookie();
-            html = get(url);
-        }
         if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
 
         Document doc = Jsoup.parse(html);
-        // 对齐Python: .Pic-list .pic-content
         Elements items = doc.select(".Pic-list .pic-content");
         JsonArray list = new JsonArray();
 
@@ -411,8 +312,7 @@ public class Y03YY extends Spider {
             Element a = item.selectFirst("a");
             if (a == null) continue;
 
-            String href = a.attr("href");
-            String vid = extractVid(href);
+            String vid = extractVid(a.attr("href"));
             if (vid.isEmpty()) continue;
 
             String title = a.attr("title");
@@ -425,7 +325,6 @@ public class Y03YY extends Spider {
             String pic = img != null ? img.attr("src") : "";
             if (!pic.isEmpty() && !pic.startsWith("http")) pic = host + pic;
 
-            // 对齐Python: i 优先，再 span
             String remark = "";
             Element i = item.selectFirst("i");
             if (i != null) remark = i.text();
@@ -453,7 +352,6 @@ public class Y03YY extends Spider {
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         SpiderDebug.log("[Y03YY] playerContent: flag=" + flag + ", id=" + id);
 
-        // 1. 请求播放页，提取 pn 和 now
         String playHtml = get(id);
         if (TextUtils.isEmpty(playHtml)) {
             SpiderDebug.log("[Y03YY] 播放页请求失败");
@@ -479,14 +377,12 @@ public class Y03YY extends Spider {
         Matcher nextMatcher = Pattern.compile("var nextPage=\"([^\"]+)\"").matcher(playHtml);
         String nextPage = nextMatcher.find() ? nextMatcher.group(1) : "";
 
-        // 没有 pn/now，尝试直接提取视频地址
         if (TextUtils.isEmpty(pn) || TextUtils.isEmpty(now)) {
             SpiderDebug.log("[Y03YY] 未找到 pn/now，尝试直接提取视频地址");
             String direct = extractVideoFromHtml(playHtml, id);
             return direct != null ? direct : buildParseResult(0, id);
         }
 
-        // 2. 请求 /js/player/{pn}.html 获取 iframe src
         String playerLoaderUrl = host + "/js/player/" + pn + ".html";
         SpiderDebug.log("[Y03YY] 请求播放器加载页: " + playerLoaderUrl);
         String loaderHtml = get(playerLoaderUrl);
@@ -495,7 +391,6 @@ public class Y03YY extends Spider {
             return buildParseResult(0, id);
         }
 
-        // 提取 iframe src
         String iframeSrc = null;
         Matcher iframeMatcher = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']").matcher(loaderHtml);
         if (iframeMatcher.find()) {
@@ -510,7 +405,6 @@ public class Y03YY extends Spider {
             return buildParseResult(0, id);
         }
 
-        // 3. 构建完整 API URL
         String apiPath = iframeSrc.contains("?") ? iframeSrc.split("\\?")[0] : iframeSrc;
         StringBuilder query = new StringBuilder("url=").append(now);
         if (iframeSrc.contains("ref") || iframeSrc.contains("parentUrl")) {
@@ -522,20 +416,17 @@ public class Y03YY extends Spider {
         String fullApiUrl = host + apiPath + "?" + query;
         SpiderDebug.log("[Y03YY] 请求API: " + fullApiUrl);
 
-        // 4. 请求 API 提取视频地址
         String apiHtml = get(fullApiUrl);
         if (!TextUtils.isEmpty(apiHtml)) {
             String result = extractVideoFromHtml(apiHtml, id);
             if (result != null) return result;
         }
 
-        // 5. 兜底
         SpiderDebug.log("[Y03YY] 兜底返回原始链接");
         return buildParseResult(0, id);
     }
 
     private String extractVideoFromHtml(String html, String refUrl) {
-        // 尝试提取 mediaInfo
         Matcher mediaMatcher = Pattern.compile(
                 "(?:var|const|let)\\s+mediaInfo\\s*=\\s*(\\[.*?\\]);",
                 Pattern.DOTALL).matcher(html);
@@ -547,8 +438,7 @@ public class Y03YY extends Spider {
                     org.json.JSONObject item = mediaList.getJSONObject(i);
                     String u = item.optString("url", "");
                     if (!u.isEmpty()) {
-                        String def = item.optString("definition", "");
-                        if (def.contains("1080P")) { bestUrl = u; break; }
+                        if (item.optString("definition", "").contains("1080P")) { bestUrl = u; break; }
                         if (bestUrl == null) bestUrl = u;
                     }
                 }
@@ -561,7 +451,6 @@ public class Y03YY extends Spider {
             }
         }
 
-        // 尝试提取 videoUrl
         Matcher videoMatcher = Pattern.compile(
                 "(?:var|const|let)\\s+videoUrl\\s*=\\s*\"([^\"]+)\"").matcher(html);
         if (videoMatcher.find()) {
