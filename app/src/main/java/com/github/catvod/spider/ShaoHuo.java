@@ -15,7 +15,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.Base64;
+import android.util.Base64;
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
 import okhttp3.Headers;
@@ -131,36 +131,39 @@ public class ShaoHuo extends Spider {
      * OKOK 解密方法（与 Python 版完全一致）
      */
     private String decodeKey(String encodedStr, Map<String, String> eeDict) {
-        try {
-            SpiderDebug.log("[骚火电影] 开始解密 OKOK key...");
-            String decodedBase64 = new String(Base64.getDecoder().decode(encodedStr), StandardCharsets.UTF_8);
-            // 按 key 长度降序排序
-            List<String> sortedKeys = new ArrayList<>(eeDict.keySet());
-            sortedKeys.sort((a, b) -> Integer.compare(b.length(), a.length()));
-            StringBuilder result = new StringBuilder();
-            int i = 0;
-            while (i < decodedBase64.length()) {
-                boolean matchFound = false;
-                for (String k : sortedKeys) {
-                    if (decodedBase64.startsWith(k, i)) {
-                        result.append(eeDict.get(k));
-                        i += k.length();
-                        matchFound = true;
-                        break;
-                    }
-                }
-                if (!matchFound) {
-                    result.append(decodedBase64.charAt(i));
-                    i++;
+    try {
+        SpiderDebug.log("[骚火电影] 开始解密 OKOK key...");
+        byte[] decoded = android.util.Base64.decode(encodedStr, android.util.Base64.DEFAULT);
+        String decodedBase64 = new String(decoded, StandardCharsets.UTF_8);
+
+        List<String> sortedKeys = new ArrayList<>(eeDict.keySet());
+        sortedKeys.sort((a, b) -> Integer.compare(b.length(), a.length()));
+
+        StringBuilder result = new StringBuilder();
+        int i = 0;
+        while (i < decodedBase64.length()) {
+            boolean matchFound = false;
+            for (String k : sortedKeys) {
+                if (decodedBase64.startsWith(k, i)) {
+                    result.append(eeDict.get(k));
+                    i += k.length();
+                    matchFound = true;
+                    break;
                 }
             }
-            SpiderDebug.log("[骚火电影] 解密成功");
-            return result.toString();
-        } catch (Exception e) {
-            SpiderDebug.log("[骚火电影] 解密失败: " + e.getMessage());
-            return "";
+            if (!matchFound) {
+                result.append(decodedBase64.charAt(i));
+                i++;
+            }
         }
+
+        SpiderDebug.log("[骚火电影] 解密成功: " + result);
+        return result.toString();
+    } catch (Exception e) {
+        SpiderDebug.log("[骚火电影] 解密失败: " + e.getMessage());
+        return "";
     }
+}
 
     /**
      * POST 请求重试
