@@ -425,13 +425,14 @@ public class JP extends Spider {
     }
 
     private String fallbackParse() {
-        try {
-            JSONObject result = new JSONObject();
-            result.put("parse", 1);
-            result.put("url", "");
-            return result.toString();
-        } catch (annotation ignored) {
-            return "{\"parse\":1,\"url\":\"\"}";
-        }
+    try {
+        JSONObject result = new JSONObject();
+        result.put("parse", 1); // 👈 这里是 1
+        result.put("url", "");
+        return result.toString();
+    } catch (Exception ignored) {
+        return "{\"parse\":1,\"url\":\"\"}";
     }
+}
+
 }
