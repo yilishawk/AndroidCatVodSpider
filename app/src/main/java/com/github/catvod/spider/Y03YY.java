@@ -111,17 +111,27 @@ public class Y03YY extends Spider {
     }
 
     /**
-     * 带 Cookie 的 GET 请求
-     */
+ * 带 Cookie 的 GET 请求 - 改用自定义 client 确保 Cookie 生效
+ */
     private String get(String url) {
-        try {
-            Map<String, String> headers = getHeaders();
-            return OkHttp.string(url, headers);
-        } catch (Exception e) {
-            SpiderDebug.log("[Y03YY] 请求失败: " + url + ", " + e.getMessage());
+    try {
+        Map<String, String> hdrs = getHeaders();
+        Request.Builder builder = new Request.Builder().url(url);
+        for (Map.Entry<String, String> entry : hdrs.entrySet()) {
+            builder.header(entry.getKey(), entry.getValue());
+        }
+        try (Response response = client.newCall(builder.build()).execute()) {
+            if (response.isSuccessful() && response.body() != null) {
+                return response.body().string();
+            }
+            SpiderDebug.log("[Y03YY] 请求失败: " + url + ", code=" + response.code());
             return "";
         }
+    } catch (Exception e) {
+        SpiderDebug.log("[Y03YY] 请求异常: " + url + ", " + e.getMessage());
+        return "";
     }
+}
 
     /**
      * 刷新 Cookie（当请求失败时重新获取）
