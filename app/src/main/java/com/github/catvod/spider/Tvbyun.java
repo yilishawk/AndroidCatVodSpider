@@ -403,18 +403,17 @@ public class Tvbyun extends Spider {
             JSONObject item = list.getJSONObject(0);
 
             // 获取原始播放线路（用 $$$ 分隔）
-            String playFrom = item.optString("vod_play_from");
+            String playFrom = item.optString("vod_play_from");  // 格式: "mp4$$$hkm3u8$$$YYNB$$$..."
             String[] players = playFrom.split("\\$\\$\\$");
+            String playUrlAll = item.optString("vod_play_url"); // 格式: "url1$$$url2$$$url3..."
+            String[] urlGroups = playUrlAll.split("\\$\\$\\$");
 
             // 按优先级排序线路：mp4 -> hkm3u8 -> YYNB -> 其他
             List<String> sortedPlayers = sortPlayers(players);
 
-            // 构建显示名称和播放地址
-            List<String> displayNames = new ArrayList<>();
-            List<String> playUrls = new ArrayList<>();
-
-            String playUrlAll = item.optString("vod_play_url");
-            String[] urlGroups = playUrlAll.split("\\$\\$\\$");
+            // 构建播放数据（保持 playerCode 作为标识，不转中文）
+            List<String> playFromList = new ArrayList<>();
+            List<String> playUrlList = new ArrayList<>();
 
             // 建立线路索引映射
             Map<String, String> playerUrlMap = new HashMap<>();
@@ -423,12 +422,12 @@ public class Tvbyun extends Spider {
             }
 
             for (String playerCode : sortedPlayers) {
-                String playerName = playerNameMap.getOrDefault(playerCode, playerCode);
                 String playerUrl = playerUrlMap.get(playerCode);
                 if (playerUrl != null && !playerUrl.isEmpty()) {
-                    displayNames.add(playerName);
-                    playUrls.add(playerUrl);
-                    SpiderDebug.log("[Tvbyun] 添加线路: " + playerCode + " -> " + playerName);
+                    // 注意：vod_play_from 必须存 playerCode（如 mp4），不能存中文
+                    playFromList.add(playerCode);
+                    playUrlList.add(playerUrl);
+                    SpiderDebug.log("[Tvbyun] 添加线路: " + playerCode);
                 }
             }
 
@@ -442,8 +441,11 @@ public class Tvbyun extends Spider {
             vod.put("vod_director", item.optString("vod_director"));
             vod.put("type_name", item.optString("type_name"));
             vod.put("vod_remarks", item.optString("vod_remarks"));
-            vod.put("vod_play_from", String.join("$$$", displayNames));
-            vod.put("vod_play_url", String.join("$$$", playUrls));
+
+            // 关键：vod_play_from 存 playerCode（如 mp4$$$hkm3u8$$$YYNB）
+            vod.put("vod_play_from", String.join("$$$", playFromList));
+            // vod_play_url 存对应的 URL
+            vod.put("vod_play_url", String.join("$$$", playUrlList));
 
             JSONArray resultList = new JSONArray();
             resultList.put(vod);
