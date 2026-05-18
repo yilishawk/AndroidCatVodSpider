@@ -4,9 +4,9 @@ import android.content.Context;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -94,8 +94,8 @@ public class FourKVM extends Spider {
 
     // ================== 筛选器选项 ==================
 
-    private JSONArray getAreasOptions() throws Exception {
-        JSONArray options = new JSONArray();
+    private JsonArray getAreasOptions() {
+        JsonArray options = new JsonArray();
         String[][] areas = {
             {"全部地区", ""}, {"中国", "7"}, {"美国", "5"}, {"日本", "11"},
             {"韩国", "12"}, {"英国", "30"}, {"法国", "6"}, {"德国", "18"},
@@ -104,31 +104,31 @@ public class FourKVM extends Spider {
             {"中国台湾", "21"}, {"巴西", "26"}, {"阿根廷", "27"}
         };
         for (String[] area : areas) {
-            JSONObject opt = new JSONObject();
-            opt.put("n", area[0]);
-            opt.put("v", area[1]);
-            options.put(opt);
+            JsonObject opt = new JsonObject();
+            opt.addProperty("n", area[0]);
+            opt.addProperty("v", area[1]);
+            options.add(opt);
         }
         return options;
     }
 
-    private JSONArray getTvClassesOptions() throws Exception {
-        JSONArray options = new JSONArray();
+    private JsonArray getTvClassesOptions() {
+        JsonArray options = new JsonArray();
         String[][] tvClasses = {
             {"全部类型", ""}, {"国产剧", "20"}, {"美剧", "21"}, {"韩剧", "22"},
             {"日剧", "23"}, {"泰剧", "24"}, {"日番", "25"}, {"国漫", "26"}
         };
         for (String[] tvClass : tvClasses) {
-            JSONObject opt = new JSONObject();
-            opt.put("n", tvClass[0]);
-            opt.put("v", tvClass[1]);
-            options.put(opt);
+            JsonObject opt = new JsonObject();
+            opt.addProperty("n", tvClass[0]);
+            opt.addProperty("v", tvClass[1]);
+            options.add(opt);
         }
         return options;
     }
 
-    private JSONArray getTypesOptions() throws Exception {
-        JSONArray options = new JSONArray();
+    private JsonArray getTypesOptions() {
+        JsonArray options = new JsonArray();
         String[][] types = {
             {"全部类型", ""}, {"剧情", "1"}, {"悬疑", "2"}, {"恐怖", "3"},
             {"惊悚", "4"}, {"喜剧", "5"}, {"爱情", "6"}, {"科幻", "14"},
@@ -140,74 +140,74 @@ public class FourKVM extends Spider {
             {"短片", "35"}
         };
         for (String[] type : types) {
-            JSONObject opt = new JSONObject();
-            opt.put("n", type[0]);
-            opt.put("v", type[1]);
-            options.put(opt);
+            JsonObject opt = new JsonObject();
+            opt.addProperty("n", type[0]);
+            opt.addProperty("v", type[1]);
+            options.add(opt);
         }
         return options;
     }
 
-    private JSONObject createFilter(String key, String name, JSONArray value) throws Exception {
-        JSONObject filter = new JSONObject();
-        filter.put("key", key);
-        filter.put("name", name);
-        filter.put("value", value);
+    private JsonObject createFilter(String key, String name, JsonArray value) {
+        JsonObject filter = new JsonObject();
+        filter.addProperty("key", key);
+        filter.addProperty("name", name);
+        filter.add("value", value);
         return filter;
     }
 
     @Override
     public String homeContent(boolean filter) {
         try {
-            JSONObject result = new JSONObject();
-            JSONArray classes = new JSONArray();
+            JsonObject result = new JsonObject();
+            JsonArray classes = new JsonArray();
 
             // 自定义默认筛选分类：国产剧（电视剧分类=国产剧）
-            JSONObject guochanju = new JSONObject();
-            guochanju.put("type_name", "国产剧");
-            guochanju.put("type_id", "2|tvclasses=20");
-            classes.put(guochanju);
+            JsonObject guochanju = new JsonObject();
+            guochanju.addProperty("type_name", "国产剧");
+            guochanju.addProperty("type_id", "2|tvclasses=20");
+            classes.add(guochanju);
 
-            JSONObject movie = new JSONObject();
-            movie.put("type_name", "电影");
-            movie.put("type_id", "1");
-            classes.put(movie);
+            JsonObject movie = new JsonObject();
+            movie.addProperty("type_name", "电影");
+            movie.addProperty("type_id", "1");
+            classes.add(movie);
 
-            JSONObject tv = new JSONObject();
-            tv.put("type_name", "电视剧");
-            tv.put("type_id", "2");
-            classes.put(tv);
+            JsonObject tv = new JsonObject();
+            tv.addProperty("type_name", "电视剧");
+            tv.addProperty("type_id", "2");
+            classes.add(tv);
 
-            JSONObject variety = new JSONObject();
-            variety.put("type_name", "综艺");
-            variety.put("type_id", "4");
-            classes.put(variety);
+            JsonObject variety = new JsonObject();
+            variety.addProperty("type_name", "综艺");
+            variety.addProperty("type_id", "4");
+            classes.add(variety);
 
-            result.put("class", classes);
+            result.add("class", classes);
 
             if (filter) {
-                JSONObject filters = new JSONObject();
+                JsonObject filters = new JsonObject();
 
                 // 电影筛选器
-                JSONArray movieFilters = new JSONArray();
-                movieFilters.put(createFilter("areas", "地区", getAreasOptions()));
-                movieFilters.put(createFilter("types", "类型", getTypesOptions()));
-                filters.put("1", movieFilters);
+                JsonArray movieFilters = new JsonArray();
+                movieFilters.add(createFilter("areas", "地区", getAreasOptions()));
+                movieFilters.add(createFilter("types", "类型", getTypesOptions()));
+                filters.add("1", movieFilters);
 
                 // 电视剧筛选器
-                JSONArray tvFilters = new JSONArray();
-                tvFilters.put(createFilter("areas", "地区", getAreasOptions()));
-                tvFilters.put(createFilter("tvclasses", "电视剧分类", getTvClassesOptions()));
-                tvFilters.put(createFilter("types", "类型", getTypesOptions()));
-                filters.put("2", tvFilters);
+                JsonArray tvFilters = new JsonArray();
+                tvFilters.add(createFilter("areas", "地区", getAreasOptions()));
+                tvFilters.add(createFilter("tvclasses", "电视剧分类", getTvClassesOptions()));
+                tvFilters.add(createFilter("types", "类型", getTypesOptions()));
+                filters.add("2", tvFilters);
 
                 // 综艺筛选器
-                JSONArray varietyFilters = new JSONArray();
-                varietyFilters.put(createFilter("areas", "地区", getAreasOptions()));
-                varietyFilters.put(createFilter("types", "类型", getTypesOptions()));
-                filters.put("4", varietyFilters);
+                JsonArray varietyFilters = new JsonArray();
+                varietyFilters.add(createFilter("areas", "地区", getAreasOptions()));
+                varietyFilters.add(createFilter("types", "类型", getTypesOptions()));
+                filters.add("4", varietyFilters);
 
-                result.put("filters", filters);
+                result.add("filters", filters);
             }
 
             return result.toString();
@@ -276,7 +276,7 @@ public class FourKVM extends Spider {
             }
 
             Document doc = Jsoup.parse(html);
-            JSONArray videos = new JSONArray();
+            JsonArray videos = new JsonArray();
 
             // 卡片选择器兼容 .movie-card 和 .group
             Elements cards = doc.select(".movie-card");
@@ -286,7 +286,9 @@ public class FourKVM extends Spider {
 
             for (Element card : cards) {
                 Element link = card.selectFirst("a[href^=\"/play/\"]");
-                if (link == null) continue;
+                if (link == null) {
+                    continue;
+                }
 
                 String href = link.attr("href");
                 String vodId = href.substring(href.lastIndexOf("/") + 1);
@@ -313,27 +315,27 @@ public class FourKVM extends Spider {
                 }
                 String remark = remarkElem != null ? remarkElem.text().trim() : "";
 
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", vodId);
-                vod.put("vod_name", title);
-                vod.put("vod_pic", pic != null ? pic : "");
-                vod.put("vod_remarks", remark);
-                videos.put(vod);
+                JsonObject vod = new JsonObject();
+                vod.addProperty("vod_id", vodId);
+                vod.addProperty("vod_name", title);
+                vod.addProperty("vod_pic", pic != null ? pic : "");
+                vod.addProperty("vod_remarks", remark);
+                videos.add(vod);
             }
 
             // 分页估算
             int currentPage = Integer.parseInt(pg);
             int pagecount = currentPage + 5;
             pagecount = Math.min(pagecount, 20);
-            int limit = videos.length();
+            int limit = videos.size();
             int total = limit * pagecount;
 
-            JSONObject result = new JSONObject();
-            result.put("list", videos);
-            result.put("page", currentPage);
-            result.put("pagecount", pagecount);
-            result.put("limit", limit);
-            result.put("total", total);
+            JsonObject result = new JsonObject();
+            result.add("list", videos);
+            result.addProperty("page", currentPage);
+            result.addProperty("pagecount", pagecount);
+            result.addProperty("limit", limit);
+            result.addProperty("total", total);
             return result.toString();
 
         } catch (Exception e) {
@@ -347,12 +349,12 @@ public class FourKVM extends Spider {
         try {
             page = Integer.parseInt(pg);
         } catch (NumberFormatException ignored) {}
-        JSONObject result = new JSONObject();
-        result.put("list", new JSONArray());
-        result.put("page", page);
-        result.put("pagecount", 1);
-        result.put("limit", 0);
-        result.put("total", 0);
+        JsonObject result = new JsonObject();
+        result.add("list", new JsonArray());
+        result.addProperty("page", page);
+        result.addProperty("pagecount", 1);
+        result.addProperty("limit", 0);
+        result.addProperty("total", 0);
         return result.toString();
     }
 
@@ -436,22 +438,22 @@ public class FourKVM extends Spider {
                 }
             }
 
-            JSONObject vod = new JSONObject();
-            vod.put("vod_id", vodId);
-            vod.put("vod_name", title);
-            vod.put("vod_pic", pic);
-            vod.put("vod_director", director);
-            vod.put("vod_actor", actor);
-            vod.put("vod_area", area);
-            vod.put("vod_year", year);
-            vod.put("vod_content", content);
-            vod.put("vod_play_from", String.join("$$$", playFromList));
-            vod.put("vod_play_url", String.join("$$$", playUrlList));
+            JsonObject vod = new JsonObject();
+            vod.addProperty("vod_id", vodId);
+            vod.addProperty("vod_name", title);
+            vod.addProperty("vod_pic", pic);
+            vod.addProperty("vod_director", director);
+            vod.addProperty("vod_actor", actor);
+            vod.addProperty("vod_area", area);
+            vod.addProperty("vod_year", year);
+            vod.addProperty("vod_content", content);
+            vod.addProperty("vod_play_from", String.join("$$$", playFromList));
+            vod.addProperty("vod_play_url", String.join("$$$", playUrlList));
 
-            JSONArray list = new JSONArray();
-            list.put(vod);
-            JSONObject result = new JSONObject();
-            result.put("list", list);
+            JsonArray list = new JsonArray();
+            list.add(vod);
+            JsonObject result = new JsonObject();
+            result.add("list", list);
             return result.toString();
 
         } catch (Exception e) {
@@ -463,10 +465,6 @@ public class FourKVM extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        return searchContentPg(key, quick, "1");
-    }
-
-    public String searchContentPg(String key, boolean quick, String pg) {
         try {
             String url = host + "/search?q=" + URLEncoder.encode(key, "UTF-8");
             SpiderDebug.log("[4k影视] search URL: " + url);
@@ -477,11 +475,13 @@ public class FourKVM extends Spider {
             }
 
             Document doc = Jsoup.parse(html);
-            JSONArray videos = new JSONArray();
+            JsonArray videos = new JsonArray();
 
             for (Element item : doc.select(".group")) {
                 Element a = item.selectFirst("a[href^=\"/play/\"]");
-                if (a == null) continue;
+                if (a == null) {
+                    continue;
+                }
 
                 String href = a.attr("href");
                 String vodId = href.substring(href.lastIndexOf("/") + 1);
@@ -502,20 +502,16 @@ public class FourKVM extends Spider {
                     pic = host + pic;
                 }
 
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", vodId);
-                vod.put("vod_name", title);
-                vod.put("vod_pic", pic != null ? pic : "");
-                vod.put("vod_remarks", "");
-                videos.put(vod);
+                JsonObject vod = new JsonObject();
+                vod.addProperty("vod_id", vodId);
+                vod.addProperty("vod_name", title);
+                vod.addProperty("vod_pic", pic != null ? pic : "");
+                vod.addProperty("vod_remarks", "");
+                videos.add(vod);
             }
 
-            JSONObject result = new JSONObject();
-            result.put("list", videos);
-            result.put("page", Integer.parseInt(pg));
-            result.put("pagecount", 1);
-            result.put("limit", videos.length());
-            result.put("total", videos.length());
+            JsonObject result = new JsonObject();
+            result.add("list", videos);
             return result.toString();
 
         } catch (Exception e) {
@@ -532,14 +528,14 @@ public class FourKVM extends Spider {
             String url = id.startsWith("http") ? id : host + id;
             String html = get(url);
             if (html == null) {
-                JSONObject result = new JSONObject();
-                result.put("parse", 1);
-                result.put("url", url);
-                JSONObject header = new JSONObject();
-                header.put("User-Agent", headers.get("User-Agent"));
-                header.put("Referer", url);
-                header.put("Origin", host);
-                result.put("header", header);
+                JsonObject result = new JsonObject();
+                result.addProperty("parse", 1);
+                result.addProperty("url", url);
+                JsonObject header = new JsonObject();
+                header.addProperty("User-Agent", headers.get("User-Agent"));
+                header.addProperty("Referer", url);
+                header.addProperty("Origin", host);
+                result.add("header", header);
                 return result.toString();
             }
 
@@ -564,39 +560,39 @@ public class FourKVM extends Spider {
                         videoUrl = host + videoUrl;
                     }
                     SpiderDebug.log("[4k影视] 找到视频链接: " + videoUrl);
-                    JSONObject result = new JSONObject();
-                    result.put("parse", 0);
-                    result.put("url", videoUrl);
-                    JSONObject header = new JSONObject();
-                    header.put("User-Agent", headers.get("User-Agent"));
-                    header.put("Referer", url);
-                    header.put("Origin", host);
-                    result.put("header", header);
+                    JsonObject result = new JsonObject();
+                    result.addProperty("parse", 0);
+                    result.addProperty("url", videoUrl);
+                    JsonObject header = new JsonObject();
+                    header.addProperty("User-Agent", headers.get("User-Agent"));
+                    header.addProperty("Referer", url);
+                    header.addProperty("Origin", host);
+                    result.add("header", header);
                     return result.toString();
                 }
             }
 
             // 未匹配到视频链接，返回 parse=1 让壳子嗅探
-            JSONObject result = new JSONObject();
-            result.put("parse", 1);
-            result.put("url", url);
-            JSONObject header = new JSONObject();
-            header.put("User-Agent", headers.get("User-Agent"));
-            header.put("Referer", url);
-            header.put("Origin", host);
-            result.put("header", header);
+            JsonObject result = new JsonObject();
+            result.addProperty("parse", 1);
+            result.addProperty("url", url);
+            JsonObject header = new JsonObject();
+            header.addProperty("User-Agent", headers.get("User-Agent"));
+            header.addProperty("Referer", url);
+            header.addProperty("Origin", host);
+            result.add("header", header);
             return result.toString();
 
         } catch (Exception e) {
             SpiderDebug.log("[4k影视] playerContent error: " + e.getMessage());
-            JSONObject result = new JSONObject();
-            result.put("parse", 1);
-            result.put("url", id);
-            JSONObject header = new JSONObject();
-            header.put("User-Agent", headers.get("User-Agent"));
-            header.put("Referer", host + "/");
-            header.put("Origin", host);
-            result.put("header", header);
+            JsonObject result = new JsonObject();
+            result.addProperty("parse", 1);
+            result.addProperty("url", id);
+            JsonObject header = new JsonObject();
+            header.addProperty("User-Agent", headers.get("User-Agent"));
+            header.addProperty("Referer", host + "/");
+            header.addProperty("Origin", host);
+            result.add("header", header);
             return result.toString();
         }
     }
