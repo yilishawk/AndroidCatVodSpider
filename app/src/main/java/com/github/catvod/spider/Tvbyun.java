@@ -278,7 +278,7 @@ public class Tvbyun extends Spider {
             }
             
             // 构建 URL：ac=list&t={tid}&pg={pg}
-            String url = apiUrl + "?ac=list&t=" + typeId + "&pg=" + pg;
+            String url = apiUrl + "?ac=list&ac=detail&t" + typeId + "&pg=" + pg;
             SpiderDebug.log("[Tvbyun] category URL: " + url);
             
             String response = get(url);
@@ -328,79 +328,38 @@ public class Tvbyun extends Spider {
             if (ids == null || ids.isEmpty()) {
                 return "{\"list\":[]}";
             }
-            
+
             String vodId = ids.get(0);
             String url = apiUrl + "?ac=detail&ids=" + vodId;
             SpiderDebug.log("[Tvbyun] detail URL: " + url);
-            
+
             String response = get(url);
             if (response == null) {
                 SpiderDebug.log("[Tvbyun] detailContent: 响应为空");
                 return "{\"list\":[]}";
             }
-            
+
             JSONObject json = new JSONObject(response);
             int code = json.optInt("code");
             if (code != 1) {
                 SpiderDebug.log("[Tvbyun] detailContent: API 返回错误 code=" + code);
                 return "{\"list\":[]}";
             }
-            
+
             JSONArray list = json.optJSONArray("list");
             if (list == null || list.length() == 0) {
                 return "{\"list\":[]}";
             }
-            
+
             JSONObject item = list.getJSONObject(0);
-            
-            // 解析播放地址
-            List<String> playFromList = new ArrayList<>();
-            List<String> playUrlList = new ArrayList<>();
-            
-            // 获取播放来源列表
-            String playFromStr = item.optString("vod_play_from");
-            SpiderDebug.log("[Tvbyun] vod_play_from: " + playFromStr);
-            
-            if (playFromStr != null && !playFromStr.isEmpty()) {
-                String[] players = playFromStr.split(",");
-                for (String playerCode : players) {
-                    playerCode = playerCode.trim();
-                    // 尝试获取该线路的播放地址
-                    String playUrl = item.optString("vod_play_url_" + playerCode);
-                    if (playUrl == null || playUrl.isEmpty()) {
-                        playUrl = item.optString("vod_url_" + playerCode);
-                    }
-                    if (playUrl == null || playUrl.isEmpty()) {
-                        playUrl = item.optString(playerCode);
-                    }
-                    
-                    if (playUrl != null && !playUrl.isEmpty()) {
-                        // 格式化播放地址：集数$地址
-                        String formattedUrl = formatPlayUrl(playUrl);
-                        if (formattedUrl != null && !formattedUrl.isEmpty()) {
-                            playFromList.add(playerCode);
-                            playUrlList.add(formattedUrl);
-                            SpiderDebug.log("[Tvbyun] 添加线路: " + playerCode);
-                        }
-                    }
-                }
-            }
-            
-            // 如果没有解析到任何线路，尝试默认字段
-            if (playFromList.isEmpty()) {
-                String defaultPlayUrl = item.optString("vod_play_url");
-                if (defaultPlayUrl == null || defaultPlayUrl.isEmpty()) {
-                    defaultPlayUrl = item.optString("vod_url");
-                }
-                if (defaultPlayUrl != null && !defaultPlayUrl.isEmpty()) {
-                    String formattedUrl = formatPlayUrl(defaultPlayUrl);
-                    if (formattedUrl != null && !formattedUrl.isEmpty()) {
-                        playFromList.add("默认线路");
-                        playUrlList.add(formattedUrl);
-                    }
-                }
-            }
-            
+
+            // 直接使用 API 返回的 play_from 和 play_url
+            String playFrom = item.optString("vod_play_from");
+            String playUrl = item.optString("vod_play_url");
+
+            SpiderDebug.log("[Tvbyun] vod_play_from: " + playFrom);
+            SpiderDebug.log("[Tvbyun] vod_play_url: " + playUrl);
+
             JSONObject vod = new JSONObject();
             vod.put("vod_id", item.optString("vod_id"));
             vod.put("vod_name", item.optString("vod_name"));
@@ -411,15 +370,15 @@ public class Tvbyun extends Spider {
             vod.put("vod_director", item.optString("vod_director"));
             vod.put("type_name", item.optString("type_name"));
             vod.put("vod_remarks", item.optString("vod_remarks"));
-            vod.put("vod_play_from", String.join("$$$", playFromList));
-            vod.put("vod_play_url", String.join("$$$", playUrlList));
-            
+            vod.put("vod_play_from", playFrom);
+            vod.put("vod_play_url", playUrl);
+
             JSONArray resultList = new JSONArray();
             resultList.put(vod);
             JSONObject result = new JSONObject();
             result.put("list", resultList);
             return result.toString();
-            
+
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] detailContent error: " + e.getMessage());
             e.printStackTrace();
