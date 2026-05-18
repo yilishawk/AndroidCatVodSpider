@@ -278,7 +278,7 @@ public class Tvbyun extends Spider {
             }
             
             // 构建 URL：ac=list&t={tid}&pg={pg}
-            String url = apiUrl + "?ac=list&ac=detail&t" + typeId + "&pg=" + pg;
+            String url = apiUrl + "?ac=list&ac=detail&t=" + typeId + "&pg=" + pg;
             SpiderDebug.log("[Tvbyun] category URL: " + url);
             
             String response = get(url);
