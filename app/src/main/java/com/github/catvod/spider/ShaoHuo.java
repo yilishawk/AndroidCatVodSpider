@@ -505,20 +505,31 @@ public class ShaoHuo extends Spider {
         }
     }
 
-    /**
-     * 播放解析 - 完整实现（对齐 Python 版）
+/**
+     * 播放解析 - 修复版（对齐 Python 版）
+     *
+     * 修复点：
+     * 1. 所有 fallback 返回改用 JSONObject 构造，避免 id 含特殊字符导致 JSON 非法
+     * 2. eePattern 加 DOTALL 标志，防止 ee 字典跨行匹配失败
+     * 3. retryPost 返回 null 时正确 fallback
+     * 4. API 响应解析加保护，避免 JSONException 被吞
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         SpiderDebug.log("[骚火电影] ========== 开始播放解析 ==========");
         SpiderDebug.log("[骚火电影] 传入参数: flag=" + flag + ", id=" + id);
         try {
+            // -------- 统一 fallback 构造，确保 JSON 合法 --------
+            JSONObject fallback = new JSONObject();
+            fallback.put("parse", 1);
+            fallback.put("url", id);
+
             // 1. 请求播放页，获取 iframe 地址
             SpiderDebug.log("[骚火电影] 步骤1: 请求播放页 " + id);
             String html = fetch(id);
             if (html == null || html.isEmpty()) {
                 SpiderDebug.log("[骚火电影] 播放页请求失败");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+                return fallback.toString();
             }
 
             // 提取 iframe src
@@ -526,7 +537,7 @@ public class ShaoHuo extends Spider {
             Matcher iframeMatcher = iframePattern.matcher(html);
             if (!iframeMatcher.find()) {
                 SpiderDebug.log("[骚火电影] 未找到 iframe 标签，直接返回原链接");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+                return fallback.toString();
             }
             String jxUrl = iframeMatcher.group(1);
             if (!jxUrl.startsWith("http")) {
@@ -539,104 +550,138 @@ public class ShaoHuo extends Spider {
             Map<String, String> jxHeaders = new HashMap<>(headers);
             jxHeaders.put("Referer", host + "/");
             String jxHtml = fetch(jxUrl, jxHeaders);
-            if (jxHtml == null) {
+            if (jxHtml == null || jxHtml.isEmpty()) {
                 SpiderDebug.log("[骚火电影] iframe 页请求失败");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+                return fallback.toString();
             }
             SpiderDebug.log("[骚火电影] iframe 页长度: " + jxHtml.length());
 
             // 3. 提取加密参数
             SpiderDebug.log("[骚火电影] 步骤3: 提取加密参数");
             Pattern urlPattern = Pattern.compile("var url = \"(.*?)\";");
-            Pattern tPattern = Pattern.compile("var t = \"(.*?)\";");
+            Pattern tPattern   = Pattern.compile("var t = \"(.*?)\";");
             Pattern keyPattern = Pattern.compile("var key = OKOK\\(\"(.*?)\"\\);");
-            Pattern eePattern = Pattern.compile("const ee = (\\{.*?\\}) ;");
+            // 【修复1】加 DOTALL，防止 ee 字典内容跨行导致匹配失败
+            Pattern eePattern  = Pattern.compile("const ee = (\\{.*?\\}) ;", Pattern.DOTALL);
 
             Matcher urlMatcher = urlPattern.matcher(jxHtml);
-            Matcher tMatcher = tPattern.matcher(jxHtml);
+            Matcher tMatcher   = tPattern.matcher(jxHtml);
             Matcher keyMatcher = keyPattern.matcher(jxHtml);
-            Matcher eeMatcher = eePattern.matcher(jxHtml);
+            Matcher eeMatcher  = eePattern.matcher(jxHtml);
 
-            if (!urlMatcher.find() || !tMatcher.find() || !keyMatcher.find()) {
-                SpiderDebug.log("[骚火电影] 正则匹配失败");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            if (!urlMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 未匹配到 url 参数");
+                return fallback.toString();
+            }
+            if (!tMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 未匹配到 t 参数");
+                return fallback.toString();
+            }
+            if (!keyMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 未匹配到 key 参数");
+                return fallback.toString();
             }
             if (!eeMatcher.find()) {
                 SpiderDebug.log("[骚火电影] 未找到 ee 字典，无法解密");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+                return fallback.toString();
             }
 
-            String urlVal = urlMatcher.group(1);
-            String tVal = tMatcher.group(1);
+            String urlVal    = urlMatcher.group(1);
+            String tVal      = tMatcher.group(1);
             String encodedKey = keyMatcher.group(1);
-            String eeStr = eeMatcher.group(1);
-            SpiderDebug.log("[骚火电影] 提取参数: url=" + urlVal + ", t=" + tVal);
+            String eeStr     = eeMatcher.group(1);
+            SpiderDebug.log("[骚火电影] 提取参数: url=" + urlVal + ", t=" + tVal
+                    + ", key前20字符=" + (encodedKey.length() > 20 ? encodedKey.substring(0, 20) : encodedKey) + "...");
 
             // 解析 ee 字典
             JSONObject eeJson = new JSONObject(eeStr);
             Map<String, String> eeDict = new HashMap<>();
-            Iterator<String> keys = eeJson.keys();
-            while (keys.hasNext()) {
-                String k = keys.next();
+            Iterator<String> eeKeys = eeJson.keys();
+            while (eeKeys.hasNext()) {
+                String k = eeKeys.next();
                 eeDict.put(k, eeJson.getString(k));
             }
 
-            // 4. 解密 key（模拟 OKOK 解密）
+            // 4. 解密 key
+            SpiderDebug.log("[骚火电影] 步骤4: 解密 key");
             String realKey = decodeKey(encodedKey, eeDict);
-            if (realKey.isEmpty()) {
-                SpiderDebug.log("[骚火电影] 解密失败");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            if (realKey == null || realKey.isEmpty()) {
+                SpiderDebug.log("[骚火电影] 解密失败，返回原链接");
+                return fallback.toString();
             }
             SpiderDebug.log("[骚火电影] 解密后的 key: " + realKey);
 
             // 5. POST 到解析 API
-            SpiderDebug.log("[骚火电影] 步骤4: 请求解析 API");
+            SpiderDebug.log("[骚火电影] 步骤5: 请求解析 API");
             String apiUrl = "https://hhjx.hhplayer.com/api.php";
-            Map<String, String> payload = new HashMap<>();
+            Map<String, String> payload = new LinkedHashMap<>();
             payload.put("url", urlVal);
-            payload.put("t", tVal);
+            payload.put("t",   tVal);
             payload.put("key", realKey);
             payload.put("act", "0");
-            payload.put("play", "1");
+            payload.put("play","1");
 
             Map<String, String> apiHeaders = new HashMap<>(headers);
-            apiHeaders.put("Origin", "https://hhjx.hhplayer.com");
-            apiHeaders.put("Referer", jxUrl);
-            apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-            apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+            apiHeaders.put("Origin",           "https://hhjx.hhplayer.com");
+            apiHeaders.put("Referer",           jxUrl);
+            apiHeaders.put("Content-Type",      "application/x-www-form-urlencoded; charset=UTF-8");
+            apiHeaders.put("X-Requested-With",  "XMLHttpRequest");
 
+            // 【修复2】retryPost 返回 null 时正确 fallback
             String apiResponse = retryPost(apiUrl, payload, apiHeaders, 3);
-            if (apiResponse == null) {
-                SpiderDebug.log("[骚火电影] API 请求失败");
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            if (apiResponse == null || apiResponse.isEmpty()) {
+                SpiderDebug.log("[骚火电影] API 请求失败，返回原链接");
+                return fallback.toString();
+            }
+            SpiderDebug.log("[骚火电影] API 原始响应: " + apiResponse);
+
+            // 【修复3】用 try-catch 单独保护 JSON 解析，防止非 JSON 响应吞掉异常
+            JSONObject finalData;
+            try {
+                finalData = new JSONObject(apiResponse);
+            } catch (Exception jsonEx) {
+                SpiderDebug.log("[骚火电影] API 响应非 JSON: " + apiResponse);
+                return fallback.toString();
             }
 
-            JSONObject finalData = new JSONObject(apiResponse);
-            SpiderDebug.log("[骚火电影] API 响应: " + finalData.toString());
+            SpiderDebug.log("[骚火电影] API 响应 code: " + finalData.optInt("code", -1));
 
-            if (finalData.optInt("code") == 200) {
-                String videoUrl = finalData.optString("url");
-                if (videoUrl != null && !videoUrl.isEmpty() && !videoUrl.startsWith("http")) {
+            if (finalData.optInt("code", -1) == 200) {
+                String videoUrl = finalData.optString("url", "");
+                if (videoUrl.isEmpty()) {
+                    SpiderDebug.log("[骚火电影] API 返回 url 为空");
+                    return fallback.toString();
+                }
+                if (!videoUrl.startsWith("http")) {
                     videoUrl = "https://hhjx.hhplayer.com" + videoUrl;
                 }
-                SpiderDebug.log("[骚火电影] 解析成功，获得播放地址: " + videoUrl);
-                JSONObject result = new JSONObject();
-                result.put("parse", 0);
-                result.put("url", videoUrl);
+                SpiderDebug.log("[骚火电影] 解析成功，播放地址: " + videoUrl);
+
                 JSONObject header = new JSONObject();
                 header.put("User-Agent", headers.get("User-Agent"));
-                header.put("Origin", "https://hhjx.hhplayer.com");
+                header.put("Origin",     "https://hhjx.hhplayer.com");
+
+                JSONObject result = new JSONObject();
+                result.put("parse",  0);
+                result.put("url",    videoUrl);
                 result.put("header", header);
                 return result.toString();
             } else {
-                SpiderDebug.log("[骚火电影] API 返回 code 非 200: " + finalData.optInt("code"));
-                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+                SpiderDebug.log("[骚火电影] API 返回 code 非 200: " + finalData.optInt("code", -1));
+                return fallback.toString();
             }
 
         } catch (Exception e) {
             SpiderDebug.log("[骚火电影] 播放解析异常: " + e.getMessage());
-            e.printStackTrace();
-            return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            // 【修复4】catch 里也用 JSONObject 构造，确保返回合法 JSON
+            try {
+                JSONObject fallback = new JSONObject();
+                fallback.put("parse", 1);
+                fallback.put("url", id);
+                return fallback.toString();
+            } catch (Exception ignored) {
+                return "{\"parse\":1,\"url\":\"\"}";
+            }
         }
     }
 }
