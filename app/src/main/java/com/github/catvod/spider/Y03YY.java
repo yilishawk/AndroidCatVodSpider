@@ -20,27 +20,34 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import okhttp3.*;
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.HttpUrl;
 
+/**
+ * 03影院
+ * 站点: https://www.03yy.live
+ */
 public class Y03YY extends Spider {
 
     private String host = "https://www.03yy.live";
     private String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
-    // 自定义 OkHttpClient，不自动跟随重定向，用于手动处理 302 和 Cookie
-    private OkHttpClient manualClient;
-    // 存储 Cookie 的 Map
-    private Map<String, String> cookieStore = new HashMap<>();
+    // 使用框架内置 CookieJar，自动管理 Cookie
+    private final CookieJar cookieJar = new CookieJar() {
+        private final Map<String, List<Cookie>> store = new HashMap<>();
 
-    public Y03YY() {
-        // 不自动跟随重定向
-        this.manualClient = new OkHttpClient.Builder()
-                .followRedirects(false)
-                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .build();
-    }
+        @Override
+        public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+            store.put(url.host(), cookies);
+        }
+
+        @Override
+        public List<Cookie> loadForRequest(HttpUrl url) {
+            List<Cookie> cookies = store.get(url.host());
+            return cookies != null ? cookies : new ArrayList<>();
+        }
+    };
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
@@ -48,85 +55,23 @@ public class Y03YY extends Spider {
         headers.put("Referer", host + "/");
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-        // 添加已保存的 Cookie
-        if (!cookieStore.isEmpty()) {
-            StringBuilder cookieBuilder = new StringBuilder();
-            for (Map.Entry<String, String> entry : cookieStore.entrySet()) {
-                if (cookieBuilder.length() > 0) cookieBuilder.append("; ");
-                cookieBuilder.append(entry.getKey()).append("=").append(entry.getValue());
-            }
-            headers.put("Cookie", cookieBuilder.toString());
-            SpiderDebug.log("[Y03YY] 使用 Cookie: " + cookieBuilder);
-        }
         return headers;
     }
 
-    /**
-     * 手动处理 302 重定向并保存 Cookie
-     */
-    private String getWithCookie(String url) {
-        try {
-            SpiderDebug.log("[Y03YY] 请求: " + url);
-            Request request = new Request.Builder()
-                    .url(url)
-                    .headers(Headers.of(getHeaders()))
-                    .get()
-                    .build();
-
-            try (Response response = manualClient.newCall(request).execute()) {
-                int code = response.code();
-                SpiderDebug.log("[Y03YY] 响应码: " + code);
-
-                // 保存响应中的 Set-Cookie
-                Headers headers = response.headers();
-                List<String> setCookies = headers.values("Set-Cookie");
-                for (String setCookie : setCookies) {
-                    // 提取 cookie 名称和值
-                    String[] parts = setCookie.split(";", 2);
-                    String cookiePart = parts[0].trim();
-                    int eqIndex = cookiePart.indexOf('=');
-                    if (eqIndex > 0) {
-                        String name = cookiePart.substring(0, eqIndex);
-                        String value = cookiePart.substring(eqIndex + 1);
-                        cookieStore.put(name, value);
-                        SpiderDebug.log("[Y03YY] 保存 Cookie: " + name + "=" + value);
-                    }
-                }
-
-                // 处理 302 重定向
-                if (code == 302 || code == 301) {
-                    String location = headers.get("Location");
-                    if (!TextUtils.isEmpty(location)) {
-                        SpiderDebug.log("[Y03YY] 重定向到: " + location);
-                        // 递归请求新地址
-                        return getWithCookie(location);
-                    }
-                }
-
-                // 正常响应
-                if (response.isSuccessful() && response.body() != null) {
-                    return response.body().string();
-                }
-            }
-        } catch (Exception e) {
-            SpiderDebug.log("[Y03YY] 请求异常: " + e.getMessage());
-        }
-        return "";
-    }
-
-    /**
-     * 普通 GET 请求（用于已登录后的请求）
-     */
     private String get(String url) {
-        return getWithCookie(url);
+        try {
+            return OkHttpWithCookie.string(url, getHeaders(), cookieJar);
+        } catch (Exception e) {
+            SpiderDebug.log("[Y03YY] 请求异常: " + url + ", " + e.getMessage());
+            return "";
+        }
     }
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        SpiderDebug.log("[Y03YY] init: 访问首页获取 Cookie");
-        // 手动处理 302 并保存 Cookie
-        String html = getWithCookie(host + "/");
-        SpiderDebug.log("[Y03YY] init 完成，Cookie 数量: " + cookieStore.size());
+        SpiderDebug.log("[Y03YY] init: 访问首页初始化 Cookie");
+        get(host + "/");
+        SpiderDebug.log("[Y03YY] init 完成");
     }
 
     // ==================== 首页 ====================
@@ -493,7 +438,10 @@ public class Y03YY extends Spider {
                     org.json.JSONObject item = mediaList.getJSONObject(i);
                     String u = item.optString("url", "");
                     if (!u.isEmpty()) {
-                        if (item.optString("definition", "").contains("1080P")) { bestUrl = u; break; }
+                        if (item.optString("definition", "").contains("1080P")) {
+                            bestUrl = u;
+                            break;
+                        }
                         if (bestUrl == null) bestUrl = u;
                     }
                 }
