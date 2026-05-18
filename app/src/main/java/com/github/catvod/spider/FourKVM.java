@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  */
 public class FourKVM extends Spider {
 
-    private String host = "https://www.4kvm.me";
+    private String host = "https://www.4kvm.net";
     private Map<String, String> headers;
 
     public FourKVM() {
