@@ -5,7 +5,7 @@ import android.text.TextUtils;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttpWithCookie;
+import com.github.catvod.net.SSLCompat;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -17,29 +17,40 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import okhttp3.Cookie;
 import okhttp3.CookieJar;
 import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
  * 03影院
  * 站点: https://www.03yy.live
+ * 需要先访问首页拿到 __ancc_token，后续请求自动携带
  */
 public class Y03YY extends Spider {
 
     private String host = "https://www.03yy.live";
     private String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
-    // 使用框架内置 CookieJar，自动管理 Cookie
+    // CookieJar 自动保存/发送 Cookie（含 __ancc_token）
     private final CookieJar cookieJar = new CookieJar() {
         private final Map<String, List<Cookie>> store = new HashMap<>();
 
         @Override
         public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            store.put(url.host(), cookies);
+            List<Cookie> existing = store.containsKey(url.host()) ? store.get(url.host()) : new ArrayList<>();
+            // 更新或追加，避免覆盖其他 Cookie
+            Map<String, Cookie> map = new HashMap<>();
+            for (Cookie c : existing) map.put(c.name(), c);
+            for (Cookie c : cookies) map.put(c.name(), c);
+            store.put(url.host(), new ArrayList<>(map.values()));
+            SpiderDebug.log("[Y03YY] 保存 Cookie: " + url.host() + " -> " + map.keySet());
         }
 
         @Override
@@ -49,8 +60,19 @@ public class Y03YY extends Spider {
         }
     };
 
+    // 自建 client：绑定 CookieJar + 框架 SSLCompat（解决握手失败）
+    private final OkHttpClient client = new OkHttpClient.Builder()
+            .cookieJar(cookieJar)
+            .sslSocketFactory(new SSLCompat(), SSLCompat.TM)
+            .hostnameVerifier((hostname, session) -> true)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build();
+
     private Map<String, String> getHeaders() {
-        Map<String, String> headers = new HashMap<>();
+        Map<String, String> headers = new LinkedHashMap<>();
         headers.put("User-Agent", userAgent);
         headers.put("Referer", host + "/");
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
@@ -60,7 +82,17 @@ public class Y03YY extends Spider {
 
     private String get(String url) {
         try {
-            return OkHttpWithCookie.string(url, getHeaders(), cookieJar);
+            Request.Builder builder = new Request.Builder().url(url);
+            for (Map.Entry<String, String> entry : getHeaders().entrySet()) {
+                builder.header(entry.getKey(), entry.getValue());
+            }
+            try (Response response = client.newCall(builder.build()).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    return response.body().string();
+                }
+                SpiderDebug.log("[Y03YY] 请求失败: " + url + ", code=" + response.code());
+                return "";
+            }
         } catch (Exception e) {
             SpiderDebug.log("[Y03YY] 请求异常: " + url + ", " + e.getMessage());
             return "";
@@ -69,7 +101,8 @@ public class Y03YY extends Spider {
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        SpiderDebug.log("[Y03YY] init: 访问首页初始化 Cookie");
+        SpiderDebug.log("[Y03YY] init: 访问首页获取 __ancc_token");
+        // 302 -> 自动跳转 -> Set-Cookie 由 CookieJar 自动保存
         get(host + "/");
         SpiderDebug.log("[Y03YY] init 完成");
     }
@@ -438,10 +471,7 @@ public class Y03YY extends Spider {
                     org.json.JSONObject item = mediaList.getJSONObject(i);
                     String u = item.optString("url", "");
                     if (!u.isEmpty()) {
-                        if (item.optString("definition", "").contains("1080P")) {
-                            bestUrl = u;
-                            break;
-                        }
+                        if (item.optString("definition", "").contains("1080P")) { bestUrl = u; break; }
                         if (bestUrl == null) bestUrl = u;
                     }
                 }
