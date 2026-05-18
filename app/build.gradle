@@ -18,6 +18,7 @@ android {
         applicationId "com.github.catvod.demo"
         minSdk 16
         targetSdk 34
+        multiDexEnabled true   // 必须开启，以支持 coreLibraryDesugaring
         ndk { abiFilters "arm64-v8a" }
     }
 
@@ -34,7 +35,6 @@ android {
         }
     }
 
-    // 兼容 Android 6 的编译配置
     compileOptions {
         coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -57,8 +57,10 @@ android {
 }
 
 dependencies {
-    // Desugar 支持 Java 8 特性（Lambda 等）转译为低版本 Android 可执行代码
+    // Desugar 支持 (Java 8+ 特性转译)
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.3'
+    // Multidex 支持 (解决方法数超限)
+    implementation 'androidx.multidex:multidex:2.0.1'
 
     implementation 'com.github.thegrizzlylabs:sardine-android:0.9'
     implementation 'wang.harlon.quickjs:wrapper-android:2.0.0'
@@ -81,7 +83,7 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1"
 }
 
-// ================== 自定义打包任务（生成 TVBox 爬虫 Jar）==================
+// 自定义 Jar 打包任务
 task buildCustomSpiderJar {
     dependsOn 'assembleRelease'
     doLast {
@@ -94,15 +96,11 @@ task buildCustomSpiderJar {
         def classesDex = file("$workDir/app/build/intermediates/dex/release/minifyReleaseWithR8/classes.dex")
         def indexJsonFile = file("$workDir/json/index.json")
 
-        // 删除旧文件
-        if (customSpiderJar.exists()) {
-            customSpiderJar.delete()
-        }
-        if (smaliOutputDir.exists()) {
-            delete(smaliOutputDir)
-        }
+        // 清理旧文件
+        if (customSpiderJar.exists()) customSpiderJar.delete()
+        if (smaliOutputDir.exists()) delete(smaliOutputDir)
 
-        // 使用 baksmali 反编译 classes.dex
+        // 反编译 classes.dex
         javaexec {
             main = "-jar"
             args = [
@@ -114,25 +112,18 @@ task buildCustomSpiderJar {
             ]
         }
 
-        // 删除 spider.jar 中的旧目录
+        // 删除旧目录
         def targetDirs = [
                 file("$spiderJarDir/smali/com/github/catvod/spider"),
                 file("$spiderJarDir/smali/com/github/catvod/parser"),
                 file("$spiderJarDir/smali/com/github/catvod/js")
         ]
-        targetDirs.each { dir ->
-            if (dir.exists()) {
-                delete(dir)
-            }
-        }
+        targetDirs.each { if (it.exists()) delete(it) }
 
-        // 创建目标目录（如果不存在）
         def targetBaseDir = file("$spiderJarDir/smali/com/github/catvod")
-        if (!targetBaseDir.exists()) {
-            targetBaseDir.mkdirs()
-        }
+        if (!targetBaseDir.exists()) targetBaseDir.mkdirs()
 
-        // 移动反编译后的目录
+        // 移动 smali 文件到模板 jar
         def sourceDirs = [
                 file("$smaliOutputDir/com/github/catvod/spider"),
                 file("$smaliOutputDir/com/github/catvod/parser"),
@@ -143,13 +134,9 @@ task buildCustomSpiderJar {
                 file("$targetBaseDir/parser"),
                 file("$targetBaseDir/js")
         ]
-
         sourceDirs.eachWithIndex { src, idx ->
             if (src.exists()) {
-                copy {
-                    from src
-                    into targetPaths[idx]
-                }
+                copy { from src; into targetPaths[idx] }
                 delete(src)
             }
         }
@@ -157,15 +144,10 @@ task buildCustomSpiderJar {
         // 使用 apktool 打包
         javaexec {
             main = "-jar"
-            args = [
-                    apktoolJar.absolutePath,
-                    "b",
-                    spiderJarDir.absolutePath,
-                    "-c"
-            ]
+            args = [apktoolJar.absolutePath, "b", spiderJarDir.absolutePath, "-c"]
         }
 
-        // 移动生成的 dex.jar 到 custom_spider.jar
+        // 移动生成的 dex.jar 到最终位置
         def distJar = file("$spiderJarDir/dist/dex.jar")
         if (distJar.exists()) {
             copy {
@@ -175,12 +157,11 @@ task buildCustomSpiderJar {
             }
         }
 
-        // 生成 MD5 校验文件
+        // 计算 MD5 并更新 index.json
         def md5File = file("$workDir/jar/custom_spider.jar.md5")
         def md5 = java.security.MessageDigest.getInstance("MD5").digest(customSpiderJar.bytes).encodeHex().toString()
         md5File.text = md5
 
-        // 替换 index.json 中的 MD5 值
         def indexJsonContent = indexJsonFile.text
         def updatedContent = indexJsonContent.replaceAll(
                 /("spider":\s*"[^;]+;md5;)[^"]+"/,
@@ -188,7 +169,7 @@ task buildCustomSpiderJar {
         )
         indexJsonFile.write(updatedContent)
 
-        // 清理临时目录
+        // 清理临时文件
         delete(
                 "$spiderJarDir/build",
                 "$spiderJarDir/smali",
