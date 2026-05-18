@@ -15,6 +15,9 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Base64;
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
 import okhttp3.Headers;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -97,7 +100,113 @@ public class ShaoHuo extends Spider {
             return new String(bytes, charset);
         }
     }
+    /**
+     * 支持自定义 Header 的 fetch 重载
+     */
+    private String fetch(String url, Map<String, String> extraHeaders) throws Exception {
+        Map<String, String> allHeaders = new HashMap<>(headers);
+        if (extraHeaders != null) {
+            allHeaders.putAll(extraHeaders);
+        }
+        Request request = new Request.Builder()
+                .url(url)
+                .headers(Headers.of(allHeaders))
+                .build();
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new Exception("HTTP " + response.code());
+            }
+            byte[] bytes = response.body().bytes();
+            // 检测编码
+            String contentType = response.header("Content-Type");
+            String charset = "UTF-8";
+            if (contentType != null && contentType.toLowerCase().contains("charset=gbk")) {
+                charset = "GBK";
+            }
+            return new String(bytes, charset);
+        }
+    }
 
+    /**
+     * OKOK 解密方法（与 Python 版完全一致）
+     */
+    private String decodeKey(String encodedStr, Map<String, String> eeDict) {
+        try {
+            SpiderDebug.log("[骚火电影] 开始解密 OKOK key...");
+            String decodedBase64 = new String(Base64.getDecoder().decode(encodedStr), StandardCharsets.UTF_8);
+            // 按 key 长度降序排序
+            List<String> sortedKeys = new ArrayList<>(eeDict.keySet());
+            sortedKeys.sort((a, b) -> Integer.compare(b.length(), a.length()));
+            StringBuilder result = new StringBuilder();
+            int i = 0;
+            while (i < decodedBase64.length()) {
+                boolean matchFound = false;
+                for (String k : sortedKeys) {
+                    if (decodedBase64.startsWith(k, i)) {
+                        result.append(eeDict.get(k));
+                        i += k.length();
+                        matchFound = true;
+                        break;
+                    }
+                }
+                if (!matchFound) {
+                    result.append(decodedBase64.charAt(i));
+                    i++;
+                }
+            }
+            SpiderDebug.log("[骚火电影] 解密成功");
+            return result.toString();
+        } catch (Exception e) {
+            SpiderDebug.log("[骚火电影] 解密失败: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * POST 请求重试
+     */
+    private String retryPost(String url, Map<String, String> data, Map<String, String> extraHeaders, int maxRetries) throws Exception {
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                SpiderDebug.log("[骚火电影] POST 请求 " + url + " (尝试 " + attempt + "/" + maxRetries + ")");
+                Map<String, String> allHeaders = new HashMap<>(headers);
+                if (extraHeaders != null) {
+                    allHeaders.putAll(extraHeaders);
+                }
+                // 构建表单
+                StringBuilder formBody = new StringBuilder();
+                for (Map.Entry<String, String> entry : data.entrySet()) {
+                    if (formBody.length() > 0) {
+                        formBody.append("&");
+                    }
+                    formBody.append(URLEncoder.encode(entry.getKey(), "UTF-8"))
+                            .append("=")
+                            .append(URLEncoder.encode(entry.getValue(), "UTF-8"));
+                }
+                RequestBody body = RequestBody.create(
+                        MediaType.parse("application/x-www-form-urlencoded; charset=UTF-8"),
+                        formBody.toString()
+                );
+                Request request = new Request.Builder()
+                        .url(url)
+                        .post(body)
+                        .headers(Headers.of(allHeaders))
+                        .build();
+                try (Response response = client.newCall(request).execute()) {
+                    if (response.isSuccessful() && response.body() != null) {
+                        return response.body().string();
+                    }
+                }
+            } catch (Exception e) {
+                SpiderDebug.log("[骚火电影] POST 失败 (尝试 " + attempt + "): " + e.getMessage());
+                if (attempt == maxRetries) {
+                    throw e;
+                }
+                Thread.sleep(1000L * (1 << attempt));
+            }
+        }
+        return null;
+    }
     private List<Object> naturalSortKey(String s) {
         List<Object> result = new ArrayList<>();
         Matcher matcher = Pattern.compile("([0-9]+)").matcher(s);
@@ -396,30 +505,138 @@ public class ShaoHuo extends Spider {
         }
     }
 
+    /**
+     * 播放解析 - 完整实现（对齐 Python 版）
+     */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+        SpiderDebug.log("[骚火电影] ========== 开始播放解析 ==========");
+        SpiderDebug.log("[骚火电影] 传入参数: flag=" + flag + ", id=" + id);
         try {
+            // 1. 请求播放页，获取 iframe 地址
+            SpiderDebug.log("[骚火电影] 步骤1: 请求播放页 " + id);
             String html = fetch(id);
-            Matcher iframeMatcher = Pattern.compile("iframe src=\"(.*?)\"").matcher(html);
-            if (iframeMatcher.find()) {
-                String jxUrl = iframeMatcher.group(1);
-                if (!jxUrl.startsWith("http")) jxUrl = host + jxUrl;
-                JSONObject result = new JSONObject();
-                result.put("parse", 1);
-                result.put("url", jxUrl);
-                return result.toString();
+            if (html == null || html.isEmpty()) {
+                SpiderDebug.log("[骚火电影] 播放页请求失败");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
             }
-            
-            Matcher videoMatcher = Pattern.compile("<video[^>]+src=[\"']([^\"']+)[\"']").matcher(html);
-            if (videoMatcher.find()) {
+
+            // 提取 iframe src
+            Pattern iframePattern = Pattern.compile("iframe src=\"(.*?)\"");
+            Matcher iframeMatcher = iframePattern.matcher(html);
+            if (!iframeMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 未找到 iframe 标签，直接返回原链接");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+            String jxUrl = iframeMatcher.group(1);
+            if (!jxUrl.startsWith("http")) {
+                jxUrl = host + jxUrl;
+            }
+            SpiderDebug.log("[骚火电影] 获取到 iframe 解析地址: " + jxUrl);
+
+            // 2. 请求 iframe 页
+            SpiderDebug.log("[骚火电影] 步骤2: 请求 iframe 页 " + jxUrl);
+            Map<String, String> jxHeaders = new HashMap<>(headers);
+            jxHeaders.put("Referer", host + "/");
+            String jxHtml = fetch(jxUrl, jxHeaders);
+            if (jxHtml == null) {
+                SpiderDebug.log("[骚火电影] iframe 页请求失败");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+            SpiderDebug.log("[骚火电影] iframe 页长度: " + jxHtml.length());
+
+            // 3. 提取加密参数
+            SpiderDebug.log("[骚火电影] 步骤3: 提取加密参数");
+            Pattern urlPattern = Pattern.compile("var url = \"(.*?)\";");
+            Pattern tPattern = Pattern.compile("var t = \"(.*?)\";");
+            Pattern keyPattern = Pattern.compile("var key = OKOK\\(\"(.*?)\"\\);");
+            Pattern eePattern = Pattern.compile("const ee = (\\{.*?\\}) ;");
+
+            Matcher urlMatcher = urlPattern.matcher(jxHtml);
+            Matcher tMatcher = tPattern.matcher(jxHtml);
+            Matcher keyMatcher = keyPattern.matcher(jxHtml);
+            Matcher eeMatcher = eePattern.matcher(jxHtml);
+
+            if (!urlMatcher.find() || !tMatcher.find() || !keyMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 正则匹配失败");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+            if (!eeMatcher.find()) {
+                SpiderDebug.log("[骚火电影] 未找到 ee 字典，无法解密");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+
+            String urlVal = urlMatcher.group(1);
+            String tVal = tMatcher.group(1);
+            String encodedKey = keyMatcher.group(1);
+            String eeStr = eeMatcher.group(1);
+            SpiderDebug.log("[骚火电影] 提取参数: url=" + urlVal + ", t=" + tVal);
+
+            // 解析 ee 字典
+            JSONObject eeJson = new JSONObject(eeStr);
+            Map<String, String> eeDict = new HashMap<>();
+            Iterator<String> keys = eeJson.keys();
+            while (keys.hasNext()) {
+                String k = keys.next();
+                eeDict.put(k, eeJson.getString(k));
+            }
+
+            // 4. 解密 key（模拟 OKOK 解密）
+            String realKey = decodeKey(encodedKey, eeDict);
+            if (realKey.isEmpty()) {
+                SpiderDebug.log("[骚火电影] 解密失败");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+            SpiderDebug.log("[骚火电影] 解密后的 key: " + realKey);
+
+            // 5. POST 到解析 API
+            SpiderDebug.log("[骚火电影] 步骤4: 请求解析 API");
+            String apiUrl = "https://hhjx.hhplayer.com/api.php";
+            Map<String, String> payload = new HashMap<>();
+            payload.put("url", urlVal);
+            payload.put("t", tVal);
+            payload.put("key", realKey);
+            payload.put("act", "0");
+            payload.put("play", "1");
+
+            Map<String, String> apiHeaders = new HashMap<>(headers);
+            apiHeaders.put("Origin", "https://hhjx.hhplayer.com");
+            apiHeaders.put("Referer", jxUrl);
+            apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+            apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+
+            String apiResponse = retryPost(apiUrl, payload, apiHeaders, 3);
+            if (apiResponse == null) {
+                SpiderDebug.log("[骚火电影] API 请求失败");
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
+
+            JSONObject finalData = new JSONObject(apiResponse);
+            SpiderDebug.log("[骚火电影] API 响应: " + finalData.toString());
+
+            if (finalData.optInt("code") == 200) {
+                String videoUrl = finalData.optString("url");
+                if (videoUrl != null && !videoUrl.isEmpty() && !videoUrl.startsWith("http")) {
+                    videoUrl = "https://hhjx.hhplayer.com" + videoUrl;
+                }
+                SpiderDebug.log("[骚火电影] 解析成功，获得播放地址: " + videoUrl);
                 JSONObject result = new JSONObject();
                 result.put("parse", 0);
-                result.put("url", videoMatcher.group(1));
+                result.put("url", videoUrl);
+                JSONObject header = new JSONObject();
+                header.put("User-Agent", headers.get("User-Agent"));
+                header.put("Origin", "https://hhjx.hhplayer.com");
+                result.put("header", header);
                 return result.toString();
+            } else {
+                SpiderDebug.log("[骚火电影] API 返回 code 非 200: " + finalData.optInt("code"));
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
             }
+
         } catch (Exception e) {
-            SpiderDebug.log("[骚火电影] 播放解析失败: " + e.getMessage());
+            SpiderDebug.log("[骚火电影] 播放解析异常: " + e.getMessage());
+            e.printStackTrace();
+            return "{\"parse\":1,\"url\":\"" + id + "\"}";
         }
-        return "{\"parse\":1,\"url\":\"" + id + "\"}";
     }
 }
