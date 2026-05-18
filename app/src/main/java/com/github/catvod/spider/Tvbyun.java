@@ -25,6 +25,8 @@ import okhttp3.Response;
 /**
  * 港台影视 - 基于 API 的爬虫
  * 站点: http://app.hktvyb.cc
+ * API 格式: ?ac=list&ac=detail&t={tid}&pg={pg}
+ *          ?ac=detail&ids={id}
  */
 public class Tvbyun extends Spider {
 
@@ -32,7 +34,12 @@ public class Tvbyun extends Spider {
     private String apiUrl = "http://app.hktvyb.cc/api.php/provide/vod/";
     private OkHttpClient client;
     private Map<String, String> headers;
-    private static final int MAX_RETRIES = 3;  // 最大重试次数
+    private static final int MAX_RETRIES = 3;
+
+    // 解析线路列表
+    private List<Map<String, String>> jiexiList = new ArrayList<>();
+    // 播放器线路映射
+    private Map<String, String> playerNameMap = new HashMap<>();
 
     public Tvbyun() {
         this.client = new OkHttpClient.Builder()
@@ -56,9 +63,11 @@ public class Tvbyun extends Spider {
             fetchConfig();
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] 获取配置失败: " + e.getMessage());
+            initDefaultJiexiList();
+            initDefaultPlayerMap();
         }
     }
-    
+
     private void fetchConfig() throws Exception {
         String configUrl = baseUrl + "/api.php/Appfox/config";
         String response = get(configUrl);
@@ -72,65 +81,127 @@ public class Tvbyun extends Spider {
                         this.apiUrl = newApiUrl;
                     }
                     SpiderDebug.log("[Tvbyun] 配置获取成功, apiUrl: " + apiUrl);
+
+                    // 动态获取解析线路
+                    JSONArray jiexiDataList = data.optJSONArray("jiexiDataList");
+                    if (jiexiDataList != null && jiexiDataList.length() > 0) {
+                        jiexiList.clear();
+                        for (int i = 0; i < jiexiDataList.length(); i++) {
+                            JSONObject jiexiItem = jiexiDataList.getJSONObject(i);
+                            String url = jiexiItem.optString("url");
+                            String name = jiexiItem.optString("name");
+                            if (url != null && !url.isEmpty()) {
+                                Map<String, String> item = new HashMap<>();
+                                item.put("url", url);
+                                item.put("name", name);
+                                jiexiList.add(item);
+                                SpiderDebug.log("[Tvbyun] 添加解析线路: " + name + " -> " + url);
+                            }
+                        }
+                    } else {
+                        initDefaultJiexiList();
+                    }
+
+                    // 动态获取播放器映射
+                    JSONArray playerList = data.optJSONArray("playerList");
+                    if (playerList != null && playerList.length() > 0) {
+                        playerNameMap.clear();
+                        for (int i = 0; i < playerList.length(); i++) {
+                            JSONObject playerItem = playerList.getJSONObject(i);
+                            String playerCode = playerItem.optString("playerCode");
+                            String playerName = playerItem.optString("playerName");
+                            if (playerCode != null && !playerCode.isEmpty()) {
+                                playerNameMap.put(playerCode, playerName);
+                            }
+                        }
+                    } else {
+                        initDefaultPlayerMap();
+                    }
                 }
             }
         }
     }
-    
-    /**
-     * GET 请求 - 当返回 HTML 时自动重试（使用相同 URL）
-     */
+
+    private void initDefaultJiexiList() {
+        jiexiList.clear();
+        addJiexi("http://111.229.219.148:808/index.php?url=", "极速专线");
+        addJiexi("http://111.229.219.148:808/xun3.php?url=", "海外线路①");
+        addJiexi("http://111.229.219.148:808/xun3.php?url=", "海外线路②");
+        addJiexi("http://111.229.219.148:808/xun3.php?url=", "海外线路③");
+        addJiexi("http://111.229.219.148:808/xun3.php?url=", "海外线路④");
+        addJiexi("http://111.229.219.148:808/index.php?url=", "TVB专线");
+        addJiexi("http://111.229.219.148:808/index.php?url=", "国内高速");
+    }
+
+    private void addJiexi(String url, String name) {
+        Map<String, String> item = new HashMap<>();
+        item.put("url", url);
+        item.put("name", name);
+        jiexiList.add(item);
+    }
+
+    private void initDefaultPlayerMap() {
+        playerNameMap.clear();
+        playerNameMap.put("mp4", "极速备用");
+        playerNameMap.put("hkm3u8", "极速主力");
+        playerNameMap.put("YYNB", "国内高速");
+        playerNameMap.put("1080zyk", "海外资源");
+        playerNameMap.put("bfzym3u8", "海外线路①");
+        playerNameMap.put("lzm3u8", "海外线路④");
+        playerNameMap.put("mytv", "极速专线");
+        playerNameMap.put("mytvb", "TVB专线");
+        playerNameMap.put("ffm3u8", "非凡线路");
+        playerNameMap.put("dbm3u8", "国内线路");
+        playerNameMap.put("dyttm3u8", "海外线路");
+        playerNameMap.put("4ko2r", "国内高清");
+        playerNameMap.put("libvio", "外剧专线");
+        playerNameMap.put("saohuo", "国内剧集");
+        playerNameMap.put("link", "外链数据");
+    }
+
     private String get(String url) throws IOException {
         return getWithRetry(url, 0);
     }
-    
+
     private String getWithRetry(String url, int retryCount) throws IOException {
         SpiderDebug.log("[Tvbyun] 请求 URL: " + url + " (尝试 " + (retryCount + 1) + "/" + MAX_RETRIES + ")");
-        
+
         Request request = new Request.Builder()
                 .url(url)
                 .headers(Headers.of(headers))
                 .get()
                 .build();
-        
+
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
-                SpiderDebug.log("[Tvbyun] 请求失败，状态码: " + response.code());
-                // 非成功状态码，重试
                 if (retryCount < MAX_RETRIES - 1) {
                     try { Thread.sleep(500); } catch (InterruptedException ignored) {}
                     return getWithRetry(url, retryCount + 1);
                 }
                 return null;
             }
-            
+
             String body = response.body().string();
-            
-            // 检查返回的是否是 HTML（重定向页面）
+
             if (isHtmlResponse(body)) {
-                SpiderDebug.log("[Tvbyun] 检测到 HTML 响应（非 JSON），使用相同 URL 重新请求...");
+                SpiderDebug.log("[Tvbyun] 检测到 HTML 响应，重试...");
                 if (retryCount < MAX_RETRIES - 1) {
-                    // 等待后重试，使用相同的 URL
                     try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
                     return getWithRetry(url, retryCount + 1);
-                } else {
-                    SpiderDebug.log("[Tvbyun] 已达最大重试次数，仍返回 HTML");
-                    return null;
-                }
-            }
-            
-            // 检查是否是有效的 JSON
-            if (isValidJson(body)) {
-                SpiderDebug.log("[Tvbyun] 请求成功，返回 JSON 数据");
-                return body;
-            } else {
-                SpiderDebug.log("[Tvbyun] 返回的不是有效 JSON，重试...");
-                if (retryCount < MAX_RETRIES - 1) {
-                    try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                    return getWithRetry(url, retryCount + 1);
                 }
                 return null;
             }
+
+            if (isValidJson(body)) {
+                return body;
+            }
+
+            if (retryCount < MAX_RETRIES - 1) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                return getWithRetry(url, retryCount + 1);
+            }
+            return null;
+
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] 请求异常: " + e.getMessage());
             if (retryCount < MAX_RETRIES - 1) {
@@ -140,25 +211,19 @@ public class Tvbyun extends Spider {
             return null;
         }
     }
-    
-    /**
-     * 判断响应是否是 HTML
-     */
+
     private boolean isHtmlResponse(String body) {
         if (body == null) return true;
         String trimmed = body.trim().toLowerCase();
-        return trimmed.startsWith("<html") || trimmed.startsWith("<!doctype") || 
-               trimmed.contains("<script") || trimmed.contains("document.location");
+        return trimmed.startsWith("<html") || trimmed.startsWith("<!doctype") ||
+                trimmed.contains("<script") || trimmed.contains("document.location");
     }
-    
-    /**
-     * 判断是否是有效的 JSON
-     */
+
     private boolean isValidJson(String body) {
         if (body == null) return false;
         String trimmed = body.trim();
         return (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-               (trimmed.startsWith("[") && trimmed.endsWith("]"));
+                (trimmed.startsWith("[") && trimmed.endsWith("]"));
     }
 
     @Override
@@ -167,7 +232,6 @@ public class Tvbyun extends Spider {
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
 
-            // 只放4个主要分类
             String[][] mainClasses = {
                     {"13", "国产剧"},
                     {"1", "电影"},
@@ -268,35 +332,31 @@ public class Tvbyun extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             String typeId = tid;
-            // 如果有筛选条件，使用筛选的 type_id
             if (extend != null && extend.containsKey("type_id") && !extend.get("type_id").isEmpty()) {
                 String filterTypeId = extend.get("type_id");
-                // 验证筛选的 type_id 是否有效
                 if (!filterTypeId.equals(tid)) {
                     typeId = filterTypeId;
                 }
             }
-            
-            // 构建 URL：ac=list&t={tid}&pg={pg}
+
+            // 正确的 API 格式：ac=list&ac=detail&t={tid}&pg={pg}
             String url = apiUrl + "?ac=list&ac=detail&t=" + typeId + "&pg=" + pg;
             SpiderDebug.log("[Tvbyun] category URL: " + url);
-            
+
             String response = get(url);
             if (response == null) {
-                SpiderDebug.log("[Tvbyun] categoryContent: 响应为空");
                 return "{\"list\":[], \"page\":" + pg + "}";
             }
-            
+
             JSONObject json = new JSONObject(response);
             int code = json.optInt("code");
             if (code != 1) {
-                SpiderDebug.log("[Tvbyun] categoryContent: API 返回错误 code=" + code);
                 return "{\"list\":[], \"page\":" + pg + "}";
             }
-            
+
             JSONArray list = json.optJSONArray("list");
             JSONArray videos = new JSONArray();
-            
+
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
                     JSONObject item = list.getJSONObject(i);
@@ -308,16 +368,15 @@ public class Tvbyun extends Spider {
                     videos.put(vod);
                 }
             }
-            
+
             JSONObject result = new JSONObject();
             result.put("list", videos);
             result.put("page", Integer.parseInt(pg));
             result.put("pagecount", json.optInt("pagecount", 1));
             return result.toString();
-            
+
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] categoryContent error: " + e.getMessage());
-            e.printStackTrace();
             return "{\"list\":[], \"page\":" + pg + "}";
         }
     }
@@ -335,14 +394,12 @@ public class Tvbyun extends Spider {
 
             String response = get(url);
             if (response == null) {
-                SpiderDebug.log("[Tvbyun] detailContent: 响应为空");
                 return "{\"list\":[]}";
             }
 
             JSONObject json = new JSONObject(response);
             int code = json.optInt("code");
             if (code != 1) {
-                SpiderDebug.log("[Tvbyun] detailContent: API 返回错误 code=" + code);
                 return "{\"list\":[]}";
             }
 
@@ -353,12 +410,15 @@ public class Tvbyun extends Spider {
 
             JSONObject item = list.getJSONObject(0);
 
-            // 直接使用 API 返回的 play_from 和 play_url
+            // 线路名称映射
             String playFrom = item.optString("vod_play_from");
-            String playUrl = item.optString("vod_play_url");
-
-            SpiderDebug.log("[Tvbyun] vod_play_from: " + playFrom);
-            SpiderDebug.log("[Tvbyun] vod_play_url: " + playUrl);
+            String[] players = playFrom.split("\\$\\$\\$");
+            List<String> displayNames = new ArrayList<>();
+            for (String p : players) {
+                String displayName = playerNameMap.getOrDefault(p.trim(), p.trim());
+                displayNames.add(displayName);
+            }
+            String displayPlayFrom = String.join("$$$", displayNames);
 
             JSONObject vod = new JSONObject();
             vod.put("vod_id", item.optString("vod_id"));
@@ -370,8 +430,8 @@ public class Tvbyun extends Spider {
             vod.put("vod_director", item.optString("vod_director"));
             vod.put("type_name", item.optString("type_name"));
             vod.put("vod_remarks", item.optString("vod_remarks"));
-            vod.put("vod_play_from", playFrom);
-            vod.put("vod_play_url", playUrl);
+            vod.put("vod_play_from", displayPlayFrom);
+            vod.put("vod_play_url", item.optString("vod_play_url"));
 
             JSONArray resultList = new JSONArray();
             resultList.put(vod);
@@ -385,38 +445,18 @@ public class Tvbyun extends Spider {
             return "{\"list\":[]}";
         }
     }
-    
-    /**
-     * 格式化播放地址
-     * 输入: "第1集$http://xxx.m3u8#第2集$http://yyy.m3u8" 或 "http://xxx.m3u8"
-     * 输出: 保持原格式
-     */
-    private String formatPlayUrl(String playUrl) {
-        if (playUrl == null || playUrl.isEmpty()) {
-            return null;
-        }
-        // 如果已经包含 $ 分隔符，直接返回
-        if (playUrl.contains("$")) {
-            return playUrl;
-        }
-        // 如果是单个 URL，添加默认集数名称
-        if (playUrl.startsWith("http")) {
-            return "播放$" + playUrl;
-        }
-        return playUrl;
-    }
 
     @Override
     public String searchContent(String key, boolean quick) {
         try {
             String searchUrl = baseUrl + "/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(key, "UTF-8");
             SpiderDebug.log("[Tvbyun] search URL: " + searchUrl);
-            
+
             String response = get(searchUrl);
             if (response == null) {
                 return "{\"list\":[]}";
             }
-            
+
             JSONArray list = null;
             if (response.trim().startsWith("[")) {
                 list = new JSONArray(response);
@@ -432,7 +472,7 @@ public class Tvbyun extends Spider {
                     SpiderDebug.log("[Tvbyun] searchContent 解析失败: " + e.getMessage());
                 }
             }
-            
+
             JSONArray videos = new JSONArray();
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
@@ -445,11 +485,11 @@ public class Tvbyun extends Spider {
                     videos.put(vod);
                 }
             }
-            
+
             JSONObject result = new JSONObject();
             result.put("list", videos);
             return result.toString();
-            
+
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] searchContent error: " + e.getMessage());
             return "{\"list\":[]}";
@@ -458,28 +498,82 @@ public class Tvbyun extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        SpiderDebug.log("[Tvbyun] playerContent flag=" + flag + ", id=" + id);
-        
+        SpiderDebug.log("[Tvbyun] ========== 开始播放解析 ==========");
+        SpiderDebug.log("[Tvbyun] flag: " + flag);
+        SpiderDebug.log("[Tvbyun] id: " + id);
+
         try {
-            // 如果 id 已经是完整的 URL，直接返回
+            // 情况1: 已经是完整的 m3u8/mp4 链接，直接播放
             if (id.startsWith("http://") || id.startsWith("https://")) {
+                if (id.contains(".m3u8") || id.contains(".mp4")) {
+                    SpiderDebug.log("[Tvbyun] 直接播放: " + id);
+                    JSONObject result = new JSONObject();
+                    result.put("parse", 0);
+                    result.put("url", id);
+                    JSONObject header = new JSONObject();
+                    header.put("User-Agent", headers.get("User-Agent"));
+                    header.put("Referer", baseUrl + "/");
+                    result.put("header", header);
+                    return result.toString();
+                }
+            }
+
+            // 情况2: 所有需要解析的链接（包括 YYNB-xxx、普通 URL 等），通过解析线路处理
+            String parsedUrl = tryParseWithJiexi(id);
+            if (parsedUrl != null) {
+                SpiderDebug.log("[Tvbyun] 解析成功: " + parsedUrl);
                 JSONObject result = new JSONObject();
                 result.put("parse", 0);
-                result.put("url", id);
-                // 添加请求头
+                result.put("url", parsedUrl);
                 JSONObject header = new JSONObject();
                 header.put("User-Agent", headers.get("User-Agent"));
                 header.put("Referer", baseUrl + "/");
                 result.put("header", header);
                 return result.toString();
             }
-            
-            // 默认返回 parse=1，让壳子处理
-            return "{\"parse\":1,\"url\":\"" + id + "\"}";
-            
+
         } catch (Exception e) {
             SpiderDebug.log("[Tvbyun] playerContent error: " + e.getMessage());
-            return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            e.printStackTrace();
         }
+
+        // 全部失败，返回 parse=1 让壳子嗅探
+        SpiderDebug.log("[Tvbyun] 解析失败，返回嗅探模式");
+        return "{\"parse\":1,\"url\":\"" + id + "\"}";
+    }
+
+    private String tryParseWithJiexi(String url) {
+        for (Map<String, String> jiexi : jiexiList) {
+            String jiexiUrl = jiexi.get("url");
+            if (jiexiUrl == null || jiexiUrl.isEmpty()) {
+                continue;
+            }
+            try {
+                String fullUrl = jiexiUrl + URLEncoder.encode(url, "UTF-8");
+                SpiderDebug.log("[Tvbyun] 尝试解析线路: " + jiexi.get("name") + " -> " + fullUrl);
+
+                String response = getWithRetry(fullUrl, 0);
+                if (response != null && !response.isEmpty()) {
+                    try {
+                        JSONObject json = new JSONObject(response);
+                        if (json.optInt("code") == 200) {
+                            String videoUrl = json.optString("url");
+                            if (videoUrl != null && !videoUrl.isEmpty() && videoUrl.startsWith("http")) {
+                                SpiderDebug.log("[Tvbyun] 解析线路 " + jiexi.get("name") + " 成功: " + videoUrl);
+                                return videoUrl;
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (response.startsWith("http")) {
+                            SpiderDebug.log("[Tvbyun] 解析线路 " + jiexi.get("name") + " 直接返回 URL: " + response);
+                            return response;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                SpiderDebug.log("[Tvbyun] 解析线路 " + jiexi.get("name") + " 失败: " + e.getMessage());
+            }
+        }
+        return null;
     }
 }
