@@ -24,7 +24,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 /**
- * 骚火电影 - 首页秒开修复版
+ * 骚火电影 -首页秒开修复版
  * 完全修复编码截断导致的“无视频列表”问题
  */
 public class ShaoHuo extends Spider {
