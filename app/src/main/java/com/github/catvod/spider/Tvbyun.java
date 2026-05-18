@@ -13,7 +13,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -39,7 +38,7 @@ public class Tvbyun extends Spider {
     // 解析线路列表
     private List<Map<String, String>> jiexiList = new ArrayList<>();
 
-    public HkTvYb() {
+    public Tvbyun() {
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
@@ -56,7 +55,7 @@ public class Tvbyun extends Spider {
 
     @Override
     public void init(Context context, String extend) {
-        SpiderDebug.log("[HkTvYb] init called");
+        SpiderDebug.log("[Tvbyun] init called");
         
         // 初始化播放器映射
         initPlayerMap();
@@ -68,7 +67,7 @@ public class Tvbyun extends Spider {
         try {
             fetchConfig();
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] 获取配置失败: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] 获取配置失败: " + e.getMessage());
         }
     }
     
@@ -130,7 +129,7 @@ public class Tvbyun extends Spider {
                     if (newApiUrl != null && !newApiUrl.isEmpty()) {
                         this.apiUrl = newApiUrl;
                     }
-                    SpiderDebug.log("[HkTvYb] 配置获取成功, apiUrl: " + apiUrl);
+                    SpiderDebug.log("[Tvbyun] 配置获取成功, apiUrl: " + apiUrl);
                 }
             }
         }
@@ -141,24 +140,6 @@ public class Tvbyun extends Spider {
                 .url(url)
                 .headers(Headers.of(headers))
                 .get()
-                .build();
-        try (Response response = client.newCall(request).execute()) {
-            if (response.isSuccessful() && response.body() != null) {
-                return response.body().string();
-            }
-        }
-        return null;
-    }
-    
-    private String post(String url, String body) throws IOException {
-        okhttp3.RequestBody requestBody = okhttp3.RequestBody.create(
-                okhttp3.MediaType.parse("application/json; charset=utf-8"),
-                body
-        );
-        Request request = new Request.Builder()
-                .url(url)
-                .headers(Headers.of(headers))
-                .post(requestBody)
                 .build();
         try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
@@ -261,7 +242,7 @@ public class Tvbyun extends Spider {
             
             return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] homeContent error: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] homeContent error: " + e.getMessage());
             return "{\"class\":[], \"filters\":{}}";
         }
     }
@@ -276,7 +257,7 @@ public class Tvbyun extends Spider {
             }
             
             String url = apiUrl + "?ac=list&t=" + typeId + "&pg=" + pg;
-            SpiderDebug.log("[HkTvYb] category URL: " + url);
+            SpiderDebug.log("[Tvbyun] category URL: " + url);
             
             String response = get(url);
             if (response == null) {
@@ -306,7 +287,7 @@ public class Tvbyun extends Spider {
             return result.toString();
             
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] categoryContent error: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] categoryContent error: " + e.getMessage());
             return "{\"list\":[], \"page\":" + pg + "}";
         }
     }
@@ -320,7 +301,7 @@ public class Tvbyun extends Spider {
             
             String vodId = ids.get(0);
             String url = apiUrl + "?ac=detail&ids=" + vodId;
-            SpiderDebug.log("[HkTvYb] detail URL: " + url);
+            SpiderDebug.log("[Tvbyun] detail URL: " + url);
             
             String response = get(url);
             if (response == null) {
@@ -391,7 +372,7 @@ public class Tvbyun extends Spider {
             return result.toString();
             
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] detailContent error: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] detailContent error: " + e.getMessage());
             e.printStackTrace();
             return "{\"list\":[]}";
         }
@@ -430,7 +411,7 @@ public class Tvbyun extends Spider {
             return episodes.toString().replace("[", "").replace("]", "").replace("\"", "");
             
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] buildPlayUrl error for " + playerCode + ": " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] buildPlayUrl error for " + playerCode + ": " + e.getMessage());
             return null;
         }
     }
@@ -439,7 +420,7 @@ public class Tvbyun extends Spider {
     public String searchContent(String key, boolean quick) {
         try {
             String searchUrl = baseUrl + "/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(key, "UTF-8");
-            SpiderDebug.log("[HkTvYb] search URL: " + searchUrl);
+            SpiderDebug.log("[Tvbyun] search URL: " + searchUrl);
             
             String response = get(searchUrl);
             if (response == null) {
@@ -464,14 +445,14 @@ public class Tvbyun extends Spider {
             return result.toString();
             
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] searchContent error: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] searchContent error: " + e.getMessage());
             return "{\"list\":[]}";
         }
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        SpiderDebug.log("[HkTvYb] playerContent flag=" + flag + ", id=" + id);
+        SpiderDebug.log("[Tvbyun] playerContent flag=" + flag + ", id=" + id);
         
         try {
             // 如果 id 已经是完整的 URL，直接返回
@@ -494,29 +475,11 @@ public class Tvbyun extends Spider {
                 }
             }
             
-            // 如果 id 是解析 URL + 加密串的格式
-            if (id.contains("|")) {
-                String[] parts = id.split("\\|");
-                if (parts.length >= 2) {
-                    String parseUrl = parts[0];
-                    String encrypted = parts[1];
-                    String fullUrl = parseUrl + encrypted;
-                    
-                    String parsedUrl = tryParseWithJiexi(fullUrl);
-                    if (parsedUrl != null) {
-                        JSONObject result = new JSONObject();
-                        result.put("parse", 0);
-                        result.put("url", parsedUrl);
-                        return result.toString();
-                    }
-                }
-            }
-            
             // 默认返回 parse=1，让壳子处理
             return "{\"parse\":1,\"url\":\"" + id + "\"}";
             
         } catch (Exception e) {
-            SpiderDebug.log("[HkTvYb] playerContent error: " + e.getMessage());
+            SpiderDebug.log("[Tvbyun] playerContent error: " + e.getMessage());
             return "{\"parse\":1,\"url\":\"" + id + "\"}";
         }
     }
@@ -532,7 +495,7 @@ public class Tvbyun extends Spider {
             }
             try {
                 String fullUrl = jiexiUrl + URLEncoder.encode(url, "UTF-8");
-                SpiderDebug.log("[HkTvYb] 尝试解析: " + fullUrl);
+                SpiderDebug.log("[Tvbyun] 尝试解析: " + fullUrl);
                 
                 String response = get(fullUrl);
                 if (response != null && !response.isEmpty()) {
@@ -540,13 +503,13 @@ public class Tvbyun extends Spider {
                     if (json.optInt("code") == 200) {
                         String videoUrl = json.optString("url");
                         if (videoUrl != null && !videoUrl.isEmpty() && videoUrl.startsWith("http")) {
-                            SpiderDebug.log("[HkTvYb] 解析成功: " + videoUrl);
+                            SpiderDebug.log("[Tvbyun] 解析成功: " + videoUrl);
                             return videoUrl;
                         }
                     }
                 }
             } catch (Exception e) {
-                SpiderDebug.log("[HkTvYb] 解析失败: " + e.getMessage());
+                SpiderDebug.log("[Tvbyun] 解析失败: " + e.getMessage());
             }
         }
         return null;
