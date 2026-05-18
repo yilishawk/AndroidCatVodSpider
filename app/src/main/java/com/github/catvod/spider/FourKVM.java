@@ -601,7 +601,6 @@ public class FourKVM extends Spider {
         }
     }
 
-    @Override
     public boolean isVideoCast() {
         return true;
     }
