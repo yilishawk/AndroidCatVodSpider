@@ -61,7 +61,6 @@ public class Qkys extends Spider {
         SpiderDebug.log("[全看影院] 初始化完成，host: " + host);
     }
 
-    @Override
     public String getName() {
         return "全看影院";
     }
