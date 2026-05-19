@@ -144,31 +144,25 @@ public class Qkys extends Spider {
     }
 
     // === 根据 Python 逻辑深度重构的视频解析部分 ===
-    @Override
+@Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playUrl = id.startsWith("http") ? id : host + id;
 
-        // 1. 获取包含 player_aaaa 的网页源码（参考 Python 循环重试机制）
+        // 1. 获取包含 player_aaaa 的网页源码
         HashMap<String, String> h1 = getHeaders();
         h1.put("Referer", host + "/");
         String html = "";
+        
+        // 对应 Python 的重试机制
         for (int i = 0; i < 2; i++) {
-            try {
-                html = OkHttp.string(playUrl, h1);
-                if (html != null && html.contains("player_aaaa")) {
-                    break;
-                }
-                Thread.sleep(1000);
-            } catch (Exception e) {
-                // 忽略重试异常
-            }
+            html = OkHttp.string(playUrl, h1);
+            if (html.contains("player_aaaa")) break;
+            Thread.sleep(1000);
         }
 
-        if (html == null || html.isEmpty()) {
-            return Result.get().parse(1).url(playUrl).string();
-        }
+        if (html.isEmpty()) return Result.get().parse(1).url(playUrl).string();
 
-        // 2. 准确裁切提取 player_aaaa 对应的 JSON 字符串
+        // 2. 提取 player_aaaa 变量并解析 JSON
         JsonObject pdata;
         try {
             int start = html.indexOf("var player_aaaa=");
@@ -186,106 +180,68 @@ public class Qkys extends Spider {
             return Result.get().parse(1).url(playUrl).string();
         }
 
-        // 3. 构造请求解析中转页的 URL 和参数
+        // 3. 构建中转页请求（使用 Map 传参，OkHttp 工具类会自动处理 URL 编码）
+        Map<String, String> params = new HashMap<>();
+        params.put("url", pdata.get("url").getAsString());
+        params.put("type", pdata.get("from").getAsString());
+        params.put("next", pdata.has("link_next") ? pdata.get("link_next").getAsString() : "");
+        params.put("data", pdata.has("play_data") ? pdata.get("play_data").getAsString() : "");
+
+        HashMap<String, String> h2 = getHeaders();
+        h2.put("Upgrade-Insecure-Requests", "1");
+        h2.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+
+        // 获取中转页源码
+        String idxHtml = OkHttp.string(jxHost + "/index.php", params, h2);
+
+        // 4. 提取 config 变量中的核心字段
+        Matcher configMatch = Pattern.compile("var config = (\\{[\\s\\S]*?\\});").matcher(idxHtml);
+        if (!configMatch.find()) return Result.get().parse(1).url(playUrl).string();
+        
+        String configStr = configMatch.group(1);
+        String urlVal = extractField("url", configStr);
+        String timeVal = extractField("time", configStr);
+        String vkeyVal = extractField("vkey", configStr);
+
+        if (urlVal.isEmpty() || timeVal.isEmpty()) return Result.get().parse(1).url(playUrl).string();
+
+        // 5. POST 获取真实地址
+        Map<String, String> apiPayload = new HashMap<>();
+        apiPayload.put("url", urlVal);
+        apiPayload.put("time", timeVal);
+        apiPayload.put("key", "");
+        apiPayload.put("vkey", vkeyVal);
+
+        HashMap<String, String> headersApi = new HashMap<>();
+        headersApi.put("X-Requested-With", "XMLHttpRequest");
+        headersApi.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        // Referer 必须是带参数的中转页全路径，手动还原 Python 里的 full_idx_link 逻辑
+        headersApi.put("Referer", jxHost + "/index.php?url=" + params.get("url")); 
+        headersApi.put("Origin", jxHost);
+
         try {
-            String urlParam = pdata.has("url") ? pdata.get("url").getAsString() : "";
-            String typeParam = pdata.has("from") ? pdata.get("from").getAsString() : "";
-            String nextParam = pdata.has("link_next") ? pdata.get("link_next").getAsString() : "";
-            String dataParam = pdata.has("play_data") ? pdata.get("play_data").getAsString() : "";
-
-            // 拼接全路径用于 API 报头的 Referer 字段
-            String fullIdxLink = jxHost + "/index.php?url=" + URLEncoder.encode(urlParam, "UTF-8")
-                    + "&type=" + URLEncoder.encode(typeParam, "UTF-8")
-                    + "&next=" + URLEncoder.encode(nextParam, "UTF-8")
-                    + "&data=" + URLEncoder.encode(dataParam, "UTF-8");
-
-            // 4. 发送中转页 GET 请求
-            HashMap<String, String> h2 = getHeaders();
-            h2.put("Referer", host + "/");
-            h2.put("Upgrade-Insecure-Requests", "1");
-            h2.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
-
-            // 使用带 Query 参数的请求方式
-            Map<String, String> getParams = new HashMap<>();
-            getParams.put("url", urlParam);
-            getParams.put("type", typeParam);
-            getParams.put("next", nextParam);
-            getParams.put("data", dataParam);
-            
-            // 注意：因为 CatVod 的 OkHttp.string(url, headers) 未原生提供多参数 Map 的 GET，
-            // 此处直接请求拼接好的全路径以确保逻辑 100% 对应 Python 的参数传递。
-            String idxHtml = OkHttp.string(fullIdxLink, h2);
-
-            // 5. 正则提取 var config = {...};
-            Matcher configMatcher = Pattern.compile("var config = (\\{[\\s\\S]*?\\});").matcher(idxHtml);
-            if (!configMatcher.find()) {
-                return Result.get().parse(1).url(playUrl).string();
-            }
-            String configStr = configMatcher.group(1);
-
-            // 6. 提取核心参数
-            String urlVal = extractField("url", configStr);
-            String timeVal = extractField("time", configStr);
-            String vkeyVal = extractField("vkey", configStr);
-
-            if (urlVal.isEmpty() || timeVal.isEmpty() || vkeyVal.isEmpty()) {
-                return Result.get().parse(1).url(playUrl).string();
-            }
-
-            // 7. 组装 POST 载荷
-            Map<String, String> apiPayload = new HashMap<>();
-            apiPayload.put("url", urlVal);
-            apiPayload.put("time", timeVal);
-            apiPayload.put("key", "");
-            apiPayload.put("vkey", vkeyVal);
-
-            // 8. 组装接口专属 Headers
-            HashMap<String, String> headersApi = new HashMap<>();
-            headersApi.put("User-Agent", getHeaders().get("User-Agent"));
-            headersApi.put("Accept", "application/json, text/javascript, */*; q=0.01");
-            headersApi.put("Accept-Language", "zh-CN,zh;q=0.9");
-            headersApi.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-            headersApi.put("X-Requested-With", "XMLHttpRequest");
-            headersApi.put("Origin", jxHost);
-            headersApi.put("Referer", fullIdxLink);
-            headersApi.put("Connection", "keep-alive");
-
-            // 9. 发送 POST 请求并解析返回的最终流媒体直链
+            // 调用 OkHttp.post 返回 OkResult，获取 Body 并解析
             String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, headersApi).getBody();
             JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
             
             String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : "";
-            if (finalUrl.isEmpty() && resJson.has("video_url")) {
-                finalUrl = resJson.get("video_url").getAsString();
-            }
+            if (finalUrl.isEmpty() && resJson.has("video_url")) finalUrl = resJson.get("video_url").getAsString();
 
             if (!finalUrl.isEmpty()) {
                 return Result.get().url(finalUrl).header(getHeaders()).string();
             }
-
         } catch (Exception e) {
-            // 解析失败时降级回壳探测
+            // 失败则兜底
         }
 
         return Result.get().parse(1).url(playUrl).string();
     }
 
-    // 对齐 Python 里的多模式正则提取器（支持双引号、单引号、纯纯数字的匹配）
+    // 强化版字段提取，完美兼容 Python 的 re 提取逻辑
     private String extractField(String name, String text) {
-        if (text == null) return "";
-        
-        // 模式 1: "name" : "value"
-        Matcher m1 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*\"([^\"]*)\"").matcher(text);
-        if (m1.find()) return m1.group(1);
-        
-        // 模式 2: "name" : 'value'
-        Matcher m2 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*'([^']*)'").matcher(text);
-        if (m2.find()) return m2.group(1);
-        
-        // 模式 3: "name" : 123456 (纯数字)
-        Matcher m3 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*(\\d+)").matcher(text);
-        if (m3.find()) return m3.group(1);
-        
-        return "";
+        // 兼容 "key":"value" , "key":'value' , "key":12345
+        Pattern p = Pattern.compile("[\"']" + name + "[\"']\\s*[:=]\\s*[\"']?(.*?)[\"']?[,}]");
+        Matcher m = p.matcher(text);
+        return m.find() ? m.group(1).trim() : "";
     }
 }
