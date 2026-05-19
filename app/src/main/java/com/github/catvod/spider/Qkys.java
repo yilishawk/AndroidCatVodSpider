@@ -29,6 +29,8 @@ public class Qkys extends Spider {
     private HashMap<String, String> getHeaders() {
         HashMap<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headers.put("Connection", "keep-alive");
         headers.put("Referer", host + "/");
         return headers;
     }
@@ -68,11 +70,9 @@ public class Qkys extends Spider {
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
         
-        // 标题
         Element titleElem = doc.selectFirst(".stui-content__detail .title");
         if (titleElem != null) vod.setVodName(titleElem.text().trim());
         
-        // 图片和备注
         Element thumbImg = doc.selectFirst(".stui-content__thumb img");
         if (thumbImg != null) {
             String pic = thumbImg.attr("data-original");
@@ -82,44 +82,24 @@ public class Qkys extends Spider {
         Element picText = doc.selectFirst(".stui-content__thumb .pic-text");
         if (picText != null) vod.setVodRemarks(picText.text().trim());
         
-        // 导演
         Element dirElem = doc.selectFirst(".stui-content__detail p.data:contains(导演)");
-        if (dirElem != null) {
-            String director = dirElem.text().replace("导演：", "").trim();
-            vod.setVodDirector(director);
-        }
+        if (dirElem != null) vod.setVodDirector(dirElem.text().replace("导演：", "").trim());
         
-        // 主演
         Element actElem = doc.selectFirst(".stui-content__detail p.data:contains(主演)");
-        if (actElem != null) {
-            String actor = actElem.text().replace("主演：", "").trim();
-            vod.setVodActor(actor);
-        }
+        if (actElem != null) vod.setVodActor(actElem.text().replace("主演：", "").trim());
         
-        // 类型、地区、年份
         Element typeElem = doc.selectFirst(".stui-content__detail p.data:contains(类型)");
-        if (typeElem != null) {
-            String type = typeElem.text().replace("类型：", "").trim();
-            vod.setTypeName(type);
-        }
+        if (typeElem != null) vod.setTypeName(typeElem.text().replace("类型：", "").trim());
+        
         Element areaElem = doc.selectFirst(".stui-content__detail p.data:contains(地区)");
-        if (areaElem != null) {
-            String area = areaElem.text().replace("地区：", "").trim();
-            vod.setVodArea(area);
-        }
+        if (areaElem != null) vod.setVodArea(areaElem.text().replace("地区：", "").trim());
+        
         Element yearElem = doc.selectFirst(".stui-content__detail p.data:contains(年份)");
-        if (yearElem != null) {
-            String year = yearElem.text().replace("年份：", "").trim();
-            vod.setVodYear(year);
-        }
+        if (yearElem != null) vod.setVodYear(yearElem.text().replace("年份：", "").trim());
         
-        // 简介
         Element descElem = doc.selectFirst(".stui-content__desc");
-        if (descElem != null) {
-            vod.setVodContent(descElem.text().trim());
-        }
+        if (descElem != null) vod.setVodContent(descElem.text().trim());
         
-        // 播放列表
         List<String> fromList = new ArrayList<>();
         List<String> urlList = new ArrayList<>();
         for (Element head : doc.select(".stui-pannel__head")) {
@@ -163,61 +143,149 @@ public class Qkys extends Spider {
         return Result.string(list);
     }
 
-@Override
+    // === 根据 Python 逻辑深度重构的视频解析部分 ===
+    @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-    String playUrl = id.startsWith("http") ? id : host + id;
-    
-    // 第一次请求，携带 Referer
-    HashMap<String, String> headers = getHeaders();
-    headers.put("Referer", host + "/");
-    String html = OkHttp.string(playUrl, headers);
-    
-    // 检查是否是 JS 跳转页面（空内容 + 包含 location.href）
-    if (html != null && (html.contains("window.location.href") || html.contains("location.href"))) {
-        // 第二次请求，增加额外的 cookie 和完整 header
-        HashMap<String, String> retryHeaders = getHeaders();
-        retryHeaders.put("Referer", playUrl);  // Referer 指向自身
-        retryHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-        retryHeaders.put("Upgrade-Insecure-Requests", "1");
-        html = OkHttp.string(playUrl, retryHeaders);
-    }
-    
-    try {
-        Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
-        if (!m.find()) return Result.get().parse(1).url(playUrl).string();
-        
-        JsonObject pdata = JsonParser.parseString(m.group(1)).getAsJsonObject();
-        String idxUrl = jxHost + "/index.php?url=" + pdata.get("url").getAsString() + "&type=" + pdata.get("from").getAsString();
-        
-        // 中转页也携带完整 header
-        HashMap<String, String> idxHeaders = getHeaders();
-        idxHeaders.put("Referer", playUrl);
-        String idxHtml = OkHttp.string(idxUrl, idxHeaders);
-        
-        Map<String, String> params = new HashMap<>();
-        params.put("url", extractField("url", idxHtml));
-        params.put("time", extractField("time", idxHtml));
-        params.put("key", "");
-        params.put("vkey", extractField("vkey", idxHtml));
-        
-        HashMap<String, String> apiHeaders = getHeaders();
-        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-        apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        apiHeaders.put("Referer", idxUrl);
-        apiHeaders.put("Origin", jxHost);
+        String playUrl = id.startsWith("http") ? id : host + id;
 
-        String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", params, apiHeaders).getBody();
-        JsonObject res = JsonParser.parseString(apiResp).getAsJsonObject();
-        String finalUrl = res.has("url") ? res.get("url").getAsString() : res.get("video_url").getAsString();
-        
-        return Result.get().url(finalUrl).header(getHeaders()).string();
-    } catch (Exception e) {
+        // 1. 获取包含 player_aaaa 的网页源码（参考 Python 循环重试机制）
+        HashMap<String, String> h1 = getHeaders();
+        h1.put("Referer", host + "/");
+        String html = "";
+        for (int i = 0; i < 2; i++) {
+            try {
+                html = OkHttp.string(playUrl, h1);
+                if (html != null && html.contains("player_aaaa")) {
+                    break;
+                }
+                Thread.sleep(1000);
+            } catch (Exception e) {
+                // 忽略重试异常
+            }
+        }
+
+        if (html == null || html.isEmpty()) {
+            return Result.get().parse(1).url(playUrl).string();
+        }
+
+        // 2. 准确裁切提取 player_aaaa 对应的 JSON 字符串
+        JsonObject pdata;
+        try {
+            int start = html.indexOf("var player_aaaa=");
+            start = html.indexOf("{", start);
+            int count = 1;
+            int pos = start + 1;
+            while (pos < html.length() && count > 0) {
+                char c = html.charAt(pos);
+                if (c == '{') count++;
+                else if (c == '}') count--;
+                pos++;
+            }
+            pdata = JsonParser.parseString(html.substring(start, pos)).getAsJsonObject();
+        } catch (Exception e) {
+            return Result.get().parse(1).url(playUrl).string();
+        }
+
+        // 3. 构造请求解析中转页的 URL 和参数
+        try {
+            String urlParam = pdata.has("url") ? pdata.get("url").getAsString() : "";
+            String typeParam = pdata.has("from") ? pdata.get("from").getAsString() : "";
+            String nextParam = pdata.has("link_next") ? pdata.get("link_next").getAsString() : "";
+            String dataParam = pdata.has("play_data") ? pdata.get("play_data").getAsString() : "";
+
+            // 拼接全路径用于 API 报头的 Referer 字段
+            String fullIdxLink = jxHost + "/index.php?url=" + URLEncoder.encode(urlParam, "UTF-8")
+                    + "&type=" + URLEncoder.encode(typeParam, "UTF-8")
+                    + "&next=" + URLEncoder.encode(nextParam, "UTF-8")
+                    + "&data=" + URLEncoder.encode(dataParam, "UTF-8");
+
+            // 4. 发送中转页 GET 请求
+            HashMap<String, String> h2 = getHeaders();
+            h2.put("Referer", host + "/");
+            h2.put("Upgrade-Insecure-Requests", "1");
+            h2.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+
+            // 使用带 Query 参数的请求方式
+            Map<String, String> getParams = new HashMap<>();
+            getParams.put("url", urlParam);
+            getParams.put("type", typeParam);
+            getParams.put("next", nextParam);
+            getParams.put("data", dataParam);
+            
+            // 注意：因为 CatVod 的 OkHttp.string(url, headers) 未原生提供多参数 Map 的 GET，
+            // 此处直接请求拼接好的全路径以确保逻辑 100% 对应 Python 的参数传递。
+            String idxHtml = OkHttp.string(fullIdxLink, h2);
+
+            // 5. 正则提取 var config = {...};
+            Matcher configMatcher = Pattern.compile("var config = (\\{[\\s\\S]*?\\});").matcher(idxHtml);
+            if (!configMatcher.find()) {
+                return Result.get().parse(1).url(playUrl).string();
+            }
+            String configStr = configMatcher.group(1);
+
+            // 6. 提取核心参数
+            String urlVal = extractField("url", configStr);
+            String timeVal = extractField("time", configStr);
+            String vkeyVal = extractField("vkey", configStr);
+
+            if (urlVal.isEmpty() || timeVal.isEmpty() || vkeyVal.isEmpty()) {
+                return Result.get().parse(1).url(playUrl).string();
+            }
+
+            // 7. 组装 POST 载荷
+            Map<String, String> apiPayload = new HashMap<>();
+            apiPayload.put("url", urlVal);
+            apiPayload.put("time", timeVal);
+            apiPayload.put("key", "");
+            apiPayload.put("vkey", vkeyVal);
+
+            // 8. 组装接口专属 Headers
+            HashMap<String, String> headersApi = new HashMap<>();
+            headersApi.put("User-Agent", getHeaders().get("User-Agent"));
+            headersApi.put("Accept", "application/json, text/javascript, */*; q=0.01");
+            headersApi.put("Accept-Language", "zh-CN,zh;q=0.9");
+            headersApi.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+            headersApi.put("X-Requested-With", "XMLHttpRequest");
+            headersApi.put("Origin", jxHost);
+            headersApi.put("Referer", fullIdxLink);
+            headersApi.put("Connection", "keep-alive");
+
+            // 9. 发送 POST 请求并解析返回的最终流媒体直链
+            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, headersApi).getBody();
+            JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
+            
+            String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : "";
+            if (finalUrl.isEmpty() && resJson.has("video_url")) {
+                finalUrl = resJson.get("video_url").getAsString();
+            }
+
+            if (!finalUrl.isEmpty()) {
+                return Result.get().url(finalUrl).header(getHeaders()).string();
+            }
+
+        } catch (Exception e) {
+            // 解析失败时降级回壳探测
+        }
+
         return Result.get().parse(1).url(playUrl).string();
     }
-}
 
+    // 对齐 Python 里的多模式正则提取器（支持双引号、单引号、纯纯数字的匹配）
     private String extractField(String name, String text) {
-        Matcher m = Pattern.compile("\"" + name + "\":\\s*\"(.*?)\"").matcher(text);
-        return m.find() ? m.group(1) : "";
+        if (text == null) return "";
+        
+        // 模式 1: "name" : "value"
+        Matcher m1 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*\"([^\"]*)\"").matcher(text);
+        if (m1.find()) return m1.group(1);
+        
+        // 模式 2: "name" : 'value'
+        Matcher m2 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*'([^']*)'").matcher(text);
+        if (m2.find()) return m2.group(1);
+        
+        // 模式 3: "name" : 123456 (纯数字)
+        Matcher m3 = Pattern.compile("\"" + Pattern.quote(name) + "\"\\s*:\\s*(\\d+)").matcher(text);
+        if (m3.find()) return m3.group(1);
+        
+        return "";
     }
 }
