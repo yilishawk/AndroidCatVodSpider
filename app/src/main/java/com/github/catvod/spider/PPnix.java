@@ -4,6 +4,7 @@ import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttpWithCookie;
 import okhttp3.Cookie;
 import okhttp3.CookieJar;
@@ -27,12 +28,17 @@ public class PPnix extends Spider {
     private final String host = "https://www.ppnix.com";
     private final String ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
     
-    // 初始化一个真实的 CookieJar 来存储 Cloudflare 验证后的 Cookie
+    // 关键：必须使用同一个 CookieJar 实例来运行整个生命周期
+    private final HashMap<String, List<Cookie>> cookieStore = new HashMap<>();
     private final CookieJar cookieJar = new CookieJar() {
-        private final HashMap<String, List<Cookie>> cookieStore = new HashMap<>();
         @Override
         public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            cookieStore.put(url.host(), cookies);
+            if (cookies != null && !cookies.isEmpty()) {
+                cookieStore.put(url.host(), cookies);
+                for (Cookie c : cookies) {
+                    SpiderDebug.log("PPnix 存入 Cookie: [" + url.host() + "] " + c.name() + "=" + c.value());
+                }
+            }
         }
         @Override
         public List<Cookie> loadForRequest(HttpUrl url) {
@@ -50,7 +56,7 @@ public class PPnix extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        // 访问首页激活 Cookie (处理 Cloudflare)
+        SpiderDebug.log("PPnix: 正在初始化首页并尝试触发 Cloudflare 验证...");
         OkHttpWithCookie.string(host, getHeaders(), cookieJar);
         
         List<Class> classes = new ArrayList<>();
@@ -70,29 +76,26 @@ public class PPnix extends Spider {
         for (Element li : items) {
             Element thumbA = li.selectFirst("a");
             if (thumbA == null) continue;
-            String vodId = thumbA.attr("href");
-            String name = li.select("h2").text().trim();
             String pic = li.select("img").attr("data-src");
             if (pic.isEmpty()) pic = li.select("img").attr("src");
             if (pic.startsWith("/")) pic = host + pic;
-            list.add(new Vod(vodId, name, pic, li.select(".orange").text()));
+            list.add(new Vod(thumbA.attr("href"), li.select("h2").text().trim(), pic, li.select(".orange").text()));
         }
         return Result.string(list);
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String vodId = ids.get(0);
-        String url = vodId.startsWith("http") ? vodId : host + vodId;
+        String url = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+        SpiderDebug.log("PPnix: 正在获取详情页: " + url);
         String html = OkHttpWithCookie.string(url, getHeaders(), cookieJar);
         Document doc = Jsoup.parse(html);
         
         Vod vod = new Vod();
-        vod.setVodId(vodId);
+        vod.setVodId(ids.get(0));
         vod.setVodName(doc.selectFirst(".product-title").text().replaceAll("\\(\\d+\\)", "").trim());
         vod.setVodPic(doc.select(".product-header img").attr("src"));
         
-        // 解析脚本中的播放数据
         String scriptText = "";
         for (Element script : doc.select("script")) {
             if (script.html().contains("infoid") && script.html().contains("m3u8")) {
@@ -128,7 +131,7 @@ public class PPnix extends Spider {
             m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
         } catch (Exception ignored) {}
 
-        // 2. 构造 Header
+        // 2. 准备 Headers
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", ua);
         
@@ -138,17 +141,26 @@ public class PPnix extends Spider {
         if (m.find()) referer = host + "/cn/tv/" + m.group(1) + ".html";
         headers.put("Referer", referer);
 
-        // 3. 提取当前有效的 Cookie 并加入 Header
+        // 3. 提取内存中的 Cookie 并记录日志
         List<Cookie> cookies = cookieJar.loadForRequest(HttpUrl.parse(host));
-        if (!cookies.isEmpty()) {
+        if (cookies != null && !cookies.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             for (Cookie cookie : cookies) {
                 sb.append(cookie.name()).append("=").append(cookie.value()).append("; ");
             }
-            headers.put("Cookie", sb.toString());
+            String cookieStr = sb.toString().trim();
+            if (cookieStr.endsWith(";")) cookieStr = cookieStr.substring(0, cookieStr.length() - 1);
+            
+            headers.put("Cookie", cookieStr);
+            SpiderDebug.log("PPnix 注入播放器 Cookie: " + cookieStr);
+        } else {
+            SpiderDebug.log("PPnix 警告: 播放器请求时 Cookie 库为空！");
         }
 
-        // 4. 返回 Result 必须包含 header，播放器才会携带它们发送请求
+        SpiderDebug.log("PPnix 最终播放直链: " + m3u8Url);
+        SpiderDebug.log("PPnix 最终 Referer: " + referer);
+
+        // 4. 返回带 header 的 Result
         return Result.get().url(m3u8Url).header(headers).string();
     }
 }
