@@ -77,32 +77,50 @@ public class Qkys extends Spider {
     }
 
     private JSONArray parseList(String html) {
-        JSONArray videos = new JSONArray();
-        Document doc = Jsoup.parse(html);
-        Elements items = doc.select("li.stui-vodlist__item");
-        for (Element item : items) {
-            Element thumb = item.selectFirst(".stui-vodlist__thumb");
-            if (thumb == null) continue;
-            String href = thumb.attr("href");
-            String vid = href.startsWith("http") ? href : host + href;
-            String name = thumb.attr("title");
-            String pic = thumb.attr("data-original");
-            if (TextUtils.isEmpty(pic)) pic = thumb.attr("src");
-            Element remarkElem = item.selectFirst(".pic-text");
-            String remark = remarkElem != null ? remarkElem.text().trim() : "";
-            try {
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", vid);
-                vod.put("vod_name", name);
-                vod.put("vod_pic", pic);
-                vod.put("vod_remarks", remark);
-                videos.put(vod);
-            } catch (Exception e) {
-                SpiderDebug.log("[全看影院] 解析列表项失败: " + e.getMessage());
-            }
+    JSONArray videos = new JSONArray();
+    Document doc = Jsoup.parse(html);
+    Elements items = doc.select("li.stui-vodlist__item");
+    
+    for (Element item : items) {
+        Element thumb = item.selectFirst(".stui-vodlist__thumb");
+        if (thumb == null) continue;
+        
+        // 1. 提取详情页链接
+        String href = thumb.attr("href");
+        if (TextUtils.isEmpty(href)) continue;
+        String vid = href.startsWith("http") ? href : host + href;
+        
+        // 2. 提取标题（优先使用 title 属性，其次使用 h4 内的文本）
+        String name = thumb.attr("title");
+        if (TextUtils.isEmpty(name)) {
+            Element titleLink = item.selectFirst("h4.stui-vodlist__title a");
+            if (titleLink != null) name = titleLink.text();
         }
-        return videos;
+        if (TextUtils.isEmpty(name)) continue;
+        
+        // 3. 提取图片链接
+        String pic = thumb.attr("data-original");
+        if (TextUtils.isEmpty(pic)) pic = thumb.attr("src");
+        // 补全图片相对路径
+        if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) {
+            pic = host + pic;
+        }
+        
+        // 4. 提取备注（如“已完结”、“更新至第08集”）
+        Element remarkElem = item.selectFirst(".pic-text");
+        String remark = remarkElem != null ? remarkElem.text().trim() : "";
+        
+        try {
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", vid);
+            vod.put("vod_name", name);
+            vod.put("vod_pic", pic == null ? "" : pic);
+            vod.put("vod_remarks", remark);
+            videos.put(vod);
+        } catch (Exception ignored) {}
     }
+    return videos;
+}
 
     // ---------- 首页 ----------
     @Override
