@@ -163,37 +163,58 @@ public class Qkys extends Spider {
         return Result.string(list);
     }
 
-    @Override
+@Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : host + id;
-        String html = OkHttp.string(playUrl, getHeaders());
-        try {
-            Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
-            if (!m.find()) return Result.get().parse(1).url(playUrl).string();
-            JsonObject pdata = JsonParser.parseString(m.group(1)).getAsJsonObject();
-            
-            String idxUrl = jxHost + "/index.php?url=" + pdata.get("url").getAsString() + "&type=" + pdata.get("from").getAsString();
-            String idxHtml = OkHttp.string(idxUrl, getHeaders());
-            
-            Map<String, String> params = new HashMap<>();
-            params.put("url", extractField("url", idxHtml));
-            params.put("time", extractField("time", idxHtml));
-            params.put("key", "");
-            params.put("vkey", extractField("vkey", idxHtml));
-            
-            HashMap<String, String> apiHeaders = getHeaders();
-            apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-            apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-
-            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", params, apiHeaders).getBody();
-            JsonObject res = JsonParser.parseString(apiResp).getAsJsonObject();
-            String finalUrl = res.has("url") ? res.get("url").getAsString() : res.get("video_url").getAsString();
-            
-            return Result.get().url(finalUrl).header(getHeaders()).string();
-        } catch (Exception e) {
-            return Result.get().parse(1).url(playUrl).string();
-        }
+    String playUrl = id.startsWith("http") ? id : host + id;
+    
+    // 第一次请求，携带 Referer
+    HashMap<String, String> headers = getHeaders();
+    headers.put("Referer", host + "/");
+    String html = OkHttp.string(playUrl, headers);
+    
+    // 检查是否是 JS 跳转页面（空内容 + 包含 location.href）
+    if (html != null && (html.contains("window.location.href") || html.contains("location.href"))) {
+        // 第二次请求，增加额外的 cookie 和完整 header
+        HashMap<String, String> retryHeaders = getHeaders();
+        retryHeaders.put("Referer", playUrl);  // Referer 指向自身
+        retryHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        retryHeaders.put("Upgrade-Insecure-Requests", "1");
+        html = OkHttp.string(playUrl, retryHeaders);
     }
+    
+    try {
+        Matcher m = Pattern.compile("var player_aaaa=(\\{.*?\\})").matcher(html);
+        if (!m.find()) return Result.get().parse(1).url(playUrl).string();
+        
+        JsonObject pdata = JsonParser.parseString(m.group(1)).getAsJsonObject();
+        String idxUrl = jxHost + "/index.php?url=" + pdata.get("url").getAsString() + "&type=" + pdata.get("from").getAsString();
+        
+        // 中转页也携带完整 header
+        HashMap<String, String> idxHeaders = getHeaders();
+        idxHeaders.put("Referer", playUrl);
+        String idxHtml = OkHttp.string(idxUrl, idxHeaders);
+        
+        Map<String, String> params = new HashMap<>();
+        params.put("url", extractField("url", idxHtml));
+        params.put("time", extractField("time", idxHtml));
+        params.put("key", "");
+        params.put("vkey", extractField("vkey", idxHtml));
+        
+        HashMap<String, String> apiHeaders = getHeaders();
+        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+        apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        apiHeaders.put("Referer", idxUrl);
+        apiHeaders.put("Origin", jxHost);
+
+        String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", params, apiHeaders).getBody();
+        JsonObject res = JsonParser.parseString(apiResp).getAsJsonObject();
+        String finalUrl = res.has("url") ? res.get("url").getAsString() : res.get("video_url").getAsString();
+        
+        return Result.get().url(finalUrl).header(getHeaders()).string();
+    } catch (Exception e) {
+        return Result.get().parse(1).url(playUrl).string();
+    }
+}
 
     private String extractField(String name, String text) {
         Matcher m = Pattern.compile("\"" + name + "\":\\s*\"(.*?)\"").matcher(text);
