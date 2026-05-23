@@ -23,7 +23,7 @@ public class ZhuiXinJu extends Spider {
     private Cloud cloud = new Cloud();
 
     // ──────────────────────────────────────────────
-    // 工具
+    // 工 具
     // ──────────────────────────────────────────────
 
     private void logger(String msg) {
