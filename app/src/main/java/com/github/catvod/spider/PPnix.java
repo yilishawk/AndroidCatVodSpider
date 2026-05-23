@@ -10,6 +10,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.graphics.drawable.ColorDrawable;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkResult;
