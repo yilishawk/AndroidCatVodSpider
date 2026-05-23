@@ -101,61 +101,69 @@ public class ZhuiXinJu extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        try {
-            // 第1页：https://zhuixinju.com/dsj
-            // 第N页：https://zhuixinju.com/dsj/page/2
-            String url = HOST + "/" + tid;
-            int page = Integer.parseInt(pg);
-            if (page > 1) url = HOST + "/" + tid + "/page/" + page;
+    try {
+        String url = HOST + "/" + tid;
+        int page = Integer.parseInt(pg);
+        if (page > 1) url = HOST + "/" + tid + "/page/" + page;
 
-            logger("📂 [分类] " + tid + " 第" + page + "页 → " + url);
-            String html = get(url);
-            if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
+        logger("📂 [分类] " + tid + " 第" + page + "页 → " + url);
+        String html = get(url);
+        if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
 
-            Document doc  = Jsoup.parse(html);
-            JSONArray list = new JSONArray();
+        Document doc  = Jsoup.parse(html);
+        JSONArray list = new JSONArray();
 
-            // 文章列表：每篇文章是一个 article 标签
-            for (Element article : doc.select("article")) {
-                // 链接和标题
-                Element titleElem = article.selectFirst("h2 a, h1 a, .entry-title a");
-                if (titleElem == null) continue;
+        // 查找所有资源项
+        for (Element item : doc.select(".item-jx, .item-blog, article")) {
+            // 标题和链接
+            Element titleElem = item.selectFirst("h5 a, h2 a, .line-tow a");
+            if (titleElem == null) continue;
 
-                String vodId  = titleElem.attr("href");
-                String name   = titleElem.text().trim();
+            String vodId  = titleElem.attr("href");
+            String name   = titleElem.text().trim();
 
-                // 封面：优先 og:image，再找 img
-                String pic = "";
-                Element img = article.selectFirst("img");
-                if (img != null) {
-                    pic = img.hasAttr("src") ? img.attr("src") : img.attr("data-src");
+            // 封面
+            String pic = "";
+            Element img = item.selectFirst("img");
+            if (img != null) {
+                pic = img.hasAttr("src") ? img.attr("src") : img.attr("data-src");
+                // 处理相对路径
+                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) {
+                    if (pic.startsWith("/")) {
+                        pic = HOST + pic;
+                    } else {
+                        pic = HOST + "/" + pic;
+                    }
                 }
-
-                // 备注：分类或日期
-                String remarks = "";
-                Element cat = article.selectFirst(".entry-category, .cat-links a, .article-meta a[rel=category]");
-                if (cat != null) remarks = cat.text().trim();
-
-                if (TextUtils.isEmpty(vodId) || TextUtils.isEmpty(name)) continue;
-
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id",      vodId);
-                vod.put("vod_name",    name);
-                vod.put("vod_pic",     pic);
-                vod.put("vod_remarks", remarks);
-                list.put(vod);
             }
 
-            logger("✅ [分类] 共 " + list.length() + " 条");
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            result.put("page", page);
-            return result.toString();
-        } catch (Exception e) {
-            logger("🚨 [分类异常] " + e.getMessage());
-            return "{\"list\":[]}";
+            // 分类标签
+            String remarks = "";
+            Element sortElem = item.selectFirst(".sortbox a");
+            if (sortElem != null) {
+                remarks = sortElem.text().trim();
+            }
+
+            if (TextUtils.isEmpty(vodId) || TextUtils.isEmpty(name)) continue;
+
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id",      vodId);
+            vod.put("vod_name",    name);
+            vod.put("vod_pic",     pic);
+            vod.put("vod_remarks", remarks);
+            list.put(vod);
         }
+
+        logger("✅ [分类] 共 " + list.length() + " 条");
+        JSONObject result = new JSONObject();
+        result.put("list", list);
+        result.put("page", page);
+        return result.toString();
+    } catch (Exception e) {
+        logger("🚨 [分类异常] " + e.getMessage());
+        return "{\"list\":[]}";
     }
+}
 
     // ──────────────────────────────────────────────
     // 详情页
