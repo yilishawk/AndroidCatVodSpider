@@ -307,31 +307,31 @@ public class ZhuiXinJu extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+    try {
+        logger("▶️ [播放] flag=" + flag + " id=" + id);
+
+        // 将网盘链接转发给 Cloud 处理
         try {
-            logger("▶️ [播放] flag=" + flag + " id=" + id);
-
-            // ✅ 转发给 Cloud 处理网盘链接
-            try {
-                String cloudResult = cloud.playerContent(flag, id, vipFlags);
-                if (!TextUtils.isEmpty(cloudResult) && !cloudResult.equals("{}") 
-                        && !cloudResult.equals(flag)) {
-                    logger("✅ [Cloud] 网盘播放处理成功");
-                    return cloudResult;
-                }
-            } catch (Exception e) {
-                logger("⚠️ [Cloud] 处理失败: " + e.getMessage());
+            String cloudResult = cloud.playerContent(flag, id, vipFlags);
+            if (!TextUtils.isEmpty(cloudResult) && !cloudResult.equals("{}")) {
+                logger("✅ [Cloud] 网盘解析成功");
+                return cloudResult;
             }
-
-            // 兜底：直接返回链接
-            JSONObject result = new JSONObject();
-            result.put("parse", 1);
-            result.put("url",   id);
-            return result.toString();
         } catch (Exception e) {
-            logger("🚨 [播放异常] " + e.getMessage());
-            return "{}";
+            logger("⚠️ [Cloud] 解析失败: " + e.getMessage());
         }
+
+        // 如果Cloud处理失败，返回错误信息
+        JSONObject result = new JSONObject();
+        result.put("parse", 0);
+        result.put("url", "");
+        result.put("msg", "网盘链接需要配置Cloud模块");
+        return result.toString();
+    } catch (Exception e) {
+        logger("🚨 [播放异常] " + e.getMessage());
+        return "{}";
     }
+}
 
     // ──────────────────────────────────────────────
     // 搜索
