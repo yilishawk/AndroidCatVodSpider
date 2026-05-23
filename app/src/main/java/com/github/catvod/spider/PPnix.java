@@ -18,6 +18,8 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import android.util.Base64;
+import java.util.Random;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -199,44 +201,143 @@ public class PPnix extends Spider {
 
     // ==================== 播放解析 ====================
 
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String infoId = "";
-        Matcher m = Pattern.compile("/m3u8/(\\d+)/").matcher(id);
-        if (m.find()) infoId = m.group(1);
-        String refererUrl = host + "/cn/tv/" + infoId + ".html";
+@Override
+public String playerContent(String flag, String id, List<String> vipFlags) {
+    try {
+        // 1. 直连还原基础 M3U8 链接
+        String m3u8Url = id.startsWith("http") ? id : HOST + id;
 
-        // Cookie 为空时强制补刷
-        List<Cookie> currentCookies = cookieJar.loadForRequest(HttpUrl.parse(host));
-        if (currentCookies.isEmpty()) {
-            SpiderDebug.log("PPnix: 播放前 Cookie 为空，强制补验证...");
-            get(refererUrl);
-            currentCookies = cookieJar.loadForRequest(HttpUrl.parse(host));
+        // 2. 动态构建严苛的 Referer
+        String referer = HOST + "/";
+        Matcher mInfo = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
+        if (mInfo.find()) {
+            String categoryType = id.contains("type=movie") ? "movie" : "tv";
+            referer = HOST + "/cn/" + categoryType + "/" + mInfo.group(1) + ".html";
         }
 
-        String m3u8Url = id.startsWith("http") ? id : host + id;
+        logger("▶️ [播放] 目标 URL: " + m3u8Url);
+        logger("🔗 [播放] Referer: " + referer);
+
+        // ★★★ 关键：下载 M3U8 内容并替换 TS 分片域名 ★★★
+        String modifiedM3u8Content = downloadAndModifyM3u8(m3u8Url, referer);
+        
+        if (modifiedM3u8Content != null) {
+            // 如果修改成功，将 M3U8 内容上传到临时存储或直接返回
+            // 方法1：使用 Data URI（适合小文件）
+            String dataUri = "data:application/vnd.apple.mpegurl;base64," + 
+                             Base64.getEncoder().encodeToString(modifiedM3u8Content.getBytes("UTF-8"));
+            m3u8Url = dataUri;
+            logger("✅ [播放] M3U8 内容已修改并转为 Data URI");
+        }
+
+        // 3. 构造完整的请求头
+        JSONObject headersObj = new JSONObject();
+        
+        headersObj.put("User-Agent", UA);
+        headersObj.put("Accept", "*/*");
+        headersObj.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headersObj.put("Accept-Encoding", "gzip, deflate, br");
+        headersObj.put("Connection", "keep-alive");
+        headersObj.put("Cache-Control", "no-cache");
+        headersObj.put("Referer", referer);
+        headersObj.put("Origin", HOST);
+        headersObj.put("origin", HOST);
+        headersObj.put("Sec-Fetch-Site", "same-origin");
+        headersObj.put("Sec-Fetch-Mode", "cors");
+        headersObj.put("Sec-Fetch-Dest", "empty");
+        
+        // 4. Cookie 处理
         try {
-            int randNum = new Random().nextInt(16) + 1;
-            m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
-        } catch (Exception ignored) {}
-
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", ua);
-        headers.put("Referer", refererUrl);
-
-        if (!currentCookies.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            for (Cookie cookie : currentCookies) {
-                sb.append(cookie.name()).append("=").append(cookie.value()).append("; ");
+            String completeCookie = CookieManager.getInstance().getCookie(HOST);
+            if (!TextUtils.isEmpty(completeCookie)) {
+                headersObj.put("Cookie", completeCookie);
+                headersObj.put("cookie", completeCookie);
+                logger("🍪 [播放] Cookie 已注入");
+                
+                java.net.URL pUrl = new java.net.URL(m3u8Url);
+                String playHost = pUrl.getProtocol() + "://" + pUrl.getHost();
+                CookieManager.getInstance().setCookie(playHost, completeCookie);
+                CookieManager.getInstance().flush();
+            } else {
+                logger("⚠️ [播放] 未检测到 Cookie");
             }
-            String cookieStr = sb.toString().trim();
-            if (cookieStr.endsWith(";")) cookieStr = cookieStr.substring(0, cookieStr.length() - 1);
-            headers.put("Cookie", cookieStr);
-            SpiderDebug.log("PPnix 注入 Cookie: " + cookieStr);
+        } catch (Exception ce) {
+            logger("🚨 [播放] Cookie 获取异常: " + ce.getMessage());
         }
 
-        return Result.get().url(m3u8Url).header(headers).string();
+        // 5. 组装返回 JSON
+        JSONObject result = new JSONObject();
+        result.put("parse", 0);
+        result.put("url", m3u8Url);
+        result.put("header", headersObj.toString());
+        
+        logger("📋 [播放请求头] " + headersObj.toString());
+        
+        return result.toString();
+        
+    } catch (Exception e) {
+        logger("🚨 [播放异常] " + e.getMessage());
+        e.printStackTrace();
+        return "{}";
     }
+}
+
+/**
+ * 下载 M3U8 文件并替换 TS 分片域名
+ * Python 逻辑：ipfs.ppnix.com -> 随机数字.ppnix.com
+ */
+    private String downloadAndModifyM3u8(String m3u8Url, String referer) {
+    try {
+        // 下载 M3U8 内容
+        String m3u8Content = get(m3u8Url, referer);
+        if (TextUtils.isEmpty(m3u8Content)) {
+            logger("⚠️ [M3U8] 下载失败");
+            return null;
+        }
+        
+        logger("📥 [M3U8] 原始内容长度: " + m3u8Content.length());
+        
+        // 按行处理
+        String[] lines = m3u8Content.split("\n");
+        StringBuilder modified = new StringBuilder();
+        Random random = new Random();
+        
+        for (String line : lines) {
+            if (line.startsWith("#")) {
+                // 注释行直接保留
+                modified.append(line).append("\n");
+            } else if (line.trim().startsWith("http")) {
+                // TS 分片 URL，需要替换域名
+                try {
+                    java.net.URL url = new java.net.URL(line.trim());
+                    String host = url.getHost();
+                    
+                    if (host.contains("ipfs.ppnix.com")) {
+                        // 随机 1-16 的数字前缀
+                        int randNum = random.nextInt(16) + 1;
+                        String newHost = randNum + ".ppnix.com";
+                        String newUrl = line.replace(host, newHost);
+                        modified.append(newUrl).append("\n");
+                        logger("🔀 [域名替换] " + host + " -> " + newHost);
+                    } else {
+                        modified.append(line).append("\n");
+                    }
+                } catch (Exception e) {
+                    modified.append(line).append("\n");
+                }
+            } else {
+                modified.append(line).append("\n");
+            }
+        }
+        
+        logger("✅ [M3U8] 修改完成，新内容长度: " + modified.length());
+        return modified.toString();
+        
+    } catch (Exception e) {
+        logger("🚨 [M3U8] 处理异常: " + e.getMessage());
+        return null;
+    }
+}
 
     // ==================== 搜索 ====================
 
