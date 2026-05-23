@@ -20,8 +20,15 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.*;
 
 public class PPnix extends Spider {
@@ -32,14 +39,18 @@ public class PPnix extends Spider {
 
     private AlertDialog cfDialog;
 
+    // 本地 HTTP 服务器相关
+    private static ServerSocket localServer = null;
+    private static Map<String, String> m3u8Cache = new ConcurrentHashMap<>();
+    private static int localPort = 0;
+    private static boolean serverStarted = false;
+
     // ──────────────────────────────────────────────
     // 工具方法
     // ──────────────────────────────────────────────
 
     private void logger(String msg) {
-        try { 
-            Proxy.log(msg); 
-        } catch (Exception ignored) {}
+        try { Proxy.log(msg); } catch (Exception ignored) {}
     }
 
     private Map<String, String> baseHeaders(String referer) {
@@ -87,6 +98,7 @@ public class PPnix extends Spider {
     @Override
     public void init(Context context, String extend) {
         logger("🚀 [PPnix] 初始化...");
+        startLocalHttpServer(); // 启动本地服务器
 
         if (injectCFCookie()) {
             logger("✅ [PPnix] 已有 CF Cookie，跳过 WebView");
@@ -104,7 +116,74 @@ public class PPnix extends Spider {
     }
 
     // ──────────────────────────────────────────────
-    // CF WebView 弹窗
+    // 本地 HTTP 服务器（提供修改后的 M3U8）
+    // ──────────────────────────────────────────────
+
+    private synchronized void startLocalHttpServer() {
+        if (serverStarted) return;
+        serverStarted = true;
+        new Thread(() -> {
+            try {
+                localServer = new ServerSocket(0); // 自动分配端口
+                localPort = localServer.getLocalPort();
+                logger("✅ [本地服务器] 启动成功，端口: " + localPort);
+                while (true) {
+                    try (Socket client = localServer.accept()) {
+                        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                        String requestLine = in.readLine();
+                        if (requestLine == null) continue;
+                        String[] parts = requestLine.split(" ");
+                        if (parts.length < 2) continue;
+                        String path = parts[1];
+                        
+                        if (path.startsWith("/m3u8/")) {
+                            String id = path.substring("/m3u8/".length());
+                            String content = m3u8Cache.get(id);
+                            if (content != null) {
+                                byte[] data = content.getBytes("UTF-8");
+                                OutputStream out = client.getOutputStream();
+                                out.write(("HTTP/1.1 200 OK\r\n" +
+                                        "Content-Type: application/vnd.apple.mpegurl\r\n" +
+                                        "Content-Length: " + data.length + "\r\n" +
+                                        "Connection: close\r\n\r\n").getBytes());
+                                out.write(data);
+                                out.flush();
+                                logger("📤 [M3U8服务] 提供内容，id=" + id);
+                            } else {
+                                client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+                            }
+                        } else {
+                            client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+                        }
+                    } catch (Exception e) {
+                        logger("🚨 [本地服务器] 请求处理异常: " + e.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                logger("🚨 [本地服务器] 启动失败: " + e.getMessage());
+                serverStarted = false;
+            }
+        }).start();
+    }
+
+    /** 注册 M3U8 内容，返回本地访问 URL */
+    private String registerM3u8(String content) {
+        if (!serverStarted || localPort == 0) {
+            logger("⚠️ [注册] 本地服务器未就绪");
+            return null;
+        }
+        String id = System.currentTimeMillis() + "_" + new Random().nextInt(10000);
+        m3u8Cache.put(id, content);
+        // 简单清理：保留最近 50 个
+        if (m3u8Cache.size() > 50) {
+            String first = m3u8Cache.keySet().iterator().next();
+            m3u8Cache.remove(first);
+        }
+        return "http://127.0.0.1:" + localPort + "/m3u8/" + id;
+    }
+
+    // ──────────────────────────────────────────────
+    // CF WebView 弹窗（保持原有，可隐藏但暂不修改）
     // ──────────────────────────────────────────────
 
     private void showCFWebView() {
@@ -377,16 +456,15 @@ public class PPnix extends Spider {
     }
 
     // ──────────────────────────────────────────────
-    // 播放（直接返回原始 M3U8 URL）
+    // 播放（核心：下载 M3U8 -> 替换 TS 域名 -> 本地 HTTP 服务）
     // ──────────────────────────────────────────────
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            // 1. 直连还原基础 M3U8 链接
             String m3u8Url = id.startsWith("http") ? id : HOST + id;
 
-            // 2. 动态构建 Referer
+            // 构建 Referer
             String referer = HOST + "/";
             Matcher mInfo = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
             if (mInfo.find()) {
@@ -394,65 +472,109 @@ public class PPnix extends Spider {
                 referer = HOST + "/cn/" + categoryType + "/" + mInfo.group(1) + ".html";
             }
 
-            logger("▶️ [播放] 目标 URL: " + m3u8Url);
+            logger("▶️ [播放] 原始 M3U8: " + m3u8Url);
             logger("🔗 [播放] Referer: " + referer);
 
-            // 3. 构造完整的请求头
+            // 下载并修改 M3U8 内容
+            String modifiedContent = downloadAndModifyM3u8(m3u8Url, referer);
+            String finalUrl;
+
+            if (modifiedContent != null) {
+                finalUrl = registerM3u8(modifiedContent);
+                if (finalUrl != null) {
+                    logger("✅ [播放] 使用本地代理: " + finalUrl);
+                } else {
+                    finalUrl = m3u8Url;
+                    logger("⚠️ [播放] 本地代理失效，回退原始 URL");
+                }
+            } else {
+                finalUrl = m3u8Url;
+                logger("⚠️ [播放] M3U8 修改失败，使用原始 URL");
+            }
+
+            // 构造请求头（用于播放器请求 M3U8，但对于本地 URL 其实不需要，但保留无害）
             JSONObject headersObj = new JSONObject();
-            
-            // 基础请求头
             headersObj.put("User-Agent", UA);
             headersObj.put("Accept", "*/*");
             headersObj.put("Accept-Language", "zh-CN,zh;q=0.9");
             headersObj.put("Accept-Encoding", "gzip, deflate, br");
             headersObj.put("Connection", "keep-alive");
             headersObj.put("Cache-Control", "no-cache");
-            
-            // 关键反爬请求头 - Origin 在这里添加
             headersObj.put("Referer", referer);
-            headersObj.put("Origin", HOST);           // 标准写法: https://www.ppnix.com
-            headersObj.put("origin", HOST);            // 小写容错
+            headersObj.put("Origin", HOST);
+            headersObj.put("origin", HOST);
             headersObj.put("Sec-Fetch-Site", "same-origin");
             headersObj.put("Sec-Fetch-Mode", "cors");
             headersObj.put("Sec-Fetch-Dest", "empty");
-            
-            // 4. 从 CookieManager 获取完整的破盾 Cookie
+
+            // Cookie 注入（对 TS 分片请求有效）
             try {
-                String completeCookie = CookieManager.getInstance().getCookie(HOST);
-                if (!TextUtils.isEmpty(completeCookie)) {
-                    headersObj.put("Cookie", completeCookie);
-                    headersObj.put("cookie", completeCookie);
+                String cookie = CookieManager.getInstance().getCookie(HOST);
+                if (!TextUtils.isEmpty(cookie)) {
+                    headersObj.put("Cookie", cookie);
+                    headersObj.put("cookie", cookie);
                     logger("🍪 [播放] Cookie 已注入");
-                    
-                    // 同步 Cookie 到播放域名
-                    URL pUrl = new URL(m3u8Url);
-                    String playHost = pUrl.getProtocol() + "://" + pUrl.getHost();
-                    CookieManager.getInstance().setCookie(playHost, completeCookie);
-                    CookieManager.getInstance().flush();
                 } else {
-                    logger("⚠️ [播放] 未检测到 Cookie");
+                    logger("⚠️ [播放] 无 Cookie");
                 }
-            } catch (Exception ce) {
-                logger("🚨 [播放] Cookie 获取异常: " + ce.getMessage());
+            } catch (Exception e) {
+                logger("🚨 [播放] Cookie 异常: " + e.getMessage());
             }
 
-            // 5. 直接返回原始 M3U8 URL（不转换 Data URI）
             JSONObject result = new JSONObject();
-            result.put("parse", 0);          // 0 代表点击直连，不走二次解析
-            result.put("url", m3u8Url);      // 直接返回原始 M3U8 URL
-            
-            // header 必须是 String 类型（FongMi 规范）
+            result.put("parse", 0);
+            result.put("url", finalUrl);
             result.put("header", headersObj.toString());
-            
-            logger("📋 [播放] 返回原始 URL: " + m3u8Url);
-            logger("📋 [播放请求头] " + headersObj.toString());
-            
             return result.toString();
-            
+
         } catch (Exception e) {
             logger("🚨 [播放异常] " + e.getMessage());
             e.printStackTrace();
             return "{}";
+        }
+    }
+
+    /**
+     * 下载 M3U8 文件并替换 TS 分片域名
+     * ipfs.ppnix.com -> 随机数字.ppnix.com
+     */
+    private String downloadAndModifyM3u8(String m3u8Url, String referer) {
+        try {
+            String content = get(m3u8Url, referer);
+            if (TextUtils.isEmpty(content)) {
+                logger("⚠️ [M3U8] 下载失败");
+                return null;
+            }
+
+            logger("📥 [M3U8] 原始内容长度: " + content.length());
+            String[] lines = content.split("\n");
+            StringBuilder modified = new StringBuilder();
+            Random random = new Random();
+            int replaceCount = 0;
+
+            for (String line : lines) {
+                if (line.startsWith("#")) {
+                    modified.append(line).append("\n");
+                } else if (line.trim().startsWith("http")) {
+                    String newLine = line;
+                    if (line.contains("ipfs.ppnix.com")) {
+                        int num = random.nextInt(16) + 1;
+                        newLine = line.replace("ipfs.ppnix.com", num + ".ppnix.com");
+                        replaceCount++;
+                        if (replaceCount <= 5) {
+                            logger("🔀 [域名替换] " + line.substring(0, Math.min(80, line.length())) + " -> " + num + ".ppnix.com");
+                        }
+                    }
+                    modified.append(newLine).append("\n");
+                } else {
+                    modified.append(line).append("\n");
+                }
+            }
+            logger("✅ [M3U8] 完成，共替换 " + replaceCount + " 个 TS 域名");
+            return modified.toString();
+        } catch (Exception e) {
+            logger("🚨 [M3U8] 处理异常: " + e.getMessage());
+            return null;
         }
     }
 
