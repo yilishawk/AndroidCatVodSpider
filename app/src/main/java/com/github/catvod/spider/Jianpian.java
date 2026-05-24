@@ -16,7 +16,7 @@ public class Jianpian extends Spider {
     private String host = "https://api.ztcgi.com";
     private static HashMap<String, String[]> tmdbCache = new HashMap<>();
 
-    // 只保留获取 JSON 数据必须的 User-Agent
+    // 只保留获取JSON 数据必须的 User-Agent
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile");
