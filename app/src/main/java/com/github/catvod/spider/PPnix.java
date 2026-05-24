@@ -1,354 +1,105 @@
 package com.github.catvod.spider;
 
-import android.app.AlertDialog;
 import android.content.Context;
-import android.graphics.drawable.ColorDrawable;
 import android.text.TextUtils;
-import android.view.ViewGroup;
-import android.webkit.CookieManager;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-import android.widget.FrameLayout;
 
-import com.github.catvod.crawler.Spider;
-import com.github.catvod.net.OkResult;
+import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Result;
+import com.github.catvod.bean.Vod;
+import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Util;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.URL;
-import java.net.URLDecoder;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+/**
+ * PPnix 影视 (ppnix.com)
+ */
 public class PPnix extends Spider {
 
-    private static final String HOST      = "https://www.ppnix.com";
-    private static final String UA        = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
-    private static final String PLAY_FROM = "PPnix";
+    private final String host = "https://www.ppnix.com";
+    private final String common_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-    private AlertDialog cfDialog;
-
-    // 本地HTTP 服务器相关
-    private static ServerSocket localServer = null;
-    private static Map<String, String> m3u8Cache = new ConcurrentHashMap<>();
-    private static int localPort = 0;
-    private static boolean serverStarted = false;
-
-    // ──────────────────────────────────────────────
-    // 工具方法
-    // ──────────────────────────────────────────────
-
-    private void logger(String msg) {
-        try { Proxy.log(msg); } catch (Exception ignored) {}
+    private Map<String, String> getHeader() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", common_ua);
+        headers.put("Referer", host + "/");
+        return headers;
     }
-
-    private Map<String, String> baseHeaders(String referer) {
-        Map<String, String> h = new HashMap<>();
-        h.put("User-Agent", UA);
-        h.put("Referer", TextUtils.isEmpty(referer) ? HOST + "/" : referer);
-        return h;
-    }
-
-    private String get(String url, String referer) {
-        try {
-            return KaiGeNet.smartRequest(HOST, "get", url, null, baseHeaders(referer)).getBody();
-        } catch (Exception e) {
-            logger("🚨 [请求失败] " + url + " → " + e.getMessage());
-            return "";
-        }
-    }
-
-    /** 判断响应是否被 CF 拦截 */
-    private boolean isCFBlocked(String html) {
-        if (TextUtils.isEmpty(html)) return true;
-        return html.contains("cf-browser-verification")
-            || html.contains("Just a moment")
-            || html.contains("Checking your browser")
-            || html.contains("challenge-platform");
-    }
-
-    /** 从 CookieManager 取出全部 Cookie 并注入 KaiGeNet */
-    private boolean injectCFCookie() {
-        try {
-            String cookie = CookieManager.getInstance().getCookie(HOST);
-            if (!TextUtils.isEmpty(cookie) && cookie.contains("cf_clearance")) {
-                KaiGeNet.putCookie(HOST, cookie);
-                logger("🍪 [CF] Cookie 注入成功: " + cookie);
-                return true;
-            }
-        } catch (Exception ignored) {}
-        return false;
-    }
-
-    // ──────────────────────────────────────────────
-    // 生命周期
-    // ──────────────────────────────────────────────
 
     @Override
     public void init(Context context, String extend) {
-        logger("🚀 [PPnix] 初始化...");
-        startLocalHttpServer(); // 启动本地服务器
-
-        if (injectCFCookie()) {
-            logger("✅ [PPnix] 已有 CF Cookie，跳过 WebView");
-            return;
-        }
-
-        String testHtml = get(HOST, "");
-        if (!isCFBlocked(testHtml)) {
-            logger("✅ [PPnix] 无需 CF 验证，直接通过");
-            return;
-        }
-
-        logger("⚠️ [PPnix] 检测到 CF 盾，弹出 WebView 验证...");
-        Init.run(this::showCFWebView);
+        super.init(context, extend);
     }
-
-    // ──────────────────────────────────────────────
-    // 本地 HTTP 服务器（提供修改后的 M3U8）
-    // ──────────────────────────────────────────────
-
-    private synchronized void startLocalHttpServer() {
-        if (serverStarted) return;
-        serverStarted = true;
-        new Thread(() -> {
-            try {
-                localServer = new ServerSocket(0); // 自动分配端口
-                localPort = localServer.getLocalPort();
-                logger("✅ [本地服务器] 启动成功，端口: " + localPort);
-                while (true) {
-                    try (Socket client = localServer.accept()) {
-                        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-                        String requestLine = in.readLine();
-                        if (requestLine == null) continue;
-                        String[] parts = requestLine.split(" ");
-                        if (parts.length < 2) continue;
-                        String path = parts[1];
-                        
-                        if (path.startsWith("/m3u8/")) {
-                            String id = path.substring("/m3u8/".length());
-                            String content = m3u8Cache.get(id);
-                            if (content != null) {
-                                byte[] data = content.getBytes("UTF-8");
-                                OutputStream out = client.getOutputStream();
-                                out.write(("HTTP/1.1 200 OK\r\n" +
-                                        "Content-Type: application/vnd.apple.mpegurl\r\n" +
-                                        "Content-Length: " + data.length + "\r\n" +
-                                        "Connection: close\r\n\r\n").getBytes());
-                                out.write(data);
-                                out.flush();
-                                logger("📤 [M3U8服务] 提供内容，id=" + id);
-                            } else {
-                                client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
-                            }
-                        } else {
-                            client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
-                        }
-                    } catch (Exception e) {
-                        logger("🚨 [本地服务器] 请求处理异常: " + e.getMessage());
-                    }
-                }
-            } catch (Exception e) {
-                logger("🚨 [本地服务器] 启动失败: " + e.getMessage());
-                serverStarted = false;
-            }
-        }).start();
-    }
-
-    /** 注册 M3U8 内容，返回本地访问 URL */
-    private String registerM3u8(String content) {
-        if (!serverStarted || localPort == 0) {
-            logger("⚠️ [注册] 本地服务器未就绪");
-            return null;
-        }
-        String id = System.currentTimeMillis() + "_" + new Random().nextInt(10000);
-        m3u8Cache.put(id, content);
-        // 简单清理：保留最近 50 个
-        if (m3u8Cache.size() > 50) {
-            String first = m3u8Cache.keySet().iterator().next();
-            m3u8Cache.remove(first);
-        }
-        return "http://127.0.0.1:" + localPort + "/m3u8/" + id;
-    }
-
-    // ──────────────────────────────────────────────
-    // CF WebView 弹窗（保持原有，可隐藏但暂不修改）
-    // ──────────────────────────────────────────────
-
-    private void showCFWebView() {
-        try {
-            WebView webView = new WebView(Init.context());
-            WebSettings settings = webView.getSettings();
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-            settings.setUserAgentString(UA);
-            settings.setLoadWithOverviewMode(true);
-            settings.setUseWideViewPort(true);
-
-            CookieManager.getInstance().setAcceptCookie(true);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-
-            webView.setWebViewClient(new WebViewClient() {
-                @Override
-                public void onPageFinished(WebView view, String url) {
-                    if (injectCFCookie()) {
-                        logger("✅ [CF WebView] 自动通过 CF 验证");
-                        Init.run(() -> dismissCFDialog());
-                    }
-                }
-            });
-
-            webView.loadUrl(HOST);
-
-            FrameLayout frame = new FrameLayout(Init.context());
-            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT);
-            frame.addView(webView, lp);
-
-            cfDialog = new AlertDialog.Builder(Init.getActivity())
-                .setTitle("请完成 CF 人机验证")
-                .setView(frame)
-                .setPositiveButton("完成", (d, w) -> {
-                    injectCFCookie();
-                    d.dismiss();
-                })
-                .setOnDismissListener(d -> {
-                    try { webView.destroy(); } catch (Exception ignored) {}
-                })
-                .create();
-
-            cfDialog.show();
-            cfDialog.getWindow().setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
-            cfDialog.getWindow().setLayout(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT);
-
-        } catch (Exception e) {
-            logger("🚨 [CF WebView] 弹窗失败: " + e.getMessage());
-        }
-    }
-
-    private void dismissCFDialog() {
-        try {
-            if (cfDialog != null && cfDialog.isShowing()) cfDialog.dismiss();
-        } catch (Exception ignored) {}
-    }
-
-    // ──────────────────────────────────────────────
-    // 首页分类
-    // ──────────────────────────────────────────────
 
     @Override
     public String homeContent(boolean filter) {
-        try {
-            JSONArray classes = new JSONArray();
-            classes.put(makeClass("电影",   "movie"));
-            classes.put(makeClass("电视剧", "tv"));
-
-            JSONObject result = new JSONObject();
-            result.put("class", classes);
-            result.put("list",  new JSONArray());
-            return result.toString();
-        } catch (Exception e) {
-            return "";
-        }
+        List<Class> classes = new ArrayList<>();
+        classes.add(new Class("movie", "电影"));
+        classes.add(new Class("tv", "电视剧"));
+        return Result.string(classes, new ArrayList<>());
     }
-
-    private JSONObject makeClass(String name, String id) throws Exception {
-        JSONObject o = new JSONObject();
-        o.put("type_name", name);
-        o.put("type_id",   id);
-        return o;
-    }
-
-    @Override
-    public String homeVideoContent() {
-        return "{\"list\":[]}";
-    }
-
-    // ──────────────────────────────────────────────
-    // 分类列表
-    // ──────────────────────────────────────────────
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
-            int page      = Integer.parseInt(pg);
-            int pageIndex = page - 1;
-            String url    = HOST + "/cn/" + tid + "/---" + pageIndex + "-.html";
-
-            logger("📂 [分类] " + tid + " 第" + page + "页 → " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
-
-            Document doc  = Jsoup.parse(html);
-            JSONArray list = new JSONArray();
-
-            for (Element li : doc.select(".lists-content ul li")) {
+            int pageIndex = Integer.parseInt(pg) - 1;
+            String url = String.format("%s/cn/%s/---%d-.html", host, tid, pageIndex);
+            
+            String html = OkHttp.string(url, getHeader());
+            Document doc = Jsoup.parse(html);
+            Elements items = doc.select(".lists-content ul li");
+            
+            List<Vod> list = new ArrayList<>();
+            for (Element li : items) {
                 Element thumbA = li.selectFirst("a.thumbnail");
                 if (thumbA == null) continue;
 
-                String vodId = thumbA.attr("href");
-                if (TextUtils.isEmpty(vodId)) continue;
-                if (!vodId.startsWith("/")) vodId = "/" + vodId;
+                String detailHref = thumbA.attr("href");
+                if (detailHref.isEmpty()) continue;
+                if (!detailHref.startsWith("/")) detailHref = "/" + detailHref;
 
                 Element img = thumbA.selectFirst("img");
-                String pic  = img != null ? (img.hasAttr("src") ? img.attr("src") : img.attr("data-src")) : "";
+                String pic = "";
+                if (img != null) {
+                    pic = img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src");
+                }
 
                 Element yearSpan = li.selectFirst(".countrie .orange");
-                String remarks   = yearSpan != null ? yearSpan.text().trim() : "";
+                String remarks = yearSpan != null ? yearSpan.text().trim() : "";
 
                 Element titleA = li.selectFirst("h2 a");
-                String name    = titleA != null ? titleA.text().trim() : "";
+                String name = titleA != null ? titleA.text().trim() : "";
 
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id",      vodId);
-                vod.put("vod_name",    name);
-                vod.put("vod_pic",     pic);
-                vod.put("vod_remarks", remarks);
-                list.put(vod);
+                list.add(new Vod(detailHref, name, pic, remarks, true));
             }
-
-            logger("✅ [分类] 获取到 " + list.length() + " 条");
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            result.put("page", page);
-            return result.toString();
+            return Result.string(list);
         } catch (Exception e) {
-            logger("🚨 [分类异常] " + e.getMessage());
-            return "{\"list\":[]}";
+            return Result.string(new ArrayList<>());
         }
     }
-
-    // ──────────────────────────────────────────────
-    // 详情页
-    // ──────────────────────────────────────────────
 
     @Override
     public String detailContent(List<String> ids) {
         try {
-            String id  = ids.get(0);
-            String url = id.startsWith("http") ? id : HOST + id;
-
-            logger("📄 [详情] → " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
-
+            String url = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+            String html = OkHttp.string(url, getHeader());
             Document doc = Jsoup.parse(html);
 
-            String name = "", year = "";
+            String name = "", year = "", pic = "";
+            String director = "", actor = "", area = "", content = "";
+
+            // 标题与年份
             Element titleElem = doc.selectFirst("h1.product-title");
             if (titleElem != null) {
                 String fullText = titleElem.text().trim();
@@ -361,269 +112,125 @@ public class PPnix extends Spider {
                 }
             }
 
-            String pic = "";
+            // 封面
             Element picElem = doc.selectFirst(".product-header img.thumb");
             if (picElem != null) {
                 pic = picElem.attr("src");
-                if (pic.startsWith("/")) pic = HOST + pic;
+                if (pic.startsWith("/")) pic = host + pic;
             }
 
-            String director = extractLinks(doc, "导演");
-            String actor    = extractLinks(doc, "主演");
-            String area     = extractLinks(doc, "国家");
-            String content  = "";
+            // 导演、演员、地区、简介 (利用 JSoup 的 :contains 选择器)
+            Element dirElem = doc.selectFirst(".product-excerpt:contains(导演) span");
+            if (dirElem != null) director = extractTextFromLinks(dirElem);
+
+            Element actElem = doc.selectFirst(".product-excerpt:contains(主演) span");
+            if (actElem != null) actor = extractTextFromLinks(actElem);
+
+            Element areaElem = doc.selectFirst(".product-excerpt:contains(国家) span");
+            if (areaElem != null) area = extractTextFromLinks(areaElem);
+
             Element descElem = doc.selectFirst(".product-excerpt:contains(简介) span");
             if (descElem != null) content = descElem.text().trim();
 
+            // 从 script 中提取 infoid 和 m3u8 数组
             String scriptText = "";
             for (Element script : doc.select("script")) {
-                String s = script.html();
-                if (s.contains("infoid") && s.contains("m3u8")) {
-                    scriptText = s;
+                String data = script.html();
+                if (data.contains("infoid") && data.contains("m3u8")) {
+                    scriptText = data;
                     break;
                 }
             }
 
-            String   infoid   = "";
-            String[] episodes = new String[0];
+            String infoid = "";
+            List<String> playUrls = new ArrayList<>();
 
-            if (!TextUtils.isEmpty(scriptText)) {
-                Matcher mId = Pattern.compile("infoid\\s*=\\s*(\\d+)").matcher(scriptText);
-                if (mId.find()) infoid = mId.group(1);
+            if (!scriptText.isEmpty()) {
+                Matcher infoMatch = Pattern.compile("infoid\\s*=\\s*(\\d+)").matcher(scriptText);
+                if (infoMatch.find()) infoid = infoMatch.group(1);
 
-                Matcher mArr = Pattern.compile("m3u8\\s*=\\s*\\[(.*?)]").matcher(scriptText);
-                if (mArr.find()) {
-                    String arrContent = mArr.group(1);
-                    List<String> epList = new ArrayList<>();
-                    Matcher mEp = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(arrContent);
-                    while (mEp.find()) epList.add(mEp.group(1));
-                    episodes = epList.toArray(new String[0]);
+                Matcher m3u8Match = Pattern.compile("m3u8\\s*=\\s*\\[(.*?)\\]").matcher(scriptText);
+                if (m3u8Match.find()) {
+                    String arrayContent = m3u8Match.group(1);
+                    Matcher epMatch = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(arrayContent);
+                    while (epMatch.find()) {
+                        String ep = epMatch.group(1);
+                        // 组装格式: 选集名称$播放地址
+                        playUrls.add(ep + "$" + "/info/m3u8/" + infoid + "/" + ep + ".m3u8");
+                    }
                 }
             }
 
-            String playFrom = "";
-            String playUrl  = "";
-            if (!TextUtils.isEmpty(infoid) && episodes.length > 0) {
-                String categoryType = id.contains("/movie/") ? "movie" : "tv";
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < episodes.length; i++) {
-                    if (i > 0) sb.append("#");
-                    sb.append("第").append(episodes[i]).append("集")
-                      .append("$")
-                      .append("/info/m3u8/").append(infoid).append("/").append(episodes[i]).append(".m3u8?type=").append(categoryType);
-                }
-                playFrom = PLAY_FROM;
-                playUrl  = sb.toString();
-                logger("✅ [详情] infoid=" + infoid + " 共" + episodes.length + "集");
-            } else {
-                logger("⚠️ [详情] 未找到播放源");
+            Vod vod = new Vod();
+            vod.setVodId(ids.get(0));
+            vod.setVodName(name);
+            vod.setVodPic(pic);
+            vod.setVodYear(year);
+            vod.setVodArea(area);
+            vod.setVodDirector(director);
+            vod.setVodActor(actor);
+            vod.setVodContent(content);
+            vod.setVodRemarks(year.isEmpty() ? "" : year + "年");
+
+            if (!playUrls.isEmpty()) {
+                vod.setVodPlayFrom("PPnix");
+                vod.setVodPlayUrl(TextUtils.join("#", playUrls));
             }
 
-            JSONObject vod = new JSONObject();
-            vod.put("vod_id",        id);
-            vod.put("vod_name",      name);
-            vod.put("vod_pic",       pic);
-            vod.put("vod_year",      year);
-            vod.put("vod_area",      area);
-            vod.put("vod_director",  director);
-            vod.put("vod_actor",     actor);
-            vod.put("vod_content",   content);
-            vod.put("vod_remarks",   TextUtils.isEmpty(year) ? "" : year + "年");
-            vod.put("vod_play_from", playFrom);
-            vod.put("vod_play_url",  playUrl);
-
-            JSONArray list = new JSONArray();
-            list.put(vod);
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            return result.toString();
+            return Result.string(vod);
         } catch (Exception e) {
-            logger("🚨 [详情异常] " + e.getMessage());
-            return "{\"list\":[]}";
+            return Result.string(new ArrayList<>());
         }
     }
 
-    private String extractLinks(Document doc, String label) {
-        try {
-            Element span = doc.selectFirst(".product-excerpt:contains(" + label + ") span");
-            if (span == null) return "";
-            List<String> texts = new ArrayList<>();
-            for (Element a : span.select("a")) texts.add(a.text().trim());
-            return TextUtils.join(", ", texts);
-        } catch (Exception e) {
-            return "";
+    // 辅助方法：提取 a 标签中的文本并用逗号拼接
+    private String extractTextFromLinks(Element parent) {
+        List<String> list = new ArrayList<>();
+        for (Element a : parent.select("a")) {
+            list.add(a.text().trim());
         }
+        return TextUtils.join(", ", list);
     }
-
-    // ──────────────────────────────────────────────
-    // 播放（核心：下载 M3U8 -> 替换 TS 域名 -> 本地 HTTP 服务）
-    // ──────────────────────────────────────────────
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            String m3u8Url = id.startsWith("http") ? id : HOST + id;
+            String m3u8Url = id.startsWith("http") ? id : host + id;
 
-            // 构建 Referer
-            String referer = HOST + "/";
-            Matcher mInfo = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
-            if (mInfo.find()) {
-                String categoryType = id.contains("type=movie") ? "movie" : "tv";
-                referer = HOST + "/cn/" + categoryType + "/" + mInfo.group(1) + ".html";
+            // 模拟 Service Worker：将 ipfs.ppnix.com 替换为 1~16 的随机数字子域名
+            if (m3u8Url.contains("ipfs.ppnix.com")) {
+                int randNum = new Random().nextInt(16) + 1; // 生成 1 到 16 的随机数
+                m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
             }
 
-            logger("▶️ [播放] 原始 M3U8: " + m3u8Url);
-            logger("🔗 [播放] Referer: " + referer);
-
-            // 下载并修改 M3U8 内容
-            String modifiedContent = downloadAndModifyM3u8(m3u8Url, referer);
-            String finalUrl;
-
-            if (modifiedContent != null) {
-                finalUrl = registerM3u8(modifiedContent);
-                if (finalUrl != null) {
-                    logger("✅ [播放] 使用本地代理: " + finalUrl);
-                } else {
-                    finalUrl = m3u8Url;
-                    logger("⚠️ [播放] 本地代理失效，回退原始 URL");
-                }
-            } else {
-                finalUrl = m3u8Url;
-                logger("⚠️ [播放] M3U8 修改失败，使用原始 URL");
+            // 提取 infoid 构造防盗链 Referer
+            String referer = host + "/";
+            Matcher match = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
+            if (match.find()) {
+                String infoid = match.group(1);
+                referer = host + "/cn/tv/" + infoid + ".html"; // 优先尝试 tv 路径
             }
 
-            // 构造请求头（用于播放器请求 M3U8，但对于本地 URL 其实不需要，但保留无害）
-            JSONObject headersObj = new JSONObject();
-            headersObj.put("User-Agent", UA);
-            headersObj.put("Accept", "*/*");
-            headersObj.put("Accept-Language", "zh-CN,zh;q=0.9");
-            headersObj.put("Accept-Encoding", "gzip, deflate, br");
-            headersObj.put("Connection", "keep-alive");
-            headersObj.put("Cache-Control", "no-cache");
-            headersObj.put("Referer", referer);
-            headersObj.put("Origin", HOST);
-            headersObj.put("origin", HOST);
-            headersObj.put("Sec-Fetch-Site", "same-origin");
-            headersObj.put("Sec-Fetch-Mode", "cors");
-            headersObj.put("Sec-Fetch-Dest", "empty");
+            Map<String, String> headers = new HashMap<>();
+            headers.put("User-Agent", common_ua);
+            headers.put("Referer", referer);
+            headers.put("Origin", host);
+            headers.put("Accept", "*/*");
+            headers.put("Sec-Fetch-Site", "same-origin");
+            headers.put("Sec-Fetch-Mode", "cors");
+            headers.put("Sec-Fetch-Dest", "empty");
+            headers.put("Accept-Encoding", "gzip, deflate, zstd");
+            headers.put("Accept-Language", "zh-CN,zh;q=0.9");
 
-            // Cookie 注入（对 TS 分片请求有效）
-            try {
-                String cookie = CookieManager.getInstance().getCookie(HOST);
-                if (!TextUtils.isEmpty(cookie)) {
-                    headersObj.put("Cookie", cookie);
-                    headersObj.put("cookie", cookie);
-                    logger("🍪 [播放] Cookie 已注入");
-                } else {
-                    logger("⚠️ [播放] 无 Cookie");
-                }
-            } catch (Exception e) {
-                logger("🚨 [播放] Cookie 异常: " + e.getMessage());
-            }
-
-            JSONObject result = new JSONObject();
-            result.put("parse", 0);
-            result.put("url", finalUrl);
-            result.put("header", headersObj.toString());
-            return result.toString();
-
+            return Result.get().url(m3u8Url).header(headers).string();
         } catch (Exception e) {
-            logger("🚨 [播放异常] " + e.getMessage());
-            e.printStackTrace();
-            return "{}";
+            return Result.get().url(id).string();
         }
     }
-
-    /**
-     * 下载 M3U8 文件并替换 TS 分片域名
-     * ipfs.ppnix.com -> 随机数字.ppnix.com
-     */
-    private String downloadAndModifyM3u8(String m3u8Url, String referer) {
-        try {
-            String content = get(m3u8Url, referer);
-            if (TextUtils.isEmpty(content)) {
-                logger("⚠️ [M3U8] 下载失败");
-                return null;
-            }
-
-            logger("📥 [M3U8] 原始内容长度: " + content.length());
-            String[] lines = content.split("\n");
-            StringBuilder modified = new StringBuilder();
-            Random random = new Random();
-            int replaceCount = 0;
-
-            for (String line : lines) {
-                if (line.startsWith("#")) {
-                    modified.append(line).append("\n");
-                } else if (line.trim().startsWith("http")) {
-                    String newLine = line;
-                    if (line.contains("ipfs.ppnix.com")) {
-                        int num = random.nextInt(16) + 1;
-                        newLine = line.replace("ipfs.ppnix.com", num + ".ppnix.com");
-                        replaceCount++;
-                        if (replaceCount <= 5) {
-                            logger("🔀 [域名替换] " + line.substring(0, Math.min(80, line.length())) + " -> " + num + ".ppnix.com");
-                        }
-                    }
-                    modified.append(newLine).append("\n");
-                } else {
-                    modified.append(line).append("\n");
-                }
-            }
-            logger("✅ [M3U8] 完成，共替换 " + replaceCount + " 个 TS 域名");
-            return modified.toString();
-        } catch (Exception e) {
-            logger("🚨 [M3U8] 处理异常: " + e.getMessage());
-            return null;
-        }
-    }
-
-    // ──────────────────────────────────────────────
-    // 搜索
-    // ──────────────────────────────────────────────
 
     @Override
     public String searchContent(String key, boolean quick) {
-        try {
-            String url  = HOST + "/search.php?searchword=" + java.net.URLEncoder.encode(key, "UTF-8");
-            logger("🔍 [搜索] → " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html)) return "{\"list\":[]}";
-
-            Document doc  = Jsoup.parse(html);
-            JSONArray list = new JSONArray();
-
-            for (Element li : doc.select(".lists-content ul li")) {
-                Element thumbA = li.selectFirst("a.thumbnail");
-                if (thumbA == null) continue;
-
-                String vodId = thumbA.attr("href");
-                if (!vodId.startsWith("/")) vodId = "/" + vodId;
-
-                Element img = thumbA.selectFirst("img");
-                String pic  = img != null ? (img.hasAttr("src") ? img.attr("src") : img.attr("data-src")) : "";
-
-                Element titleA = li.selectFirst("h2 a");
-                String name    = titleA != null ? titleA.text().trim() : "";
-
-                Element yearSpan = li.selectFirst(".countrie .orange");
-                String remarks   = yearSpan != null ? yearSpan.text().trim() : "";
-
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id",      vodId);
-                vod.put("vod_name",    name);
-                vod.put("vod_pic",     pic);
-                vod.put("vod_remarks", remarks);
-                list.put(vod);
-            }
-
-            logger("✅ [搜索] 共 " + list.length() + " 条结果");
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            return result.toString();
-        } catch (Exception e) {
-            logger("🚨 [搜索异常] " + e.getMessage());
-            return "{\"list\":[]}";
-        }
+        // Python 源码中声明未实现
+        return Result.string(new ArrayList<>());
     }
 }
