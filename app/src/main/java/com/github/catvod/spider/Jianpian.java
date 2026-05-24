@@ -310,22 +310,36 @@ public class Jianpian extends Spider {
     }
 
     private JSONArray parseJsonList(JSONArray items) throws Exception {
-        JSONArray videos = new JSONArray();
-        for (int i = 0; i < items.length(); i++) {
-            JSONObject item = items.getJSONObject(i);
-            String id = item.optString("id");
-            if (TextUtils.isEmpty(id)) continue;
-            String path = item.optString("path");
-            if (TextUtils.isEmpty(path)) path = item.optString("thumbnail");
-            JSONObject vod = new JSONObject();
-            vod.put("vod_id", id);
-            vod.put("vod_name", item.optString("title", ""));
-            vod.put("vod_pic", getImgUrl(path));
-            vod.put("vod_remarks", item.optString("mask", ""));
-            videos.put(vod);
+    JSONArray videos = new JSONArray();
+    for (int i = 0; i < items.length(); i++) {
+        JSONObject item = items.getJSONObject(i);
+        String id = item.optString("id");
+        if (TextUtils.isEmpty(id)) continue;
+
+        String title = item.optString("title", "");
+        String path = item.optString("path");
+        if (TextUtils.isEmpty(path)) path = item.optString("thumbnail");
+
+        // 1. 先尝试从 TMDB 获取补全信息（内部自带缓存）
+        // 这里我们只取图片 tmdb[1]，不改原站的标题
+        String[] tmdb = com.github.catvod.utils.TmdbUtil.getInfo(title);
+        String finalPic = tmdb[1]; 
+
+        // 2. 逻辑判断：如果 TMDB 没搜到海报，则退回使用 ZT-API 原站的图片
+        if (TextUtils.isEmpty(finalPic)) {
+            finalPic = getImgUrl(path);
         }
-        return videos;
+
+        JSONObject vod = new JSONObject();
+        vod.put("vod_id", id);
+        vod.put("vod_name", title); // 列表页依然显示原标题
+        vod.put("vod_pic", finalPic); // 图片使用补全后的
+        vod.put("vod_remarks", item.optString("mask", ""));
+        videos.put(vod);
     }
+    return videos;
+}
+
 
     // ---------- 播放解析 ----------
     @Override
