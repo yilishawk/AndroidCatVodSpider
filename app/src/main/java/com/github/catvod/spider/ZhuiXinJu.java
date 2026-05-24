@@ -273,51 +273,74 @@ public class ZhuiXinJu extends Spider {
         logger("▶️ [播放] flag=" + flag + " id=" + id);
 
         String quarkResult = quark.playerContent(flag, id, vipFlags);
-        if (!TextUtils.isEmpty(quarkResult)
-                && !quarkResult.equals("{}")
-                && !quarkResult.equals(flag)) {
+        if (TextUtils.isEmpty(quarkResult) || quarkResult.equals("{}") 
+                || quarkResult.equals(flag)) {
+            JSONObject result = new JSONObject();
+            result.put("parse", 1);
+            result.put("url", id);
+            return result.toString();
+        }
 
-            // ✅ 从 Quark 返回的 proxy 地址里提取真实直链
-            JSONObject obj = new JSONObject(quarkResult);
-            String proxyUrl = obj.optString("url", "");
+        JSONObject obj = new JSONObject(quarkResult);
+        String url = obj.optString("url", "");
 
-            // proxy 地址格式：http://127.0.0.1:9978/proxy?do=quark&type=video&url=Base64...
-            // 提取 url 参数并 Base64 解码得到真实直链
-            if (proxyUrl.contains("url=")) {
-                String encoded = proxyUrl.substring(proxyUrl.indexOf("url=") + 4);
-                if (encoded.contains("&")) {
-                    encoded = encoded.substring(0, encoded.indexOf("&"));
-                }
+        // ✅ 不管是 9978 还是 12345 的代理地址，都提取真实直链
+        if (url.contains("127.0.0.1")) {
+            // 9978 格式：?do=quark&type=video&url=Base64...&header=Base64...
+            if (url.contains("url=")) {
+                String encoded = url.substring(url.indexOf("url=") + 4);
+                if (encoded.contains("&")) encoded = encoded.substring(0, encoded.indexOf("&"));
                 String realUrl = new String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT));
-
-                // 提取 header
-                String headerEncoded = "";
-                if (proxyUrl.contains("header=")) {
-                    headerEncoded = proxyUrl.substring(proxyUrl.indexOf("header=") + 7);
-                    if (headerEncoded.contains("&")) {
-                        headerEncoded = headerEncoded.substring(0, headerEncoded.indexOf("&"));
-                    }
-                }
 
                 JSONObject result = new JSONObject();
                 result.put("parse", 0);
                 result.put("url", realUrl);
-                // 把 header 也带上
-                if (!TextUtils.isEmpty(headerEncoded)) {
+
+                // 带上 header
+                if (url.contains("header=")) {
+                    String headerEncoded = url.substring(url.indexOf("header=") + 7);
+                    if (headerEncoded.contains("&")) headerEncoded = headerEncoded.substring(0, headerEncoded.indexOf("&"));
                     String headerJson = new String(android.util.Base64.decode(headerEncoded, android.util.Base64.DEFAULT));
                     result.put("header", new JSONObject(headerJson));
                 }
-                logger("✅ [Quark] 真实直链: " + realUrl.substring(0, Math.min(80, realUrl.length())));
+                logger("✅ [Quark] 直链: " + realUrl.substring(0, Math.min(80, realUrl.length())));
                 return result.toString();
             }
 
-            return quarkResult;
+            // 12345 格式：?key=xxx → 原画质 mp4 直链
+            // 直接请求这个代理地址拿重定向后的真实 URL
+            if (url.contains("12345")) {
+                try {
+                    Map<String, String> h = new HashMap<>();
+                    h.put("User-Agent", "Mozilla/5.0");
+                    // 请求代理地址，跟随重定向，拿最终 URL
+                    OkResult res = OkHttp.get(url, new HashMap<>(), h);
+                    // 检查响应头里的 Location 或直接用响应体里的下载地址
+                    Map<String, List<String>> respHeaders = res.getResp();
+                    String location = "";
+                    if (respHeaders != null) {
+                        List<String> locs = respHeaders.get("Location");
+                        if (locs == null) locs = respHeaders.get("location");
+                        if (locs != null && !locs.isEmpty()) location = locs.get(0);
+                    }
+                    if (!TextUtils.isEmpty(location) && location.startsWith("http")) {
+                        JSONObject result = new JSONObject();
+                        result.put("parse", 0);
+                        result.put("url", location);
+                        logger("✅ [Quark原画] 重定向直链: " + location.substring(0, Math.min(80, location.length())));
+                        return result.toString();
+                    }
+                } catch (Exception e) {
+                    logger("⚠️ [Quark原画] 重定向失败: " + e.getMessage());
+                }
+                // 重定向失败，直接把 12345 地址给播放器试试
+                logger("⚠️ [Quark原画] 直接返回代理地址");
+                return quarkResult;
+            }
         }
 
-        JSONObject result = new JSONObject();
-        result.put("parse", 1);
-        result.put("url", id);
-        return result.toString();
+        logger("✅ [Quark] 直接返回: " + url.substring(0, Math.min(80, url.length())));
+        return quarkResult;
     } catch (Exception e) {
         logger("🚨 [播放异常] " + e.getMessage());
         return "{}";
