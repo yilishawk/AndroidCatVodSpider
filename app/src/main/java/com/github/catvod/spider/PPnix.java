@@ -3,9 +3,7 @@ package com.github.catvod.spider;
 import android.content.Context;
 import android.text.TextUtils;
 
-// 解决编译报错的关键：导入 Spider 父类
 import com.github.catvod.crawler.Spider;
-
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -26,6 +24,7 @@ import java.util.regex.Pattern;
 
 /**
  * PPnix 影视 (ppnix.com)
+ * 严格适配 Fongmi / CatVodSpider 标准
  */
 public class PPnix extends Spider {
 
@@ -38,7 +37,6 @@ public class PPnix extends Spider {
         headers.put("Referer", host + "/");
         return headers;
     }
-
 
     @Override
     public String homeContent(boolean filter) {
@@ -79,7 +77,13 @@ public class PPnix extends Spider {
                 Element titleA = li.selectFirst("h2 a");
                 String name = titleA != null ? titleA.text().trim() : "";
 
-                list.add(new Vod(detailHref, name, pic, remarks, true));
+                // 严格使用标准 setter 组装 Vod，避免 boolean 参数导致变文件夹
+                Vod vod = new Vod();
+                vod.setVodId(detailHref);
+                vod.setVodName(name);
+                vod.setVodPic(pic);
+                vod.setVodRemarks(remarks);
+                list.add(vod);
             }
             return Result.string(list);
         } catch (Exception e) {
@@ -97,7 +101,6 @@ public class PPnix extends Spider {
             String name = "", year = "", pic = "";
             String director = "", actor = "", area = "", content = "";
 
-            // 标题与年份
             Element titleElem = doc.selectFirst("h1.product-title");
             if (titleElem != null) {
                 String fullText = titleElem.text().trim();
@@ -110,14 +113,12 @@ public class PPnix extends Spider {
                 }
             }
 
-            // 封面
             Element picElem = doc.selectFirst(".product-header img.thumb");
             if (picElem != null) {
                 pic = picElem.attr("src");
                 if (pic.startsWith("/")) pic = host + pic;
             }
 
-            // 导演、演员、地区、简介
             Element dirElem = doc.selectFirst(".product-excerpt:contains(导演) span");
             if (dirElem != null) director = extractTextFromLinks(dirElem);
 
@@ -130,10 +131,10 @@ public class PPnix extends Spider {
             Element descElem = doc.selectFirst(".product-excerpt:contains(简介) span");
             if (descElem != null) content = descElem.text().trim();
 
-            // 从 script 中提取 infoid 和 m3u8 数组
             String scriptText = "";
             for (Element script : doc.select("script")) {
-                String data = script.html();
+                // 严格使用 data() 避免 HTML 实体转义破坏正则
+                String data = script.data();
                 if (data.contains("infoid") && data.contains("m3u8")) {
                     scriptText = data;
                     break;
@@ -180,7 +181,6 @@ public class PPnix extends Spider {
         }
     }
 
-    // 辅助方法：提取 a 标签中的文本并用逗号拼接
     private String extractTextFromLinks(Element parent) {
         List<String> list = new ArrayList<>();
         for (Element a : parent.select("a")) {
@@ -194,13 +194,11 @@ public class PPnix extends Spider {
         try {
             String m3u8Url = id.startsWith("http") ? id : host + id;
 
-            // 模拟 Service Worker：将 ipfs.ppnix.com 替换为 1~16 的随机数字子域名
             if (m3u8Url.contains("ipfs.ppnix.com")) {
                 int randNum = new Random().nextInt(16) + 1;
                 m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
             }
 
-            // 提取 infoid 构造防盗链 Referer
             String referer = host + "/";
             Matcher match = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
             if (match.find()) {
@@ -212,6 +210,7 @@ public class PPnix extends Spider {
             headers.put("User-Agent", common_ua);
             headers.put("Referer", referer);
             headers.put("Origin", host);
+            // 保持 Fongmi 原生请求头规范，直接透传
             headers.put("Accept", "*/*");
             headers.put("Sec-Fetch-Site", "same-origin");
             headers.put("Sec-Fetch-Mode", "cors");
@@ -219,6 +218,7 @@ public class PPnix extends Spider {
             headers.put("Accept-Encoding", "gzip, deflate, zstd");
             headers.put("Accept-Language", "zh-CN,zh;q=0.9");
 
+            // 严格使用 Fongmi 规范的 Result 构造播放器返回值
             return Result.get().url(m3u8Url).header(headers).string();
         } catch (Exception e) {
             return Result.get().url(id).string();
