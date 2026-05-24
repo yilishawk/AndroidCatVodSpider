@@ -19,7 +19,8 @@ public class ZhuiXinJu extends Spider {
     private static final String HOST = "https://zhuixinju.com";
     private static final String UA   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
-    private Cloud cloud = new Cloud();
+    // ✅ 只用 Quark，不用 Cloud（避免触发天翼等其他网盘登录弹窗）
+    private Quark quark = new Quark();
 
     // ──────────────────────────────────────────────
     // 工具
@@ -53,10 +54,11 @@ public class ZhuiXinJu extends Spider {
     public void init(Context context, String extend) {
         logger("🚀 [追新剧] 初始化...");
         try {
-            cloud.init(context, extend);
-            logger("✅ [追新剧] Cloud网盘模块初始化完成");
+            // extend 里的 cookie 字段直接给夸克
+            quark.init(context, extend);
+            logger("✅ [追新剧] 夸克初始化完成");
         } catch (Exception e) {
-            logger("⚠️ [追新剧] Cloud初始化失败: " + e.getMessage());
+            logger("⚠️ [追新剧] 初始化失败: " + e.getMessage());
         }
     }
 
@@ -112,21 +114,25 @@ public class ZhuiXinJu extends Spider {
             Document doc  = Jsoup.parse(html);
             JSONArray list = new JSONArray();
 
-            for (Element article : doc.select("article")) {
-                Element titleElem = article.selectFirst("h2 a, h1 a, .entry-title a");
-                if (titleElem == null) continue;
+            // ✅ 正确选择器：div.item-jx
+            for (Element item : doc.select("div.item-jx")) {
+                // vod_id：thumb 里的 a href
+                Element thumbA = item.selectFirst("div.thumb a");
+                if (thumbA == null) continue;
+                String vodId = thumbA.attr("href");
+                if (TextUtils.isEmpty(vodId)) continue;
 
-                String vodId = titleElem.attr("href");
-                String name  = titleElem.text().trim();
-                if (TextUtils.isEmpty(vodId) || TextUtils.isEmpty(name)) continue;
+                // vod_name：h5 a
+                Element titleA = item.selectFirst("h5 a");
+                String name = titleA != null ? titleA.text().trim() : "";
 
-                String pic = "";
-                Element img = article.selectFirst("img");
-                if (img != null) pic = img.hasAttr("src") ? img.attr("src") : img.attr("data-src");
+                // vod_pic：thumb img src
+                Element img = item.selectFirst("div.thumb img");
+                String pic  = img != null ? img.attr("src") : "";
 
-                String remarks = "";
-                Element cat = article.selectFirst(".entry-category, .cat-links a, .article-meta a[rel=category]");
-                if (cat != null) remarks = cat.text().trim();
+                // vod_remarks：分类 + 时间
+                Element sortA = item.selectFirst("div.sortbox a.sort");
+                String remarks = sortA != null ? sortA.text().trim() : "";
 
                 JSONObject vod = new JSONObject();
                 vod.put("vod_id",      vodId);
@@ -166,7 +172,7 @@ public class ZhuiXinJu extends Spider {
             Element titleElem = doc.selectFirst("h1.post-title, h1.entry-title");
             if (titleElem != null) name = titleElem.text().trim();
 
-            // ── 封面 ──
+            // ── 封面：正文第一张图 ──
             String pic = "";
             Element picElem = doc.selectFirst(".article-body img, .entry-content img");
             if (picElem != null) {
@@ -200,41 +206,39 @@ public class ZhuiXinJu extends Spider {
             Matcher mYear = Pattern.compile("(19|20)\\d{2}").matcher(name);
             if (mYear.find()) year = mYear.group();
 
-            // ── 提取所有网盘链接 ──
-            List<String> panLinks = new ArrayList<>();
+            // ── 提取夸克网盘链接 ──
+            List<String> quarkLinks = new ArrayList<>();
             for (Element a : doc.select(".article-body a[href], .entry-content a[href], blockquote a[href]")) {
                 String href = a.attr("href");
-                if (isPanLink(href) && !panLinks.contains(href)) {
-                    panLinks.add(href);
-                    logger("🔗 [详情] 发现网盘链接: " + href);
+                if (href.contains("pan.quark.cn") && !quarkLinks.contains(href)) {
+                    quarkLinks.add(href);
+                    logger("🔗 [详情] 发现夸克链接: " + href);
                 }
             }
 
-            // ── 交给 Cloud 解析网盘链接成播放列表 ──
+            // ── 交给 Quark 解析分享链接，获取每一集的文件列表 ──
             String playFrom = "";
             String playUrl  = "";
 
-            if (!panLinks.isEmpty()) {
+            if (!quarkLinks.isEmpty()) {
                 try {
-                    // Cloud.detailContent 接收网盘分享链接列表
-                    // 返回标准 vod JSON，内含 vod_play_from 和 vod_play_url
-                    String cloudResult = cloud.detailContent(panLinks);
-                    if (!TextUtils.isEmpty(cloudResult)) {
-                        JSONObject cloudJson = new JSONObject(cloudResult);
-                        JSONArray  cloudList = cloudJson.optJSONArray("list");
-                        if (cloudList != null && cloudList.length() > 0) {
-                            JSONObject cloudVod = cloudList.getJSONObject(0);
-                            playFrom = cloudVod.optString("vod_play_from", "");
-                            playUrl  = cloudVod.optString("vod_play_url",  "");
-                            logger("✅ [Cloud] 网盘解析成功，共"
-                                + (playUrl.split("#").length) + "集");
+                    String quarkResult = quark.detailContent(quarkLinks);
+                    if (!TextUtils.isEmpty(quarkResult)) {
+                        JSONObject quarkJson = new JSONObject(quarkResult);
+                        JSONArray  quarkList = quarkJson.optJSONArray("list");
+                        if (quarkList != null && quarkList.length() > 0) {
+                            JSONObject quarkVod = quarkList.getJSONObject(0);
+                            playFrom = quarkVod.optString("vod_play_from", "");
+                            playUrl  = quarkVod.optString("vod_play_url",  "");
+                            logger("✅ [Quark] 解析成功，共 "
+                                + playUrl.split("#").length + " 集");
                         }
                     }
                 } catch (Exception e) {
-                    logger("⚠️ [Cloud] 解析失败: " + e.getMessage());
+                    logger("⚠️ [Quark] 解析失败: " + e.getMessage());
                 }
             } else {
-                logger("⚠️ [详情] 未找到网盘链接");
+                logger("⚠️ [详情] 未找到夸克链接");
             }
 
             JSONObject vod = new JSONObject();
@@ -259,20 +263,6 @@ public class ZhuiXinJu extends Spider {
         }
     }
 
-    private boolean isPanLink(String url) {
-        if (TextUtils.isEmpty(url)) return false;
-        return url.contains("pan.quark.cn")
-            || url.contains("drive.uc.cn")
-            || url.contains("pan.baidu.com")
-            || url.contains("aliyundrive.com")
-            || url.contains("alipan.com")
-            || url.contains("123pan.com")
-            || url.contains("123684.com")
-            || url.contains("123912.com")
-            || url.contains("yun.139.com")
-            || url.contains("caiyun.139.com");
-    }
-
     // ──────────────────────────────────────────────
     // 播放
     // ──────────────────────────────────────────────
@@ -282,13 +272,13 @@ public class ZhuiXinJu extends Spider {
         try {
             logger("▶️ [播放] flag=" + flag + " id=" + id);
 
-            // ✅ 转发给 Cloud 处理，Cloud 根据 flag 路由到对应网盘解析直链
-            String cloudResult = cloud.playerContent(flag, id, vipFlags);
-            if (!TextUtils.isEmpty(cloudResult)
-                    && !cloudResult.equals("{}")
-                    && !cloudResult.equals(flag)) {
-                logger("✅ [Cloud] 播放解析成功");
-                return cloudResult;
+            // ✅ 转发给 Quark 解析每集直链
+            String quarkResult = quark.playerContent(flag, id, vipFlags);
+            if (!TextUtils.isEmpty(quarkResult)
+                    && !quarkResult.equals("{}")
+                    && !quarkResult.equals(flag)) {
+                logger("✅ [Quark] 播放解析成功");
+                return quarkResult;
             }
 
             // 兜底
@@ -317,17 +307,17 @@ public class ZhuiXinJu extends Spider {
             Document doc  = Jsoup.parse(html);
             JSONArray list = new JSONArray();
 
-            for (Element article : doc.select("article")) {
-                Element titleElem = article.selectFirst("h2 a, h1 a, .entry-title a");
-                if (titleElem == null) continue;
-
-                String vodId = titleElem.attr("href");
-                String name  = titleElem.text().trim();
+            for (Element item : doc.select("div.item-jx")) {
+                Element thumbA = item.selectFirst("div.thumb a");
+                if (thumbA == null) continue;
+                String vodId = thumbA.attr("href");
                 if (TextUtils.isEmpty(vodId)) continue;
 
-                String pic = "";
-                Element img = article.selectFirst("img");
-                if (img != null) pic = img.hasAttr("src") ? img.attr("src") : img.attr("data-src");
+                Element titleA = item.selectFirst("h5 a");
+                String name = titleA != null ? titleA.text().trim() : "";
+
+                Element img = item.selectFirst("div.thumb img");
+                String pic  = img != null ? img.attr("src") : "";
 
                 JSONObject vod = new JSONObject();
                 vod.put("vod_id",   vodId);
