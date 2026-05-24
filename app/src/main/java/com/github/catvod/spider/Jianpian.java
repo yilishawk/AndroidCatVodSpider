@@ -6,8 +6,6 @@ import android.text.TextUtils;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
-import com.github.catvod.utils.Json;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,13 +19,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * ZT-API 爬虫 (详情加速版)
+ * ZT-API 爬虫 (采集站高清图 + 详情加速版)
  * 站点: https://api.ztcgi.com
+ * 图片: https://hongniuzy.tv 采集接口
  */
 public class Jianpian extends Spider {
 
     private String host = "https://api.ztcgi.com";
-    private String imgHost = "https://img.jgsfnl.com";
+    private String cjHost = "https://hongniuzy.tv";
     private Map<String, String> headers;
 
     public Jianpian() {
@@ -39,21 +38,20 @@ public class Jianpian extends Spider {
 
     @Override
     public void init(Context context, String extend) {
-        // 可扩展配置
         if (!TextUtils.isEmpty(extend)) {
             try {
                 JSONObject cfg = new JSONObject(extend);
                 if (cfg.has("host")) host = cfg.optString("host");
-                if (cfg.has("imgHost")) imgHost = cfg.optString("imgHost");
+                if (cfg.has("cjHost")) cjHost = cfg.optString("cjHost");
             } catch (Exception e) {
                 SpiderDebug.log("[ZT-API] 解析扩展配置失败: " + e.getMessage());
             }
         }
-        SpiderDebug.log("[ZT-API] 初始化完成，host: " + host);
+        SpiderDebug.log("[ZT-API] 初始化完成，host: " + host + ", cjHost: " + cjHost);
     }
 
     public String getName() {
-        return "ZT-API(详情加速版)";
+        return "ZT-API(采集站高清图)";
     }
 
     // ---------- 工具方法 ----------
@@ -61,11 +59,40 @@ public class Jianpian extends Spider {
         return OkHttp.string(url, headers);
     }
 
-    private String getImgUrl(String path) {
-        if (TextUtils.isEmpty(path)) return "";
-        String p = path.trim();
-        if (!p.startsWith("/")) p = "/" + p;
-        return imgHost + p;
+    // 从采集站获取图片，完全匹配标题
+    private String getCjPic(String title) {
+        if (TextUtils.isEmpty(title)) return "";
+        try {
+            String url = cjHost + "/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(title, "UTF-8");
+            String resp = OkHttp.string(url, headers);
+            JSONObject obj = new JSONObject(resp);
+            if (obj.optInt("code") == 1) {
+                JSONArray list = obj.optJSONArray("list");
+                if (list != null && list.length() > 0) {
+                    // 1. 先找完全匹配的
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject item = list.getJSONObject(i);
+                        String name = item.optString("name", "");
+                        if (title.equals(name)) {
+                            String pic = item.optString("pic", "");
+                            if (!TextUtils.isEmpty(pic)) {
+                                SpiderDebug.log("[CJ] 完全匹配: " + title + " -> " + pic);
+                                return pic;
+                            }
+                        }
+                    }
+                    // 2. 没找到完全匹配的，用第一个结果兜底
+                    String pic = list.getJSONObject(0).optString("pic", "");
+                    if (!TextUtils.isEmpty(pic)) {
+                        SpiderDebug.log("[CJ] 模糊匹配: " + title + " -> " + pic);
+                        return pic;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[CJ] 采集图片失败: " + e.getMessage());
+        }
+        return "";
     }
 
     // ---------- 首页 ----------
@@ -90,10 +117,34 @@ public class Jianpian extends Spider {
             }
             result.put("class", classes);
 
+            // 获取首页推荐列表
+            try {
+                String homeUrl = host + "/api/crumb/list?page=1&sort=hot";
+                SpiderDebug.log("[ZT-API] 请求首页: " + homeUrl);
+                JSONObject homeObj = new JSONObject(fetch(homeUrl));
+                SpiderDebug.log("[ZT-API] 首页code: " + homeObj.optInt("code"));
+                if (homeObj.optInt("code") == 1) {
+                    JSONArray data = homeObj.optJSONArray("data");
+                    if (data != null && data.length() > 0) {
+                        JSONArray list = parseJsonList(data);
+                        SpiderDebug.log("[ZT-API] 首页list长度: " + list.length());
+                        result.put("list", list);
+                    } else {
+                        SpiderDebug.log("[ZT-API] 首页data为空");
+                        result.put("list", new JSONArray());
+                    }
+                } else {
+                    SpiderDebug.log("[ZT-API] 首页code≠1");
+                    result.put("list", new JSONArray());
+                }
+            } catch (Exception e) {
+                SpiderDebug.log("[ZT-API] 首页列表异常: " + e.getMessage());
+                result.put("list", new JSONArray());
+            }
+
             if (filter) {
                 JSONObject filters = new JSONObject();
 
-                // 年份选项
                 JSONArray yearOptions = new JSONArray();
                 String[][] years = {{"全部", ""}, {"2026", "2026"}, {"2025", "107"}, {"2024", "119"}, {"2023", "153"}, {"2022", "101"}};
                 for (String[] y : years) {
@@ -103,7 +154,6 @@ public class Jianpian extends Spider {
                     yearOptions.put(opt);
                 }
 
-                // 排序选项
                 JSONArray sortOptions = new JSONArray();
                 String[][] sorts = {{"热门", "hot"}, {"评分", "rating"}, {"更新", "update"}};
                 for (String[] s : sorts) {
@@ -113,7 +163,6 @@ public class Jianpian extends Spider {
                     sortOptions.put(opt);
                 }
 
-                // 电视剧类型选项
                 JSONArray cateOptions = new JSONArray();
                 String[][] cates = {{"全部", "2"}, {"国产", "15"}, {"港台", "16"}};
                 for (String[] c : cates) {
@@ -123,20 +172,17 @@ public class Jianpian extends Spider {
                     cateOptions.put(opt);
                 }
 
-                // 国产剧筛选
                 JSONArray filter15 = new JSONArray();
                 filter15.put(createFilter("year", "年代", yearOptions));
                 filter15.put(createFilter("sort", "排序", sortOptions));
                 filters.put("15", filter15);
 
-                // 电视剧筛选
                 JSONArray filter2 = new JSONArray();
                 filter2.put(createFilter("cateId", "类型", cateOptions));
                 filter2.put(createFilter("year", "年代", yearOptions));
                 filter2.put(createFilter("sort", "排序", sortOptions));
                 filters.put("2", filter2);
 
-                // 喜剧电影、综艺、动漫筛选
                 JSONArray filterOther = new JSONArray();
                 filterOther.put(createFilter("year", "年代", yearOptions));
                 filterOther.put(createFilter("sort", "排序", sortOptions));
@@ -149,7 +195,7 @@ public class Jianpian extends Spider {
             return result.toString();
         } catch (Exception e) {
             SpiderDebug.log("[ZT-API] homeContent 错误: " + e.getMessage());
-            return "{\"class\":[], \"filters\":{}}";
+            return "{\"class\":[],\"list\":[]}";
         }
     }
 
@@ -209,11 +255,9 @@ public class Jianpian extends Spider {
             JSONObject data = obj.optJSONObject("data");
             if (data == null) return "{\"list\":[]}";
 
-            String imgPath = data.optString("thumbnail");
-            if (TextUtils.isEmpty(imgPath)) imgPath = data.optString("path");
-            String pic = getImgUrl(imgPath);
+            String title = data.optString("title", "");
+            String pic = getCjPic(title);
 
-            // 演员
             JSONArray actors = data.optJSONArray("actors");
             StringBuilder actorBuilder = new StringBuilder();
             if (actors != null) {
@@ -223,7 +267,6 @@ public class Jianpian extends Spider {
                     actorBuilder.append(a.optString("name", ""));
                 }
             }
-            // 导演
             JSONArray directors = data.optJSONArray("directors");
             StringBuilder directorBuilder = new StringBuilder();
             if (directors != null) {
@@ -234,7 +277,6 @@ public class Jianpian extends Spider {
                 }
             }
 
-            // 播放线路
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
             JSONArray sources = data.optJSONArray("source_list_source");
@@ -259,7 +301,7 @@ public class Jianpian extends Spider {
 
             JSONObject vod = new JSONObject();
             vod.put("vod_id", vodId);
-            vod.put("vod_name", data.optString("title", ""));
+            vod.put("vod_name", title);
             vod.put("vod_pic", pic);
             vod.put("vod_remarks", data.optString("mask", ""));
             vod.put("vod_actor", actorBuilder.toString());
@@ -293,7 +335,6 @@ public class Jianpian extends Spider {
             if (obj.optInt("code") == 1) {
                 JSONArray data = obj.optJSONArray("data");
                 if (data != null && data.length() > 0) {
-                    // 只取第一条数据（与 Python 一致）
                     JSONArray first = new JSONArray();
                     first.put(data.get(0));
                     JSONArray list = parseJsonList(first);
@@ -315,12 +356,12 @@ public class Jianpian extends Spider {
             JSONObject item = items.getJSONObject(i);
             String id = item.optString("id");
             if (TextUtils.isEmpty(id)) continue;
-            String path = item.optString("path");
-            if (TextUtils.isEmpty(path)) path = item.optString("thumbnail");
+            String title = item.optString("title", "");
+            String pic = getCjPic(title);
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
-            vod.put("vod_name", item.optString("title", ""));
-            vod.put("vod_pic", getImgUrl(path));
+            vod.put("vod_name", title);
+            vod.put("vod_pic", pic);
             vod.put("vod_remarks", item.optString("mask", ""));
             videos.put(vod);
         }
@@ -330,7 +371,6 @@ public class Jianpian extends Spider {
     // ---------- 播放解析 ----------
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        // 提取 vod_id 和 weight（集数名称）
         String vodId = "";
         String weight = "正片";
         Pattern p = Pattern.compile("id=(\\d+)");
@@ -341,14 +381,11 @@ public class Jianpian extends Spider {
             weight = parts[0].trim();
         }
 
-        // 构造弹幕 URL
         String danmuUrl = host + "/api/v2/comment/list?video_id=" + vodId + "&weight=" + weight + "&sort=changed&page=1&pageSize=200";
-        // 编码 weight
         try {
             danmuUrl = danmuUrl.replace(weight, URLEncoder.encode(weight, "UTF-8"));
         } catch (Exception ignored) {}
 
-        // 播放请求头（移除 Referer）
         Map<String, String> playHeader = new HashMap<>(headers);
         playHeader.remove("Referer");
 
