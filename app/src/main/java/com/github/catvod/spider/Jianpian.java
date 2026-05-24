@@ -21,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * ZT-API 爬虫 (详情加速版)
+ * ZT-API 爬虫(详情加速版)
  * 站点: https://api.ztcgi.com
  */
 public class Jianpian extends Spider {
