@@ -4,6 +4,8 @@ import android.content.Context;
 import android.text.TextUtils;
 
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
