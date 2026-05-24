@@ -8,7 +8,6 @@ import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
 import com.github.catvod.utils.Json;
-import com.github.catvod.utils.TmdbUtil;   // 引入 TMDB 工具
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -22,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * ZT-API 爬虫 (TMDB 高清图 + 详情加速版)
+ * ZT-API 爬虫 (详情加速版)
  * 站点: https://api.ztcgi.com
  */
 public class Jianpian extends Spider {
@@ -40,6 +39,7 @@ public class Jianpian extends Spider {
 
     @Override
     public void init(Context context, String extend) {
+        // 可扩展配置
         if (!TextUtils.isEmpty(extend)) {
             try {
                 JSONObject cfg = new JSONObject(extend);
@@ -53,7 +53,7 @@ public class Jianpian extends Spider {
     }
 
     public String getName() {
-        return "ZT-API(TMDB高清版)";
+        return "ZT-API(详情加速版)";
     }
 
     // ---------- 工具方法 ----------
@@ -61,27 +61,11 @@ public class Jianpian extends Spider {
         return OkHttp.string(url, headers);
     }
 
-    // 源站图片（保底）
     private String getImgUrl(String path) {
         if (TextUtils.isEmpty(path)) return "";
         String p = path.trim();
         if (!p.startsWith("/")) p = "/" + p;
         return imgHost + p;
-    }
-
-    // 优先 TMDB 图片，失败则使用源站图片
-    private String getBestPic(String title, String fallbackPath) {
-        // 尝试从 TMDB 获取
-        try {
-            String tmdbPic = TmdbUtil.getInfo(title)[1];
-            if (!TextUtils.isEmpty(tmdbPic)) {
-                return tmdbPic;
-            }
-        } catch (Exception e) {
-            SpiderDebug.log("[ZT-API] TMDB 获取封面失败: " + title);
-        }
-        // 回退源站图
-        return getImgUrl(fallbackPath);
     }
 
     // ---------- 首页 ----------
@@ -105,20 +89,6 @@ public class Jianpian extends Spider {
                 classes.put(obj);
             }
             result.put("class", classes);
-
-            // 获取首页推荐列表
-            try {
-                String homeUrl = host + "/api/crumb/list?page=1&sort=hot";
-                JSONObject homeObj = new JSONObject(fetch(homeUrl));
-                if (homeObj.optInt("code") == 1) {
-                    result.put("list", parseJsonList(homeObj.optJSONArray("data")));
-                } else {
-                    result.put("list", new JSONArray());
-                }
-            } catch (Exception e) {
-                result.put("list", new JSONArray());
-                SpiderDebug.log("[ZT-API] 首页推荐列表获取失败: " + e.getMessage());
-            }
 
             if (filter) {
                 JSONObject filters = new JSONObject();
@@ -239,10 +209,9 @@ public class Jianpian extends Spider {
             JSONObject data = obj.optJSONObject("data");
             if (data == null) return "{\"list\":[]}";
 
-            String title = data.optString("title", "");
             String imgPath = data.optString("thumbnail");
             if (TextUtils.isEmpty(imgPath)) imgPath = data.optString("path");
-            String pic = getBestPic(title, imgPath);   // 优先TMDB
+            String pic = getImgUrl(imgPath);
 
             // 演员
             JSONArray actors = data.optJSONArray("actors");
@@ -290,7 +259,7 @@ public class Jianpian extends Spider {
 
             JSONObject vod = new JSONObject();
             vod.put("vod_id", vodId);
-            vod.put("vod_name", title);
+            vod.put("vod_name", data.optString("title", ""));
             vod.put("vod_pic", pic);
             vod.put("vod_remarks", data.optString("mask", ""));
             vod.put("vod_actor", actorBuilder.toString());
@@ -346,15 +315,12 @@ public class Jianpian extends Spider {
             JSONObject item = items.getJSONObject(i);
             String id = item.optString("id");
             if (TextUtils.isEmpty(id)) continue;
-            String title = item.optString("title", "");
             String path = item.optString("path");
             if (TextUtils.isEmpty(path)) path = item.optString("thumbnail");
-            // 使用 TMDB 封面，源站路径作为保底
-            String pic = getBestPic(title, path);
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
-            vod.put("vod_name", title);
-            vod.put("vod_pic", pic);
+            vod.put("vod_name", item.optString("title", ""));
+            vod.put("vod_pic", getImgUrl(path));
             vod.put("vod_remarks", item.optString("mask", ""));
             videos.put(vod);
         }
@@ -364,6 +330,7 @@ public class Jianpian extends Spider {
     // ---------- 播放解析 ----------
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+        // 提取 vod_id 和 weight（集数名称）
         String vodId = "";
         String weight = "正片";
         Pattern p = Pattern.compile("id=(\\d+)");
@@ -374,11 +341,14 @@ public class Jianpian extends Spider {
             weight = parts[0].trim();
         }
 
+        // 构造弹幕 URL
         String danmuUrl = host + "/api/v2/comment/list?video_id=" + vodId + "&weight=" + weight + "&sort=changed&page=1&pageSize=200";
+        // 编码 weight
         try {
             danmuUrl = danmuUrl.replace(weight, URLEncoder.encode(weight, "UTF-8"));
         } catch (Exception ignored) {}
 
+        // 播放请求头（移除 Referer）
         Map<String, String> playHeader = new HashMap<>(headers);
         playHeader.remove("Referer");
 
