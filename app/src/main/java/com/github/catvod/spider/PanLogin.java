@@ -11,6 +11,7 @@ import android.widget.LinearLayout;
 import com.github.catvod.api.AliYun;
 import com.github.catvod.api.BaiDuYunHandler;
 import com.github.catvod.api.Pan123Api;
+import com.github.catvod.api.Pan123Handler;
 import com.github.catvod.api.QuarkApi;
 import com.github.catvod.api.UCApi;
 import com.github.catvod.api.UCTokenHandler;
@@ -126,8 +127,15 @@ public class PanLogin extends Spider {
                     return TextUtils.isEmpty(token) ? "❌ 未登录" : "✅ 已登录";
                 }
                 case "pan123": {
-                    String auth = Pan123Api.INSTANCE.getAuth();
-                    return TextUtils.isEmpty(auth) ? "❌ 未登录" : "✅ 已登录";
+                    String s = Path.read(Pan123Handler.INSTANCE.getCache());
+                    if (TextUtils.isEmpty(s) || s.equals("{}")) return "❌ 未登录";
+                    JSONObject obj = new JSONObject(s);
+                    JSONObject user = obj.optJSONObject("user");
+                    String cookie = user != null ? user.optString("cookie", "") : "";
+                    // 尝试显示用户名
+                    String uname = user != null ? user.optString("userName", "") : "";
+                    if (!TextUtils.isEmpty(uname)) return "✅ " + uname;
+                    return TextUtils.isEmpty(cookie) ? "❌ 未登录" : "✅ 已登录";
                 }
                 case "yun139": {
                     String token = YunTokenHandler.get().getToken();
