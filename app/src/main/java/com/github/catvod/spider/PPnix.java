@@ -39,10 +39,6 @@ public class PPnix extends Spider {
         return headers;
     }
 
-    @Override
-    public void init(Context context, String extend) {
-        super.init(context, extend);
-    }
 
     @Override
     public String homeContent(boolean filter) {
