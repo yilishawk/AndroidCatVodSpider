@@ -3,12 +3,13 @@ package com.github.catvod.spider;
 import android.content.Context;
 import android.text.TextUtils;
 
+// 解决编译报错的关键：导入 Spider 父类
 import com.github.catvod.crawler.Spider;
+
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -120,7 +121,7 @@ public class PPnix extends Spider {
                 if (pic.startsWith("/")) pic = host + pic;
             }
 
-            // 导演、演员、地区、简介 (利用 JSoup 的 :contains 选择器)
+            // 导演、演员、地区、简介
             Element dirElem = doc.selectFirst(".product-excerpt:contains(导演) span");
             if (dirElem != null) director = extractTextFromLinks(dirElem);
 
@@ -156,7 +157,6 @@ public class PPnix extends Spider {
                     Matcher epMatch = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(arrayContent);
                     while (epMatch.find()) {
                         String ep = epMatch.group(1);
-                        // 组装格式: 选集名称$播放地址
                         playUrls.add(ep + "$" + "/info/m3u8/" + infoid + "/" + ep + ".m3u8");
                     }
                 }
@@ -200,7 +200,7 @@ public class PPnix extends Spider {
 
             // 模拟 Service Worker：将 ipfs.ppnix.com 替换为 1~16 的随机数字子域名
             if (m3u8Url.contains("ipfs.ppnix.com")) {
-                int randNum = new Random().nextInt(16) + 1; // 生成 1 到 16 的随机数
+                int randNum = new Random().nextInt(16) + 1;
                 m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
             }
 
@@ -209,7 +209,7 @@ public class PPnix extends Spider {
             Matcher match = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
             if (match.find()) {
                 String infoid = match.group(1);
-                referer = host + "/cn/tv/" + infoid + ".html"; // 优先尝试 tv 路径
+                referer = host + "/cn/tv/" + infoid + ".html";
             }
 
             Map<String, String> headers = new HashMap<>();
@@ -231,7 +231,6 @@ public class PPnix extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        // Python 源码中声明未实现
         return Result.string(new ArrayList<>());
     }
 }
