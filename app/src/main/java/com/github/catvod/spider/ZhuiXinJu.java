@@ -269,28 +269,60 @@ public class ZhuiXinJu extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        try {
-            logger("▶️ [播放] flag=" + flag + " id=" + id);
+    try {
+        logger("▶️ [播放] flag=" + flag + " id=" + id);
 
-            // ✅ 转发给 Quark 解析每集直链
-            String quarkResult = quark.playerContent(flag, id, vipFlags);
-            if (!TextUtils.isEmpty(quarkResult)
-                    && !quarkResult.equals("{}")
-                    && !quarkResult.equals(flag)) {
-                logger("✅ [Quark] 播放解析成功");
-                return quarkResult;
+        String quarkResult = quark.playerContent(flag, id, vipFlags);
+        if (!TextUtils.isEmpty(quarkResult)
+                && !quarkResult.equals("{}")
+                && !quarkResult.equals(flag)) {
+
+            // ✅ 从 Quark 返回的 proxy 地址里提取真实直链
+            JSONObject obj = new JSONObject(quarkResult);
+            String proxyUrl = obj.optString("url", "");
+
+            // proxy 地址格式：http://127.0.0.1:9978/proxy?do=quark&type=video&url=Base64...
+            // 提取 url 参数并 Base64 解码得到真实直链
+            if (proxyUrl.contains("url=")) {
+                String encoded = proxyUrl.substring(proxyUrl.indexOf("url=") + 4);
+                if (encoded.contains("&")) {
+                    encoded = encoded.substring(0, encoded.indexOf("&"));
+                }
+                String realUrl = new String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT));
+
+                // 提取 header
+                String headerEncoded = "";
+                if (proxyUrl.contains("header=")) {
+                    headerEncoded = proxyUrl.substring(proxyUrl.indexOf("header=") + 7);
+                    if (headerEncoded.contains("&")) {
+                        headerEncoded = headerEncoded.substring(0, headerEncoded.indexOf("&"));
+                    }
+                }
+
+                JSONObject result = new JSONObject();
+                result.put("parse", 0);
+                result.put("url", realUrl);
+                // 把 header 也带上
+                if (!TextUtils.isEmpty(headerEncoded)) {
+                    String headerJson = new String(android.util.Base64.decode(headerEncoded, android.util.Base64.DEFAULT));
+                    result.put("header", new JSONObject(headerJson));
+                }
+                logger("✅ [Quark] 真实直链: " + realUrl.substring(0, Math.min(80, realUrl.length())));
+                return result.toString();
             }
 
-            // 兜底
-            JSONObject result = new JSONObject();
-            result.put("parse", 1);
-            result.put("url",   id);
-            return result.toString();
-        } catch (Exception e) {
-            logger("🚨 [播放异常] " + e.getMessage());
-            return "{}";
+            return quarkResult;
         }
+
+        JSONObject result = new JSONObject();
+        result.put("parse", 1);
+        result.put("url", id);
+        return result.toString();
+    } catch (Exception e) {
+        logger("🚨 [播放异常] " + e.getMessage());
+        return "{}";
     }
+}
 
     // ──────────────────────────────────────────────
     // 搜索
