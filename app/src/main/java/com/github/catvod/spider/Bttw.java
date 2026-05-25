@@ -10,7 +10,6 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -28,7 +27,7 @@ import java.util.regex.Pattern;
 
 public class Bttw extends Spider {
 
-    private String host = "https://www.4kvm.net";
+    private String host = "https://www.bttwo.org";
     private Map<String, String> headers;
 
     public Bttw() {
@@ -80,7 +79,8 @@ public class Bttw extends Spider {
         return rawTitle;
     }
 
-    private JSONArray getAreasOptions() throws Exception {
+    private List<Filter.Value> getAreasOptions() {
+        List<Filter.Value> list = new ArrayList<>();
         String[][] areas = {
             {"全部地区", ""}, {"中国", "7"}, {"美国", "5"}, {"日本", "11"},
             {"韩国", "12"}, {"英国", "30"}, {"法国", "6"}, {"德国", "18"},
@@ -88,32 +88,26 @@ public class Bttw extends Spider {
             {"俄罗斯", "16"}, {"印度", "34"}, {"泰国", "33"}, {"中国香港", "14"},
             {"中国台湾", "21"}, {"巴西", "26"}, {"阿根廷", "27"}
         };
-        JSONArray arr = new JSONArray();
         for (String[] opt : areas) {
-            JSONObject o = new JSONObject();
-            o.put("n", opt[0]);
-            o.put("v", opt[1]);
-            arr.put(o);
+            list.add(new Filter.Value(opt[0], opt[1]));
         }
-        return arr;
+        return list;
     }
 
-    private JSONArray getTvClassesOptions() throws Exception {
+    private List<Filter.Value> getTvClassesOptions() {
+        List<Filter.Value> list = new ArrayList<>();
         String[][] tv = {
             {"全部类型", ""}, {"国产剧", "20"}, {"美剧", "21"}, {"韩剧", "22"},
             {"日剧", "23"}, {"泰剧", "24"}, {"日番", "25"}, {"国漫", "26"}
         };
-        JSONArray arr = new JSONArray();
         for (String[] opt : tv) {
-            JSONObject o = new JSONObject();
-            o.put("n", opt[0]);
-            o.put("v", opt[1]);
-            arr.put(o);
+            list.add(new Filter.Value(opt[0], opt[1]));
         }
-        return arr;
+        return list;
     }
 
-    private JSONArray getTypesOptions() throws Exception {
+    private List<Filter.Value> getTypesOptions() {
+        List<Filter.Value> list = new ArrayList<>();
         String[][] types = {
             {"全部类型", ""}, {"剧情", "1"}, {"悬疑", "2"}, {"恐怖", "3"},
             {"惊悚", "4"}, {"喜剧", "5"}, {"爱情", "6"}, {"科幻", "14"},
@@ -124,14 +118,10 @@ public class Bttw extends Spider {
             {"运动", "30"}, {"武侠", "31"}, {"歌舞", "32"}, {"灾难", "34"},
             {"短片", "35"}
         };
-        JSONArray arr = new JSONArray();
         for (String[] opt : types) {
-            JSONObject o = new JSONObject();
-            o.put("n", opt[0]);
-            o.put("v", opt[1]);
-            arr.put(o);
+            list.add(new Filter.Value(opt[0], opt[1]));
         }
-        return arr;
+        return list;
     }
 
     @Override
@@ -161,17 +151,12 @@ public class Bttw extends Spider {
                 varietyFilters.add(new Filter("types", "类型", getTypesOptions()));
                 filters.put("4", varietyFilters);
                 
-                JSONObject result = new JSONObject();
-                result.put("class", new JSONArray());
-                result.put("filters", new JSONObject(filters));
-                return result.toString();
+                return Result.string(classes, filters);
             }
-            JSONObject result = new JSONObject();
-            result.put("class", new JSONArray());
-            return result.toString();
+            return Result.string(classes);
         } catch (Exception e) {
             log("homeContent 错误: " + e.getMessage());
-            return "{\"class\":[],\"filters\":{}}";
+            return Result.string(new ArrayList<>(), new LinkedHashMap<>());
         }
     }
 
@@ -206,7 +191,7 @@ public class Bttw extends Spider {
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) cards = doc.select(".group");
 
-            JSONArray videos = new JSONArray();
+            List<Vod> list = new ArrayList<>();
             for (Element card : cards) {
                 Element link = card.selectFirst("a[href^=/play/]");
                 if (link == null) continue;
@@ -225,12 +210,12 @@ public class Bttw extends Spider {
                 Element remarkElem = card.selectFirst("span.absolute.bottom-0, .remark");
                 String remark = remarkElem != null ? remarkElem.text().trim() : "";
 
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", vodId);
-                vod.put("vod_name", title);
-                vod.put("vod_pic", pic);
-                vod.put("vod_remarks", remark);
-                videos.put(vod);
+                Vod vod = new Vod();
+                vod.setVodId(vodId);
+                vod.setVodName(title);
+                vod.setVodPic(pic);
+                vod.setVodRemarks(remark);
+                list.add(vod);
             }
 
             int currentPage = Integer.parseInt(pg);
@@ -238,23 +223,17 @@ public class Bttw extends Spider {
             int pagecount = hasNext ? currentPage + 1 : currentPage;
             pagecount = Math.min(pagecount + 5, 20);
 
-            JSONObject result = new JSONObject();
-            result.put("list", videos);
-            result.put("page", currentPage);
-            result.put("pagecount", pagecount);
-            result.put("limit", videos.length());
-            result.put("total", videos.length() * pagecount);
-            return result.toString();
+            return Result.string(list, pagecount);
         } catch (Exception e) {
             log("categoryContent 错误: " + e.getMessage());
-            return "{\"list\":[],\"page\":" + pg + ",\"pagecount\":1}";
+            return Result.string(new ArrayList<>(), 1);
         }
     }
 
     @Override
     public String detailContent(List<String> ids) {
         try {
-            if (ids == null || ids.isEmpty()) return "{\"list\":[]}";
+            if (ids == null || ids.isEmpty()) return Result.string(new ArrayList<>());
             String vodId = ids.get(0);
             String url = host + "/play/" + vodId;
             String html = fetch(url);
@@ -298,28 +277,24 @@ public class Bttw extends Spider {
                 episodes.add(epName + "$" + link);
             }
 
-            JSONObject vod = new JSONObject();
-            vod.put("vod_id", vodId);
-            vod.put("vod_name", title);
-            vod.put("vod_pic", pic);
-            vod.put("vod_director", director);
-            vod.put("vod_actor", actor);
-            vod.put("vod_area", area);
-            vod.put("vod_year", year);
-            vod.put("vod_content", content);
+            Vod vod = new Vod();
+            vod.setVodId(vodId);
+            vod.setVodName(title);
+            vod.setVodPic(pic);
+            vod.setVodDirector(director);
+            vod.setVodActor(actor);
+            vod.setVodArea(area);
+            vod.setVodYear(year);
+            vod.setVodContent(content);
             if (!episodes.isEmpty()) {
-                vod.put("vod_play_from", "BTTW");
-                vod.put("vod_play_url", String.join("#", episodes));
+                vod.setVodPlayFrom("BTTW");
+                vod.setVodPlayUrl(String.join("#", episodes));
             }
 
-            JSONArray list = new JSONArray();
-            list.put(vod);
-            JSONObject result = new JSONObject();
-            result.put("list", list);
-            return result.toString();
+            return Result.string(vod);
         } catch (Exception e) {
             log("detailContent 错误: " + e.getMessage());
-            return "{\"list\":[]}";
+            return Result.string(new ArrayList<>());
         }
     }
 
@@ -330,7 +305,7 @@ public class Bttw extends Spider {
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
 
-            JSONArray videos = new JSONArray();
+            List<Vod> list = new ArrayList<>();
             for (Element item : doc.select(".group")) {
                 Element a = item.selectFirst("a[href^=/play/]");
                 if (a == null) continue;
@@ -347,19 +322,16 @@ public class Bttw extends Spider {
                     if (!pic.startsWith("http")) pic = host + pic;
                 }
 
-                JSONObject vod = new JSONObject();
-                vod.put("vod_id", vodId);
-                vod.put("vod_name", title);
-                vod.put("vod_pic", pic);
-                videos.put(vod);
+                Vod vod = new Vod();
+                vod.setVodId(vodId);
+                vod.setVodName(title);
+                vod.setVodPic(pic);
+                list.add(vod);
             }
-
-            JSONObject result = new JSONObject();
-            result.put("list", videos);
-            return result.toString();
+            return Result.string(list);
         } catch (Exception e) {
             log("searchContent 错误: " + e.getMessage());
-            return "{\"list\":[]}";
+            return Result.string(new ArrayList<>());
         }
     }
 
@@ -383,39 +355,23 @@ public class Bttw extends Spider {
                     String videoUrl = m.group(1);
                     if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
                     else if (videoUrl.startsWith("/")) videoUrl = host + videoUrl;
-                    JSONObject result = new JSONObject();
-                    result.put("parse", 0);
-                    result.put("url", videoUrl);
-                    JSONObject header = new JSONObject();
+                    Map<String, String> header = new HashMap<>();
                     header.put("User-Agent", headers.get("User-Agent"));
                     header.put("Referer", url);
                     header.put("Origin", host);
-                    result.put("header", header);
-                    return result.toString();
+                    return Result.get().parse(0).url(videoUrl).header(header).string();
                 }
             }
-            JSONObject fallback = new JSONObject();
-            fallback.put("parse", 1);
-            fallback.put("url", url);
-            JSONObject header = new JSONObject();
+            Map<String, String> header = new HashMap<>();
             header.put("User-Agent", headers.get("User-Agent"));
             header.put("Referer", url);
             header.put("Origin", host);
-            fallback.put("header", header);
-            return fallback.toString();
+            return Result.get().parse(1).url(url).header(header).string();
         } catch (Exception e) {
             log("playerContent 错误: " + e.getMessage());
-            try {
-                JSONObject fallback = new JSONObject();
-                fallback.put("parse", 1);
-                fallback.put("url", url);
-                JSONObject header = new JSONObject();
-                header.put("User-Agent", headers.get("User-Agent"));
-                fallback.put("header", header);
-                return fallback.toString();
-            } catch (Exception ex) {
-                return "{\"parse\":1,\"url\":\"" + url + "\"}";
-            }
+            Map<String, String> header = new HashMap<>();
+            header.put("User-Agent", headers.get("User-Agent"));
+            return Result.get().parse(1).url(url).header(header).string();
         }
     }
 }
