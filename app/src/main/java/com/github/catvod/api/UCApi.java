@@ -214,23 +214,22 @@ public class UCApi {
     }
 
     public String playerContent(String[] split, String flag) throws Exception {
-        SpiderDebug.log("flag:" + flag);
-        String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
-        String playUrl = "";
-        SpiderDebug.log("origin playUrl:" + playUrl);
-        Map<String, String> header = getHeaders();
-        header.remove("Host");
-        header.remove("Content-Type");
-        if (flag.contains("uc原画")) {
-            playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
-            return Result.get().url(playUrl).string();
-        } else {
-            playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
-            return Result.get().url(proxyVideoUrl(playUrl, new HashMap<>())).string();
-        }
-
-
+    SpiderDebug.log("flag:" + flag);
+    String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
+    String playUrl = "";
+    Map<String, String> header = getHeaders();
+    header.remove("Host");
+    header.remove("Content-Type");
+    
+    if (flag.contains("uc原画")) {
+        playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
+    } else {
+        playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
     }
+    
+    // 直接返回链接 + Cookie header
+    return Result.get().url(playUrl).header(header).string();
+}
 
     private boolean testVideo(String url) {
 
