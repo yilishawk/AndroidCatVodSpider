@@ -21,7 +21,6 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.*;
 import java.util.regex.*;
@@ -81,26 +80,6 @@ public class Czzyv extends Spider {
                 || lowerHtml.contains("waf");
     }
 
-    /** 从 CookieManager 获取 Cookie */
-    private String getCookieFromManager() {
-        try {
-            return CookieManager.getInstance().getCookie(HOST);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /** 注入 Cookie 到请求（通过设置全局 Cookie） */
-    private void injectCookieToOkHttp(String cookie) {
-        try {
-            if (!TextUtils.isEmpty(cookie)) {
-                // 通过设置请求头的方式，在后续请求中携带 Cookie
-                // OkHttp 会自动管理 Cookie，这里只是记录日志
-                logger("🍪 Cookie 已就绪: " + cookie.substring(0, Math.min(50, cookie.length())) + "...");
-            }
-        } catch (Exception ignored) {}
-    }
-
     private void silentWAFVerify() {
         try {
             FrameLayout container = new FrameLayout(Init.context());
@@ -141,7 +120,7 @@ public class Czzyv extends Spider {
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 页面加载完成: " + url);
                     
-                    String cookie = getCookieFromManager();
+                    String cookie = CookieManager.getInstance().getCookie(HOST);
                     boolean verified = false;
                     
                     if (!TextUtils.isEmpty(cookie)) {
@@ -161,11 +140,6 @@ public class Czzyv extends Spider {
                     if (verified) {
                         logger("✅ 雷池/CF 静默验证成功！");
                         handler.removeCallbacks(timeoutRunnable);
-                        
-                        // 记录 Cookie
-                        if (!TextUtils.isEmpty(cookie)) {
-                            injectCookieToOkHttp(cookie);
-                        }
                         
                         Init.run(() -> {
                             try {
@@ -206,68 +180,33 @@ public class Czzyv extends Spider {
     }
 
     // ──────────────────────────────────────────────
-    // 提取 M3U8 地址（支持多种格式）
+    // 提取视频地址
     // ──────────────────────────────────────────────
 
-    private String extractM3u8FromHtml(String html, String baseUrl) {
+    /**
+     * 提取 const mysvg 的值
+     */
+    private String extractMysvgValue(String html) {
         if (TextUtils.isEmpty(html)) return null;
         
-        // 1. 直接匹配 .m3u8 结尾的链接
-        Pattern directM3u8 = Pattern.compile("https?://[^\"'\\s]+\\.m3u8[^\"'\\s]*");
-        Matcher directMatcher = directM3u8.matcher(html);
-        if (directMatcher.find()) {
-            return directMatcher.group();
+        Pattern mysvgPattern = Pattern.compile("const\\s+mysvg\\s*=\\s*['\"]([^'\"]+)['\"]");
+        Matcher mysvgMatcher = mysvgPattern.matcher(html);
+        if (mysvgMatcher.find()) {
+            return mysvgMatcher.group(1);
         }
-        
-        // 2. 匹配 url= 参数后面的链接
-        Pattern urlParamPattern = Pattern.compile("[?&]url=([^&\"'\\s]+)");
-        Matcher urlParamMatcher = urlParamPattern.matcher(html);
-        if (urlParamMatcher.find()) {
-            String encodedUrl = urlParamMatcher.group(1);
-            try {
-                String decodedUrl = URLDecoder.decode(encodedUrl, "UTF-8");
-                if (decodedUrl.contains(".m3u8")) {
-                    return decodedUrl;
-                }
-            } catch (Exception ignored) {}
-        }
-        
-        // 3. 匹配 v= 参数
-        Pattern vParamPattern = Pattern.compile("[?&]v=([^&\"'\\s]+)");
-        Matcher vParamMatcher = vParamPattern.matcher(html);
-        if (vParamMatcher.find()) {
-            String encodedUrl = vParamMatcher.group(1);
-            try {
-                String decodedUrl = URLDecoder.decode(encodedUrl, "UTF-8");
-                if (decodedUrl.contains(".m3u8")) {
-                    return decodedUrl;
-                }
-            } catch (Exception ignored) {}
-        }
-        
-        // 4. 匹配 JavaScript 变量中的 URL
-        Pattern jsVarPattern = Pattern.compile("(?:url|src|video|file|playUrl|m3u8)\\s*[:=]\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']", Pattern.CASE_INSENSITIVE);
-        Matcher jsVarMatcher = jsVarPattern.matcher(html);
-        if (jsVarMatcher.find()) {
-            return jsVarMatcher.group(1);
-        }
-        
-        // 5. 匹配任意包含 m3u8 的 URL
-        Pattern containM3u8 = Pattern.compile("https?://[^\"'\\s]*m3u8[^\"'\\s]*", Pattern.CASE_INSENSITIVE);
-        Matcher containMatcher = containM3u8.matcher(html);
-        if (containMatcher.find()) {
-            return containMatcher.group();
-        }
-        
         return null;
     }
 
-    private String extractM3u8FromPlayPage(String playUrl) {
+    /**
+     * 核心方法：先提取 iframe src，访问它，再从返回数据中提取 const mysvg
+     */
+    private String extractVideoUrlFromPlayPage(String playUrl) {
         try {
+            // 第一步：获取播放页 HTML
             String html = get(playUrl, HOST + "/");
             if (TextUtils.isEmpty(html)) return null;
             
-            // 提取 iframe src
+            // 第二步：提取 iframe src
             Pattern iframePattern = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']");
             Matcher iframeMatcher = iframePattern.matcher(html);
             
@@ -278,27 +217,31 @@ public class Czzyv extends Spider {
                 // 相对路径补全
                 if (iframeUrl.startsWith("/")) {
                     iframeUrl = HOST + iframeUrl;
-                    String iframeHtml = get(iframeUrl, playUrl);
-                    if (!TextUtils.isEmpty(iframeHtml)) {
-                        String m3u8 = extractM3u8FromHtml(iframeHtml, iframeUrl);
-                        if (m3u8 != null) return m3u8;
-                    }
                 }
                 
-                // 直接从 iframe URL 中提取
-                String m3u8 = extractM3u8FromHtml(iframeUrl, iframeUrl);
-                if (m3u8 != null) return m3u8;
+                // 第三步：访问 iframe URL，携带 Referer（播放页地址）
+                Map<String, String> iframeHeaders = new HashMap<>();
+                iframeHeaders.put("User-Agent", UA);
+                iframeHeaders.put("Referer", playUrl);
+                iframeHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
                 
-                // 从当前页面提取
-                m3u8 = extractM3u8FromHtml(html, playUrl);
-                if (m3u8 != null) return m3u8;
+                String iframeHtml = OkHttp.string(iframeUrl, iframeHeaders);
+                if (TextUtils.isEmpty(iframeHtml)) {
+                    logger("iframe 页面获取失败");
+                    return null;
+                }
+                
+                // 第四步：从 iframe 返回的数据中提取 const mysvg 的值
+                String videoUrl = extractMysvgValue(iframeHtml);
+                if (videoUrl != null) {
+                    logger("从 iframe 页面提取到 mysvg 值: " + videoUrl);
+                    return videoUrl;
+                }
             }
             
-            // 没有 iframe，直接搜索页面
-            return extractM3u8FromHtml(html, playUrl);
-            
+            return null;
         } catch (Exception e) {
-            logger("提取 M3U8 失败: " + e.getMessage());
+            logger("提取视频地址失败: " + e.getMessage());
             return null;
         }
     }
@@ -311,16 +254,6 @@ public class Czzyv extends Spider {
     public void init(Context context, String extend) {
         logger("🚀 初始化...");
         
-        // 检查已有 Cookie
-        String existingCookie = getCookieFromManager();
-        
-        if (!TextUtils.isEmpty(existingCookie) && 
-            (existingCookie.contains("cf_clearance") || existingCookie.contains("waf"))) {
-            logger("✅ 已有有效 Cookie，跳过验证");
-            return;
-        }
-        
-        // 测试是否需要验证
         String testHtml = get(HOST, "");
         if (!isWAFBlocked(testHtml)) {
             logger("✅ 无需雷池/CF 验证，直接通过");
@@ -362,7 +295,6 @@ public class Czzyv extends Spider {
             String html = get(url, HOST + "/");
             if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
             
-            // 被拦截则重试
             if (isWAFBlocked(html)) {
                 logger("⚠️ 被拦截，等待2秒后重试");
                 Thread.sleep(2000);
@@ -426,17 +358,14 @@ public class Czzyv extends Spider {
             
             Document doc = Jsoup.parse(html);
             
-            // 标题
             String name = "";
             Element titleElem = doc.selectFirst(".moviedteail_tt h1");
             if (titleElem != null) name = titleElem.text();
             
-            // 图片
             String pic = "";
             Element imgElem = doc.selectFirst(".dyimg img");
             if (imgElem != null) pic = imgElem.attr("src");
             
-            // 地区
             String area = "";
             Element areaElem = doc.selectFirst(".moviedteail_list li:contains(地区：)");
             if (areaElem != null) {
@@ -446,17 +375,14 @@ public class Czzyv extends Spider {
                 area = TextUtils.join(", ", areas);
             }
             
-            // 年份
             String year = "";
             Element yearElem = doc.selectFirst(".moviedteail_list li:contains(年份：) a");
             if (yearElem != null) year = yearElem.text();
             
-            // 导演
             String director = "";
             Element dirElem = doc.selectFirst(".moviedteail_list li:contains(导演：) span");
             if (dirElem != null) director = dirElem.text();
             
-            // 主演
             String actor = "";
             Element actorElem = doc.selectFirst(".moviedteail_list li:contains(主演：)");
             if (actorElem != null) {
@@ -466,12 +392,10 @@ public class Czzyv extends Spider {
                 actor = TextUtils.join(", ", actors);
             }
             
-            // 简介
             String content = "";
             Element contentElem = doc.selectFirst(".yp_context");
             if (contentElem != null) content = contentElem.text().trim();
             
-            // 播放列表
             List<String> playUrls = new ArrayList<>();
             Elements playLinks = doc.select(".paly_list_btn a");
             for (Element link : playLinks) {
@@ -513,25 +437,25 @@ public class Czzyv extends Spider {
             String playUrl = id.startsWith("http") ? id : HOST + id;
             logger("播放页: " + playUrl);
             
-            String m3u8Url = extractM3u8FromPlayPage(playUrl);
+            String videoUrl = extractVideoUrlFromPlayPage(playUrl);
             
-            if (TextUtils.isEmpty(m3u8Url)) {
-                logger("未找到 M3U8 地址");
-                return Result.get().url(id).string();
+            if (TextUtils.isEmpty(videoUrl)) {
+                logger("未找到视频地址，交由壳子嗅探");
+                return Result.get().parse(1).url(playUrl).string();
             }
             
-            logger("真实 M3U8: " + m3u8Url);
+            logger("真实视频地址: " + videoUrl);
             
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Referer", HOST + "/");
             headers.put("Origin", HOST);
             
-            return Result.get().url(m3u8Url).header(headers).string();
+            return Result.get().url(videoUrl).header(headers).string();
             
         } catch (Exception e) {
             logger("播放异常: " + e.getMessage());
-            return Result.get().url(id).string();
+            return Result.get().parse(1).url(id).string();
         }
     }
 
