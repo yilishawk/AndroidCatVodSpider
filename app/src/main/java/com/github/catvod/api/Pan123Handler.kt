@@ -43,7 +43,6 @@ object Pan123Handler {
         cache = Cache.objectFrom(Path.read(getCache()))
         if (cache == null) {
             SpiderDebug.log("cache 为null")
-            startFlow()
         } else {
             userName = cache!!.user.userName
             passwd = cache!!.user.password
@@ -56,7 +55,6 @@ object Pan123Handler {
                 }
             } else {
                 SpiderDebug.log("userName passwd 为空")
-                startFlow()
             }
         }
 
