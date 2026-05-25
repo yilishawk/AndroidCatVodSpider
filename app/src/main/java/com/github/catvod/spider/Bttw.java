@@ -4,6 +4,7 @@ import android.content.Context;
 import android.text.TextUtils;
 
 import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -19,6 +20,7 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -26,7 +28,7 @@ import java.util.regex.Pattern;
 
 public class Bttw extends Spider {
 
-    private String host = "https://www.bttwo.org";
+    private String host = "https://www.4kvm.net";
     private Map<String, String> headers;
 
     public Bttw() {
@@ -141,49 +143,30 @@ public class Bttw extends Spider {
             classes.add(new Class("4", "综艺"));
 
             if (filter) {
-                JSONObject filters = new JSONObject();
-                JSONArray movieFilters = new JSONArray();
-                JSONObject areaFilter = new JSONObject();
-                areaFilter.put("key", "areas");
-                areaFilter.put("name", "地区");
-                areaFilter.put("value", getAreasOptions());
-                movieFilters.put(areaFilter);
-                JSONObject typeFilter = new JSONObject();
-                typeFilter.put("key", "types");
-                typeFilter.put("name", "类型");
-                typeFilter.put("value", getTypesOptions());
-                movieFilters.put(typeFilter);
+                LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+                
+                List<Filter> movieFilters = new ArrayList<>();
+                movieFilters.add(new Filter("areas", "地区", getAreasOptions()));
+                movieFilters.add(new Filter("types", "类型", getTypesOptions()));
                 filters.put("1", movieFilters);
-
-                JSONArray tvFilters = new JSONArray();
-                JSONObject tvArea = new JSONObject();
-                tvArea.put("key", "areas");
-                tvArea.put("name", "地区");
-                tvArea.put("value", getAreasOptions());
-                tvFilters.put(tvArea);
-                JSONObject tvClass = new JSONObject();
-                tvClass.put("key", "tvclasses");
-                tvClass.put("name", "电视剧分类");
-                tvClass.put("value", getTvClassesOptions());
-                tvFilters.put(tvClass);
-                JSONObject tvType = new JSONObject();
-                tvType.put("key", "types");
-                tvType.put("name", "类型");
-                tvType.put("value", getTypesOptions());
-                tvFilters.put(tvType);
+                
+                List<Filter> tvFilters = new ArrayList<>();
+                tvFilters.add(new Filter("areas", "地区", getAreasOptions()));
+                tvFilters.add(new Filter("tvclasses", "电视剧分类", getTvClassesOptions()));
+                tvFilters.add(new Filter("types", "类型", getTypesOptions()));
                 filters.put("2", tvFilters);
-
-                JSONArray varietyFilters = new JSONArray();
-                varietyFilters.put(areaFilter);
-                varietyFilters.put(typeFilter);
+                
+                List<Filter> varietyFilters = new ArrayList<>();
+                varietyFilters.add(new Filter("areas", "地区", getAreasOptions()));
+                varietyFilters.add(new Filter("types", "类型", getTypesOptions()));
                 filters.put("4", varietyFilters);
-
+                
                 return Result.string(classes, filters);
             }
             return Result.string(classes);
         } catch (Exception e) {
             log("homeContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>(), new JSONObject());
+            return Result.string(new ArrayList<>(), new LinkedHashMap<>());
         }
     }
 
@@ -245,15 +228,16 @@ public class Bttw extends Spider {
                 list.add(vod);
             }
 
-            boolean hasNext = doc.select("a:contains(下一页)").size() > 0 || doc.select(".pagination .next").size() > 0;
             int currentPage = Integer.parseInt(pg);
-            int pagecount = hasNext ? currentPage + 1 : currentPage;
-            pagecount = Math.min(pagecount + 5, 20);
+            boolean hasNext = doc.select("a:contains(下一页)").size() > 0 || doc.select(".pagination .next").size() > 0;
+            int total = hasNext ? currentPage + 1 : currentPage;
+            int limit = list.size();
+            int pagecount = Math.min(total + 5, 20);
 
-            return Result.string(list, currentPage, pagecount);
+            return Result.string(list, pagecount);
         } catch (Exception e) {
             log("categoryContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>(), Integer.parseInt(pg), 1);
+            return Result.string(new ArrayList<>(), 1);
         }
     }
 
@@ -314,7 +298,7 @@ public class Bttw extends Spider {
             vod.setVodYear(year);
             vod.setVodContent(content);
             if (!episodes.isEmpty()) {
-                vod.setVodPlayFrom("4K影视");
+                vod.setVodPlayFrom("BTTW");
                 vod.setVodPlayUrl(String.join("#", episodes));
             }
 
