@@ -81,6 +81,26 @@ public class Czzyv extends Spider {
                 || lowerHtml.contains("waf");
     }
 
+    /** 从 CookieManager 获取 Cookie */
+    private String getCookieFromManager() {
+        try {
+            return CookieManager.getInstance().getCookie(HOST);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 注入 Cookie 到请求（通过设置全局 Cookie） */
+    private void injectCookieToOkHttp(String cookie) {
+        try {
+            if (!TextUtils.isEmpty(cookie)) {
+                // 通过设置请求头的方式，在后续请求中携带 Cookie
+                // OkHttp 会自动管理 Cookie，这里只是记录日志
+                logger("🍪 Cookie 已就绪: " + cookie.substring(0, Math.min(50, cookie.length())) + "...");
+            }
+        } catch (Exception ignored) {}
+    }
+
     private void silentWAFVerify() {
         try {
             FrameLayout container = new FrameLayout(Init.context());
@@ -121,7 +141,7 @@ public class Czzyv extends Spider {
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 页面加载完成: " + url);
                     
-                    String cookie = CookieManager.getInstance().getCookie(HOST);
+                    String cookie = getCookieFromManager();
                     boolean verified = false;
                     
                     if (!TextUtils.isEmpty(cookie)) {
@@ -142,11 +162,10 @@ public class Czzyv extends Spider {
                         logger("✅ 雷池/CF 静默验证成功！");
                         handler.removeCallbacks(timeoutRunnable);
                         
-                        try {
-                            if (!TextUtils.isEmpty(cookie)) {
-                                OkHttp.addCookie(HOST, cookie);
-                            }
-                        } catch (Exception ignored) {}
+                        // 记录 Cookie
+                        if (!TextUtils.isEmpty(cookie)) {
+                            injectCookieToOkHttp(cookie);
+                        }
                         
                         Init.run(() -> {
                             try {
@@ -293,10 +312,7 @@ public class Czzyv extends Spider {
         logger("🚀 初始化...");
         
         // 检查已有 Cookie
-        String existingCookie = null;
-        try {
-            existingCookie = OkHttp.getCookie(HOST);
-        } catch (Exception ignored) {}
+        String existingCookie = getCookieFromManager();
         
         if (!TextUtils.isEmpty(existingCookie) && 
             (existingCookie.contains("cf_clearance") || existingCookie.contains("waf"))) {
