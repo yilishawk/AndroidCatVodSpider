@@ -465,40 +465,50 @@ public class Czzyv extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        try {
-            String url = HOST + "/boss1O1?q=" + URLEncoder.encode(key, "UTF-8");
-            logger("搜索: " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
-            
-            Document doc = Jsoup.parse(html);
-            Elements items = doc.select(".search_list ul li");
-            
-            List<Vod> list = new ArrayList<>();
-            for (Element item : items) {
-                Element link = item.selectFirst("a");
-                if (link == null) continue;
-                
-                String href = link.attr("href");
-                String vodId = href.replace(HOST, "");
-                
-                Element img = link.selectFirst("img");
-                String pic = img != null ? img.attr("src") : "";
-                
-                Element titleElem = item.selectFirst("h3.dytit a");
-                String name = titleElem != null ? titleElem.text() : "";
-                
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(name);
-                vod.setVodPic(pic);
-                list.add(vod);
-            }
-            
-            return Result.string(list);
-        } catch (Exception e) {
-            logger("搜索异常: " + e.getMessage());
+    if (TextUtils.isEmpty(key)) {
+        return Result.string(new ArrayList<>());
+    }
+    try {
+        String url = HOST + "/boss1O1?q=" + URLEncoder.encode(key, "UTF-8");
+        logger("搜索请求: " + url);
+        String html = get(url, HOST + "/");
+        if (TextUtils.isEmpty(html)) {
             return Result.string(new ArrayList<>());
         }
+        Document doc = Jsoup.parse(html);
+        Elements items = doc.select(".search_list ul li");
+        List<Vod> resultList = new ArrayList<>();
+        String normalizedKey = normalizeName(key);
+        for (Element item : items) {
+            Element titleLink = item.selectFirst("h3.dytit a");
+            if (titleLink == null) {
+                continue;
+            }
+            String title = titleLink.text().trim();
+            if (TextUtils.isEmpty(title) || !normalizeName(title).equals(normalizedKey)) {
+                continue;
+            }
+            logger("找到完全匹配结果: " + title);
+            String detailUrl = titleLink.attr("href");
+            Element img = item.selectFirst("img");
+            String picUrl = (img != null) ? img.attr("src") : "";
+            Vod vod = new Vod();
+            vod.setVodId(detailUrl);
+            vod.setVodName(title);
+            vod.setVodPic(picUrl);
+            vod.setVodRemarks("");
+            resultList.add(vod);
+            break;
+        }
+        logger("完全匹配搜索完成，返回结果数: " + resultList.size());
+        return Result.string(resultList);
+    } catch (Exception e) {
+        logger("搜索异常: " + e.getMessage());
+        return Result.string(new ArrayList<>());
     }
+}
+    private String normalizeName(String name) {
+    if (name == null) return "";
+    return name.trim();
+}
 }
