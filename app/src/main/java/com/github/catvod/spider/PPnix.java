@@ -157,58 +157,64 @@ public class PPnix extends Spider {
     }
 
     private void handleRequest(Socket client) {
-        try (client) {
-            BufferedReader in  = new BufferedReader(new InputStreamReader(client.getInputStream()));
-            OutputStream   out = client.getOutputStream();
+    try {
+        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+        OutputStream out = client.getOutputStream();
 
-            String requestLine = in.readLine();
-            if (requestLine == null) return;
-            // 读完请求头
-            String line;
-            while ((line = in.readLine()) != null && !line.isEmpty()) {}
+        String requestLine = in.readLine();
+        if (requestLine == null) return;
+        // 读完请求头
+        String line;
+        while ((line = in.readLine()) != null && !line.isEmpty()) {}
 
-            // 解析路径：/m3u8/{key} 或 /ts/{key}
-            String[] parts = requestLine.split(" ");
-            if (parts.length < 2) return;
-            String path = parts[1];
-            if (path.contains("?")) path = path.substring(0, path.indexOf("?"));
+        // 解析路径：/m3u8/{key} 或 /ts/{key}
+        String[] parts = requestLine.split(" ");
+        if (parts.length < 2) return;
+        String path = parts[1];
+        if (path.contains("?")) path = path.substring(0, path.indexOf("?"));
 
-            if (path.startsWith("/m3u8/")) {
-                // 提供修改后的 m3u8 内容
-                String key     = path.substring("/m3u8/".length());
-                String content = cache.get(key);
-                if (content != null) {
-                    byte[] data = content.getBytes("UTF-8");
-                    out.write(("HTTP/1.1 200 OK\r\n"
-                        + "Content-Type: application/vnd.apple.mpegurl\r\n"
-                        + "Content-Length: " + data.length + "\r\n"
-                        + "Access-Control-Allow-Origin: *\r\n"
-                        + "Connection: close\r\n\r\n").getBytes());
-                    out.write(data);
-                    logger("📤 [PPnix] M3U8 已提供: " + key);
-                } else {
-                    out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
-                }
-
-            } else if (path.startsWith("/ts/")) {
-                // 代理 TS 片段请求，带上正确请求头
-                String key    = path.substring("/ts/".length());
-                String tsUrl  = cache.get("ts_" + key);
-                if (tsUrl == null) {
-                    out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
-                    return;
-                }
-                proxyToClient(tsUrl, out);
-                logger("📤 [PPnix] TS 已代理: " + tsUrl.substring(0, Math.min(60, tsUrl.length())));
-
+        if (path.startsWith("/m3u8/")) {
+            // 提供修改后的 m3u8 内容
+            String key = path.substring("/m3u8/".length());
+            String content = cache.get(key);
+            if (content != null) {
+                byte[] data = content.getBytes("UTF-8");
+                out.write(("HTTP/1.1 200 OK\r\n"
+                    + "Content-Type: application/vnd.apple.mpegurl\r\n"
+                    + "Content-Length: " + data.length + "\r\n"
+                    + "Access-Control-Allow-Origin: *\r\n"
+                    + "Connection: close\r\n\r\n").getBytes());
+                out.write(data);
+                logger("📤 [PPnix] M3U8 已提供: " + key);
             } else {
                 out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
             }
-            out.flush();
-        } catch (Exception e) {
-            logger("⚠️ [PPnix] 请求处理异常: " + e.getMessage());
+
+        } else if (path.startsWith("/ts/")) {
+            // 代理 TS 片段请求，带上正确请求头
+            String key = path.substring("/ts/".length());
+            String tsUrl = cache.get("ts_" + key);
+            if (tsUrl == null) {
+                out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
+                return;
+            }
+            proxyToClient(tsUrl, out);
+            logger("📤 [PPnix] TS 已代理: " + tsUrl.substring(0, Math.min(60, tsUrl.length())));
+
+        } else {
+            out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
+        }
+        out.flush();
+    } catch (Exception e) {
+        logger("⚠️ [PPnix] 请求处理异常: " + e.getMessage());
+    } finally {
+        if (client != null && !client.isClosed()) {
+            try {
+                client.close();
+            } catch (Exception ignored) {}
         }
     }
+}
 
     /**
      * 通过 HttpURLConnection 请求真实 TS 地址并转发给播放器
