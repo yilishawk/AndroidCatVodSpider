@@ -195,6 +195,7 @@ public class PanLogin extends Spider {
             JSONObject result = new JSONObject();
             result.put("list", list);
             result.put("page", 1);
+            result.put("pages", 1);  
             return result.toString();
         } catch (Exception e) {
             return "{\"list\":[]}";
