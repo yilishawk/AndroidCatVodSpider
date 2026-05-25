@@ -5,11 +5,7 @@ import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Util;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -25,6 +21,7 @@ import java.util.regex.Pattern;
 
 /**
  * @author zhixc
+ * 多多视频 - 继承 Cloud 实现网盘播放
  */
 public class DuoDuo extends Cloud {
 
@@ -40,7 +37,6 @@ public class DuoDuo extends Cloud {
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        //  JsonObject ext = Json.safeObject(extend);
         super.init(context, extend);
     }
 
@@ -60,18 +56,20 @@ public class DuoDuo extends Cloud {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        String[] urlParams = new String[]{tid, "", "", "", "", "", "", "", pg, "", "", ""};
-        if (extend != null && extend.size() > 0) {
-            for (String key : extend.keySet()) {
-                urlParams[Integer.parseInt(key)] = extend.get(key);
-            }
-        }
-        Document doc = Jsoup.parse(OkHttp.string(String.format("%s/index.php/vod/show/id/%s/page/%s.html", siteUrl, tid, pg), getHeader()));
+        Document doc = Jsoup.parse(OkHttp.string(
+            String.format("%s/index.php/vod/show/id/%s/page/%s.html", siteUrl, tid, pg), 
+            getHeader()
+        ));
+        
         int page = Integer.parseInt(pg), limit = 72, total = 0;
         Matcher matcher = regexPageTotal.matcher(doc.html());
         if (matcher.find()) total = Integer.parseInt(matcher.group(1));
         int count = total <= limit ? 1 : ((int) Math.ceil(total / (double) limit));
-        return Result.get().vod(parseVodListFromDoc(doc)).page(page, count, limit, total).string();
+        
+        return Result.get()
+            .vod(parseVodListFromDoc(doc))
+            .page(page, count, limit, total)
+            .string();
     }
 
     private List<Vod> parseVodListFromDoc(Document doc) {
@@ -99,14 +97,22 @@ public class DuoDuo extends Cloud {
         item.setVodArea(doc.select(".video-info-header a.tag-link").last().text());
         item.setTypeName(String.join(",", doc.select(".video-info-header div.tag-link a").eachText()));
 
+        // 获取网盘分享链接
         List<String> shareLinks = doc.select(".module-row-text").eachAttr("data-clipboard-text");
         for (int i = 0; i < shareLinks.size(); i++) {
             shareLinks.set(i, shareLinks.get(i).trim());
-            //String detailContent = super.detailContent(List.of(shareLinks.get(i)));
         }
-        item.setVodPlayUrl(super.detailContentVodPlayUrl(shareLinks));
-        item.setVodPlayFrom(super.detailContentVodPlayFrom(shareLinks));
 
+        // 用 Cloud 的方法解析网盘链接，获取播放列表
+        if (!shareLinks.isEmpty()) {
+            item.setVodPlayUrl(super.detailContentVodPlayUrl(shareLinks));
+            item.setVodPlayFrom(super.detailContentVodPlayFrom(shareLinks));
+        } else {
+            item.setVodPlayUrl("");
+            item.setVodPlayFrom("");
+        }
+
+        // 提取详细信息
         Elements elements = doc.select(".video-info-item");
         for (Element e : elements) {
             String title = e.previousElementSibling().text();
@@ -127,6 +133,15 @@ public class DuoDuo extends Cloud {
     }
 
     @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) {
+        try {
+            return super.playerContent(flag, id, vipFlags);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, "1");
     }
@@ -136,9 +151,12 @@ public class DuoDuo extends Cloud {
         return searchContent(key, pg);
     }
 
-
     private String searchContent(String key, String pg) {
-        String searchURL = siteUrl + String.format("/index.php/vod/search/page/%s/wd/%s.html", pg,URLEncoder.encode(key));
+        String searchURL = siteUrl + String.format(
+            "/index.php/vod/search/page/%s/wd/%s.html", 
+            pg, 
+            URLEncoder.encode(key)
+        );
         String html = OkHttp.string(searchURL, getHeader());
         Elements items = Jsoup.parse(html).select(".module-search-item");
         List<Vod> list = new ArrayList<>();
