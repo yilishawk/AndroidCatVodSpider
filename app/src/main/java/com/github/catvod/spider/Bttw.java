@@ -161,12 +161,17 @@ public class Bttw extends Spider {
                 varietyFilters.add(new Filter("types", "类型", getTypesOptions()));
                 filters.put("4", varietyFilters);
                 
-                return Result.string(classes, filters);
+                JSONObject result = new JSONObject();
+                result.put("class", new JSONArray());
+                result.put("filters", new JSONObject(filters));
+                return result.toString();
             }
-            return Result.string(classes);
+            JSONObject result = new JSONObject();
+            result.put("class", new JSONArray());
+            return result.toString();
         } catch (Exception e) {
             log("homeContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>(), new LinkedHashMap<>());
+            return "{\"class\":[],\"filters\":{}}";
         }
     }
 
@@ -201,7 +206,7 @@ public class Bttw extends Spider {
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) cards = doc.select(".group");
 
-            List<Vod> list = new ArrayList<>();
+            JSONArray videos = new JSONArray();
             for (Element card : cards) {
                 Element link = card.selectFirst("a[href^=/play/]");
                 if (link == null) continue;
@@ -220,31 +225,36 @@ public class Bttw extends Spider {
                 Element remarkElem = card.selectFirst("span.absolute.bottom-0, .remark");
                 String remark = remarkElem != null ? remarkElem.text().trim() : "";
 
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(title);
-                vod.setVodPic(pic);
-                vod.setVodRemarks(remark);
-                list.add(vod);
+                JSONObject vod = new JSONObject();
+                vod.put("vod_id", vodId);
+                vod.put("vod_name", title);
+                vod.put("vod_pic", pic);
+                vod.put("vod_remarks", remark);
+                videos.put(vod);
             }
 
             int currentPage = Integer.parseInt(pg);
             boolean hasNext = doc.select("a:contains(下一页)").size() > 0 || doc.select(".pagination .next").size() > 0;
-            int total = hasNext ? currentPage + 1 : currentPage;
-            int limit = list.size();
-            int pagecount = Math.min(total + 5, 20);
+            int pagecount = hasNext ? currentPage + 1 : currentPage;
+            pagecount = Math.min(pagecount + 5, 20);
 
-            return Result.string(list, pagecount);
+            JSONObject result = new JSONObject();
+            result.put("list", videos);
+            result.put("page", currentPage);
+            result.put("pagecount", pagecount);
+            result.put("limit", videos.length());
+            result.put("total", videos.length() * pagecount);
+            return result.toString();
         } catch (Exception e) {
             log("categoryContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>(), 1);
+            return "{\"list\":[],\"page\":" + pg + ",\"pagecount\":1}";
         }
     }
 
     @Override
     public String detailContent(List<String> ids) {
         try {
-            if (ids == null || ids.isEmpty()) return Result.string(new ArrayList<>());
+            if (ids == null || ids.isEmpty()) return "{\"list\":[]}";
             String vodId = ids.get(0);
             String url = host + "/play/" + vodId;
             String html = fetch(url);
@@ -288,24 +298,28 @@ public class Bttw extends Spider {
                 episodes.add(epName + "$" + link);
             }
 
-            Vod vod = new Vod();
-            vod.setVodId(vodId);
-            vod.setVodName(title);
-            vod.setVodPic(pic);
-            vod.setVodDirector(director);
-            vod.setVodActor(actor);
-            vod.setVodArea(area);
-            vod.setVodYear(year);
-            vod.setVodContent(content);
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", vodId);
+            vod.put("vod_name", title);
+            vod.put("vod_pic", pic);
+            vod.put("vod_director", director);
+            vod.put("vod_actor", actor);
+            vod.put("vod_area", area);
+            vod.put("vod_year", year);
+            vod.put("vod_content", content);
             if (!episodes.isEmpty()) {
-                vod.setVodPlayFrom("BTTW");
-                vod.setVodPlayUrl(String.join("#", episodes));
+                vod.put("vod_play_from", "BTTW");
+                vod.put("vod_play_url", String.join("#", episodes));
             }
 
-            return Result.string(vod);
+            JSONArray list = new JSONArray();
+            list.put(vod);
+            JSONObject result = new JSONObject();
+            result.put("list", list);
+            return result.toString();
         } catch (Exception e) {
             log("detailContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return "{\"list\":[]}";
         }
     }
 
@@ -316,7 +330,7 @@ public class Bttw extends Spider {
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
 
-            List<Vod> list = new ArrayList<>();
+            JSONArray videos = new JSONArray();
             for (Element item : doc.select(".group")) {
                 Element a = item.selectFirst("a[href^=/play/]");
                 if (a == null) continue;
@@ -333,16 +347,19 @@ public class Bttw extends Spider {
                     if (!pic.startsWith("http")) pic = host + pic;
                 }
 
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(title);
-                vod.setVodPic(pic);
-                list.add(vod);
+                JSONObject vod = new JSONObject();
+                vod.put("vod_id", vodId);
+                vod.put("vod_name", title);
+                vod.put("vod_pic", pic);
+                videos.put(vod);
             }
-            return Result.string(list);
+
+            JSONObject result = new JSONObject();
+            result.put("list", videos);
+            return result.toString();
         } catch (Exception e) {
             log("searchContent 错误: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return "{\"list\":[]}";
         }
     }
 
@@ -366,23 +383,39 @@ public class Bttw extends Spider {
                     String videoUrl = m.group(1);
                     if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
                     else if (videoUrl.startsWith("/")) videoUrl = host + videoUrl;
-                    Map<String, String> headerMap = new HashMap<>();
-                    headerMap.put("User-Agent", headers.get("User-Agent"));
-                    headerMap.put("Referer", url);
-                    headerMap.put("Origin", host);
-                    return Result.get().url(videoUrl).header(headerMap).string();
+                    JSONObject result = new JSONObject();
+                    result.put("parse", 0);
+                    result.put("url", videoUrl);
+                    JSONObject header = new JSONObject();
+                    header.put("User-Agent", headers.get("User-Agent"));
+                    header.put("Referer", url);
+                    header.put("Origin", host);
+                    result.put("header", header);
+                    return result.toString();
                 }
             }
-            Map<String, String> headerMap = new HashMap<>();
-            headerMap.put("User-Agent", headers.get("User-Agent"));
-            headerMap.put("Referer", url);
-            headerMap.put("Origin", host);
-            return Result.get().parse(1).url(url).header(headerMap).string();
+            JSONObject fallback = new JSONObject();
+            fallback.put("parse", 1);
+            fallback.put("url", url);
+            JSONObject header = new JSONObject();
+            header.put("User-Agent", headers.get("User-Agent"));
+            header.put("Referer", url);
+            header.put("Origin", host);
+            fallback.put("header", header);
+            return fallback.toString();
         } catch (Exception e) {
             log("playerContent 错误: " + e.getMessage());
-            Map<String, String> headerMap = new HashMap<>();
-            headerMap.put("User-Agent", headers.get("User-Agent"));
-            return Result.get().parse(1).url(url).header(headerMap).string();
+            try {
+                JSONObject fallback = new JSONObject();
+                fallback.put("parse", 1);
+                fallback.put("url", url);
+                JSONObject header = new JSONObject();
+                header.put("User-Agent", headers.get("User-Agent"));
+                fallback.put("header", header);
+                return fallback.toString();
+            } catch (Exception ex) {
+                return "{\"parse\":1,\"url\":\"" + url + "\"}";
+            }
         }
     }
 }
