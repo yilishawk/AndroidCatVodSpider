@@ -207,22 +207,15 @@ public class QuarkApi {
     }
 
     public String playerContent(String[] split, String flag) throws Exception {
-
-        String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
-        String playUrl = "";
-        Map<String, String> header = getHeaders();
-        header.remove("Host");
-        header.remove("Content-Type");
-        if (flag.contains("quark原画")) {
-            playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
-            return Result.get().url(ProxyServer.INSTANCE.buildProxyUrl(playUrl, header)).octet().header(header).string();
-        } else {
-            playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
-            return Result.get().url(proxyVideoUrl(playUrl, header)).octet().header(header).string();
-        }
-
-
-    }
+    String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
+    Map<String, String> header = getHeaders();
+    header.remove("Host");
+    header.remove("Content-Type");
+    
+    // 统一使用转码链接，直接返回直链
+    String playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
+    return Result.get().url(playUrl).octet().header(header).string();
+}
 
     private String proxyVideoUrl(String url, Map<String, String> header) {
         return String.format(Proxy.getUrl() + "?do=quark&type=video&url=%s&header=%s", Util.base64Encode(url.getBytes(Charset.defaultCharset())), Util.base64Encode(Json.toJson(header).getBytes(Charset.defaultCharset())));
