@@ -14,11 +14,18 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,11 +38,131 @@ public class PPnix extends Spider {
     private final String host = "https://www.ppnix.com";
     private final String common_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+    // 本地 HTTP 服务器
+    private static ServerSocket localServer = null;
+    private static Map<String, String> m3u8Cache = new ConcurrentHashMap<>();
+    private static int localPort = 0;
+    private static boolean serverStarted = false;
+
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", common_ua);
         headers.put("Referer", host + "/");
         return headers;
+    }
+
+    // ──────────────────────────────────────────────
+    // 本地 HTTP 服务器（提供修改后的 M3U8）
+    // ──────────────────────────────────────────────
+
+    private synchronized void startLocalHttpServer() {
+        if (serverStarted) return;
+        serverStarted = true;
+        new Thread(() -> {
+            try {
+                localServer = new ServerSocket(0);
+                localPort = localServer.getLocalPort();
+                Proxy.log("✅ [PPnix] 本地服务器启动，端口: " + localPort);
+                while (true) {
+                    try (Socket client = localServer.accept()) {
+                        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                        String requestLine = in.readLine();
+                        if (requestLine == null) continue;
+                        String[] parts = requestLine.split(" ");
+                        if (parts.length < 2) continue;
+                        String path = parts[1];
+
+                        if (path.startsWith("/m3u8/")) {
+                            String id = path.substring("/m3u8/".length());
+                            // 去除可能的查询参数
+                            if (id.contains("?")) id = id.substring(0, id.indexOf("?"));
+                            String content = m3u8Cache.get(id);
+                            if (content != null) {
+                                byte[] data = content.getBytes("UTF-8");
+                                OutputStream out = client.getOutputStream();
+                                out.write(("HTTP/1.1 200 OK\r\n" +
+                                        "Content-Type: application/vnd.apple.mpegurl\r\n" +
+                                        "Content-Length: " + data.length + "\r\n" +
+                                        "Connection: close\r\n\r\n").getBytes());
+                                out.write(data);
+                                out.flush();
+                                Proxy.log("📤 [PPnix] M3U8 已提供: " + id);
+                            } else {
+                                client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+                            }
+                        } else {
+                            client.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+                        }
+                    } catch (Exception e) {
+                        Proxy.log("🚨 [PPnix] 本地服务器请求异常: " + e.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                Proxy.log("🚨 [PPnix] 本地服务器启动失败: " + e.getMessage());
+                serverStarted = false;
+            }
+        }).start();
+    }
+
+    /** 注册 M3U8 内容，返回本地访问 URL */
+    private String registerM3u8(String content) {
+        if (!serverStarted || localPort == 0) {
+            startLocalHttpServer();
+            if (localPort == 0) return null;
+        }
+        String id = System.currentTimeMillis() + "_" + new Random().nextInt(10000);
+        m3u8Cache.put(id, content);
+        // 清理旧缓存，保留最近 50 个
+        if (m3u8Cache.size() > 50) {
+            String first = m3u8Cache.keySet().iterator().next();
+            m3u8Cache.remove(first);
+        }
+        return "http://127.0.0.1:" + localPort + "/m3u8/" + id;
+    }
+
+    /** 下载 M3U8 并替换 TS 域名 */
+    private String downloadAndReplaceTsDomain(String m3u8Url, String referer) {
+        try {
+            Map<String, String> headers = getHeader();
+            headers.put("Referer", referer);
+            String content = OkHttp.string(m3u8Url, headers);
+            if (TextUtils.isEmpty(content)) {
+                Proxy.log("⚠️ [PPnix] M3U8 下载失败: " + m3u8Url);
+                return null;
+            }
+
+            String[] lines = content.split("\n");
+            StringBuilder modified = new StringBuilder();
+            Random random = new Random();
+            int replaceCount = 0;
+
+            for (String line : lines) {
+                if (line.startsWith("#")) {
+                    modified.append(line).append("\n");
+                } else if (line.trim().startsWith("http")) {
+                    String newLine = line;
+                    if (line.contains("ipfs.ppnix.com")) {
+                        int num = random.nextInt(16) + 1;
+                        newLine = line.replace("ipfs.ppnix.com", num + ".ppnix.com");
+                        replaceCount++;
+                    }
+                    modified.append(newLine).append("\n");
+                } else {
+                    modified.append(line).append("\n");
+                }
+            }
+
+            Proxy.log("✅ [PPnix] TS 域名替换完成，共 " + replaceCount + " 处");
+            return modified.toString();
+        } catch (Exception e) {
+            Proxy.log("🚨 [PPnix] 处理 M3U8 异常: " + e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public void init(Context context, String extend) {
+        startLocalHttpServer();
     }
 
     @Override
@@ -51,11 +178,11 @@ public class PPnix extends Spider {
         try {
             int pageIndex = Integer.parseInt(pg) - 1;
             String url = String.format("%s/cn/%s/---%d-.html", host, tid, pageIndex);
-            
+
             String html = OkHttp.string(url, getHeader());
             Document doc = Jsoup.parse(html);
             Elements items = doc.select(".lists-content ul li");
-            
+
             List<Vod> list = new ArrayList<>();
             for (Element li : items) {
                 Element thumbA = li.selectFirst("a.thumbnail");
@@ -77,7 +204,6 @@ public class PPnix extends Spider {
                 Element titleA = li.selectFirst("h2 a");
                 String name = titleA != null ? titleA.text().trim() : "";
 
-                // 严格使用标准 setter 组装 Vod，避免 boolean 参数导致变文件夹
                 Vod vod = new Vod();
                 vod.setVodId(detailHref);
                 vod.setVodName(name);
@@ -87,6 +213,7 @@ public class PPnix extends Spider {
             }
             return Result.string(list);
         } catch (Exception e) {
+            Proxy.log("🚨 [PPnix] 分类异常: " + e.getMessage());
             return Result.string(new ArrayList<>());
         }
     }
@@ -133,7 +260,6 @@ public class PPnix extends Spider {
 
             String scriptText = "";
             for (Element script : doc.select("script")) {
-                // 严格使用 data() 避免 HTML 实体转义破坏正则
                 String data = script.data();
                 if (data.contains("infoid") && data.contains("m3u8")) {
                     scriptText = data;
@@ -154,7 +280,7 @@ public class PPnix extends Spider {
                     Matcher epMatch = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(arrayContent);
                     while (epMatch.find()) {
                         String ep = epMatch.group(1);
-                        playUrls.add(ep + "$" + "/info/m3u8/" + infoid + "/" + ep + ".m3u8");
+                        playUrls.add("第" + ep + "集$" + "/info/m3u8/" + infoid + "/" + ep + ".m3u8");
                     }
                 }
             }
@@ -177,6 +303,7 @@ public class PPnix extends Spider {
 
             return Result.string(vod);
         } catch (Exception e) {
+            Proxy.log("🚨 [PPnix] 详情异常: " + e.getMessage());
             return Result.string(new ArrayList<>());
         }
     }
@@ -189,16 +316,16 @@ public class PPnix extends Spider {
         return TextUtils.join(", ", list);
     }
 
+    // ──────────────────────────────────────────────
+    // 播放核心：下载 M3U8 → 替换 TS 域名 → 本地代理转发
+    // ──────────────────────────────────────────────
+
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            String m3u8Url = id.startsWith("http") ? id : host + id;
+            String originalUrl = id.startsWith("http") ? id : host + id;
 
-            if (m3u8Url.contains("ipfs.ppnix.com")) {
-                int randNum = new Random().nextInt(16) + 1;
-                m3u8Url = m3u8Url.replace("ipfs.ppnix.com", randNum + ".ppnix.com");
-            }
-
+            // 构建 Referer
             String referer = host + "/";
             Matcher match = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
             if (match.find()) {
@@ -206,27 +333,45 @@ public class PPnix extends Spider {
                 referer = host + "/cn/tv/" + infoid + ".html";
             }
 
+            Proxy.log("▶️ [PPnix] 原始 M3U8: " + originalUrl);
+            Proxy.log("🔗 [PPnix] Referer: " + referer);
+
+            // 1. 下载 M3U8 内容并替换 TS 域名
+            String modifiedContent = downloadAndReplaceTsDomain(originalUrl, referer);
+            String finalUrl;
+
+            if (modifiedContent != null) {
+                // 2. 通过本地代理提供修改后的 M3U8
+                finalUrl = registerM3u8(modifiedContent);
+                if (finalUrl != null) {
+                    Proxy.log("✅ [PPnix] 本地代理: " + finalUrl);
+                } else {
+                    finalUrl = originalUrl;
+                    Proxy.log("⚠️ [PPnix] 本地代理失败，回退原始 URL");
+                }
+            } else {
+                finalUrl = originalUrl;
+                Proxy.log("⚠️ [PPnix] M3U8 处理失败，使用原始 URL");
+            }
+
+            // 3. 构造请求头（只保留 UA、Origin、Referer）
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", common_ua);
             headers.put("Referer", referer);
             headers.put("Origin", host);
-            // 保持 Fongmi 原生请求头规范，直接透传
-            headers.put("Accept", "*/*");
-            headers.put("Sec-Fetch-Site", "same-origin");
-            headers.put("Sec-Fetch-Mode", "cors");
-            headers.put("Sec-Fetch-Dest", "empty");
-            headers.put("Accept-Encoding", "gzip, deflate, zstd");
-            headers.put("Accept-Language", "zh-CN,zh;q=0.9");
 
-            // 严格使用 Fongmi 规范的 Result 构造播放器返回值
-            return Result.get().url(m3u8Url).header(headers).string();
+            // 4. 使用 FongMi 规范的 Result 返回
+            return Result.get().url(finalUrl).header(headers).string();
+
         } catch (Exception e) {
+            Proxy.log("🚨 [PPnix] 播放异常: " + e.getMessage());
             return Result.get().url(id).string();
         }
     }
 
     @Override
     public String searchContent(String key, boolean quick) {
+        // 可自行实现搜索功能
         return Result.string(new ArrayList<>());
     }
 }
