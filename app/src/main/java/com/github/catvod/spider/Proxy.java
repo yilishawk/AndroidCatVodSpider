@@ -87,9 +87,6 @@ public class Proxy extends Spider {
         log("收到 proxy 调用: " + params);
 
         String doParam = params.get("do");
-        if ("ppnix".equals(doParam)) {
-            return PPnix.handleProxy(params);
-        }
         if (doParam == null || !doParam.equals("danmu")) {
             return errorResponse(400, "Missing or invalid 'do' parameter");
         }
