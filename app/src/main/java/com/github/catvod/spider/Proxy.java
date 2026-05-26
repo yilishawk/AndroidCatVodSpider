@@ -80,7 +80,7 @@ public class Proxy extends Spider {
     }
 
     /**
-     * 注意：此方法不是重写父类方法，而是因为 TV 应用会通过反射调用它。
+     * 注意：此方法不是重写父类方法，而是因为TV 应用会通过反射调用它。
      * 不要加 @Override 注解，否则编译会失败。
      */
     public Object[] proxy(Map<String, String> params) {
