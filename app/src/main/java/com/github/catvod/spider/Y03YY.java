@@ -54,7 +54,6 @@ public class Y03YY extends Spider {
         OkHttp.string(host + "/", getHeader());
     }
 
-    // ==================== 首页 + 筛选 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -63,43 +62,26 @@ public class Y03YY extends Spider {
         classes.add(new Class("3", "综艺"));
         classes.add(new Class("48", "短剧"));
 
-        if (filter) {
-            Map<String, List<Filter>> filters = new HashMap<>();
-
-            // 电影筛选
-            List<Filter> movieFilter = new ArrayList<>();
-            List<Filter.Value> movieValues = new ArrayList<>();
-            for (String[] type : MOVIE_TYPES) {
-                movieValues.add(new Filter.Value(type[0], type[1]));
-            }
-            movieFilter.add(new Filter("type", "分类", movieValues));
-            filters.put("1", movieFilter);
-
-            // 电视剧筛选
-            List<Filter> tvFilter = new ArrayList<>();
-            List<Filter.Value> tvValues = new ArrayList<>();
-            for (String[] type : TV_TYPES) {
-                tvValues.add(new Filter.Value(type[0], type[1]));
-            }
-            tvFilter.add(new Filter("type", "分类", tvValues));
-            filters.put("13", tvFilter);
-
-            // 综艺筛选
-            List<Filter> varietyFilter = new ArrayList<>();
-            List<Filter.Value> varietyValues = new ArrayList<>();
-            for (String[] type : VARIETY_TYPES) {
-                varietyValues.add(new Filter.Value(type[0], type[1]));
-            }
-            varietyFilter.add(new Filter("type", "分类", varietyValues));
-            filters.put("3", varietyFilter);
-
-            // 短剧暂时不加细分筛选
-            filters.put("48", new ArrayList<>());
-
-            return Result.string(classes, filters);
+        if (!filter) {
+            return Result.string(classes);
         }
 
-        return Result.string(classes);
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+
+        filters.put("1", createFilter(MOVIE_TYPES));
+        filters.put("13", createFilter(TV_TYPES));
+        filters.put("3", createFilter(VARIETY_TYPES));
+        filters.put("48", new ArrayList<>());   // 短剧不筛选
+
+        return Result.string(classes, filters);
+    }
+
+    private List<Filter> createFilter(String[][] types) {
+        List<Filter> list = new ArrayList<>();
+        for (String[] t : types) {
+            list.add(new Filter.Value(t[0], t[1]));
+        }
+        return list;
     }
 
     // ==================== 分类页 ====================
