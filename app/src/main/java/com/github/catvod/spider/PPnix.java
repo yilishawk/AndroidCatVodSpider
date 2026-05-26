@@ -1,5 +1,6 @@
 package com.github.catvod.spider;
 
+import android.app.AlertDialog;
 import android.content.Context;
 import android.text.TextUtils;
 import android.view.ViewGroup;
@@ -13,6 +14,8 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Notify;
+import com.github.catvod.utils.ResUtil;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -157,64 +160,58 @@ public class PPnix extends Spider {
     }
 
     private void handleRequest(Socket client) {
-    try {
-        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-        OutputStream out = client.getOutputStream();
+        try (client) {
+            BufferedReader in  = new BufferedReader(new InputStreamReader(client.getInputStream()));
+            OutputStream   out = client.getOutputStream();
 
-        String requestLine = in.readLine();
-        if (requestLine == null) return;
-        // 读完请求头
-        String line;
-        while ((line = in.readLine()) != null && !line.isEmpty()) {}
+            String requestLine = in.readLine();
+            if (requestLine == null) return;
+            // 读完请求头
+            String line;
+            while ((line = in.readLine()) != null && !line.isEmpty()) {}
 
-        // 解析路径：/m3u8/{key} 或 /ts/{key}
-        String[] parts = requestLine.split(" ");
-        if (parts.length < 2) return;
-        String path = parts[1];
-        if (path.contains("?")) path = path.substring(0, path.indexOf("?"));
+            // 解析路径：/m3u8/{key} 或 /ts/{key}
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 2) return;
+            String path = parts[1];
+            if (path.contains("?")) path = path.substring(0, path.indexOf("?"));
 
-        if (path.startsWith("/m3u8/")) {
-            // 提供修改后的 m3u8 内容
-            String key = path.substring("/m3u8/".length());
-            String content = cache.get(key);
-            if (content != null) {
-                byte[] data = content.getBytes("UTF-8");
-                out.write(("HTTP/1.1 200 OK\r\n"
-                    + "Content-Type: application/vnd.apple.mpegurl\r\n"
-                    + "Content-Length: " + data.length + "\r\n"
-                    + "Access-Control-Allow-Origin: *\r\n"
-                    + "Connection: close\r\n\r\n").getBytes());
-                out.write(data);
-                logger("📤 [PPnix] M3U8 已提供: " + key);
+            if (path.startsWith("/m3u8/")) {
+                // 提供修改后的 m3u8 内容
+                String key     = path.substring("/m3u8/".length());
+                String content = cache.get(key);
+                if (content != null) {
+                    byte[] data = content.getBytes("UTF-8");
+                    out.write(("HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: application/vnd.apple.mpegurl\r\n"
+                        + "Content-Length: " + data.length + "\r\n"
+                        + "Access-Control-Allow-Origin: *\r\n"
+                        + "Connection: close\r\n\r\n").getBytes());
+                    out.write(data);
+                    logger("📤 [PPnix] M3U8 已提供: " + key);
+                } else {
+                    out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
+                }
+
+            } else if (path.startsWith("/ts/")) {
+                // 代理 TS 片段请求，带上正确请求头
+                String key    = path.substring("/ts/".length());
+                String tsUrl  = cache.get("ts_" + key);
+                if (tsUrl == null) {
+                    out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
+                    return;
+                }
+                proxyToClient(tsUrl, out);
+                logger("📤 [PPnix] TS 已代理: " + tsUrl.substring(0, Math.min(60, tsUrl.length())));
+
             } else {
                 out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
             }
-
-        } else if (path.startsWith("/ts/")) {
-            // 代理 TS 片段请求，带上正确请求头
-            String key = path.substring("/ts/".length());
-            String tsUrl = cache.get("ts_" + key);
-            if (tsUrl == null) {
-                out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
-                return;
-            }
-            proxyToClient(tsUrl, out);
-            logger("📤 [PPnix] TS 已代理: " + tsUrl.substring(0, Math.min(60, tsUrl.length())));
-
-        } else {
-            out.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes());
-        }
-        out.flush();
-    } catch (Exception e) {
-        logger("⚠️ [PPnix] 请求处理异常: " + e.getMessage());
-    } finally {
-        if (client != null && !client.isClosed()) {
-            try {
-                client.close();
-            } catch (Exception ignored) {}
+            out.flush();
+        } catch (Exception e) {
+            logger("⚠️ [PPnix] 请求处理异常: " + e.getMessage());
         }
     }
-}
 
     /**
      * 通过 HttpURLConnection 请求真实 TS 地址并转发给播放器
@@ -327,16 +324,62 @@ public class PPnix extends Spider {
     // 生命周期
     // ──────────────────────────────────────────────
 
+    private static final String PASSWORD = "123456"; // ← 改成你想要的密码
+    private static volatile boolean unlocked = false;
+
     @Override
     public void init(Context context, String extend) {
+        if (!unlocked) {
+            Init.run(this::showPasswordDialog);
+            return;
+        }
+        initCore();
+    }
+
+    private void showPasswordDialog() {
+        try {
+            int margin = ResUtil.dp2px(16);
+            android.widget.FrameLayout frame = new android.widget.FrameLayout(Init.context());
+            android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(margin, margin, margin, margin);
+            android.widget.EditText input = new android.widget.EditText(Init.context());
+            input.setHint("请输入访问密码");
+            input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            frame.addView(input, lp);
+
+            new android.app.AlertDialog.Builder(Init.getActivity())
+                .setTitle("PPnix 访问验证")
+                .setView(frame)
+                .setCancelable(false)
+                .setPositiveButton("确定", (d, w) -> {
+                    String pwd = input.getText().toString().trim();
+                    if (PASSWORD.equals(pwd)) {
+                        unlocked = true;
+                        Notify.show("✅ 验证通过");
+                        Init.execute(this::initCore);
+                    } else {
+                        Notify.show("❌ 密码错误");
+                        // 密码错误重新弹出
+                        Init.run(this::showPasswordDialog);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+        } catch (Exception e) {
+            logger("🚨 [PPnix] 密码弹窗失败: " + e.getMessage());
+        }
+    }
+
+    private void initCore() {
         ensureServer();
-        // ✅ 先检查 CookieManager 是否已有 Cookie
         if (!TextUtils.isEmpty(getCookieFromManager())) {
             cfCookie = getCookieFromManager();
             logger("✅ [PPnix] 已有 Cookie，跳过 WebView");
             return;
         }
-        // 用 WebView 访问首页，自动拿到 Cookie
         logger("🌐 [PPnix] 启动 WebView 获取 Cookie...");
         Init.run(this::loadWebViewForCookie);
     }
