@@ -22,57 +22,83 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class FkTv extends Spider {
 
     private final String siteUrl = "https://fktv.me";
+    private final String imageSearchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=";
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
 
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Referer", siteUrl + "/");
-        headers.put("Accept", "application/json, text/javascript, */*; q=0.01");
         return headers;
     }
 
-    // AES ECB 解密图片
-    private String decryptImage(String encryptedUrl) {
-        try {
-            String keyHex = "35323532303266393134396530363164";
-            byte[] key = hexToBytes(keyHex);
+    // 多线程批量获取图片
+    private List<Vod> parseListWithImage(String html) {
+        List<Vod> list = new ArrayList<>();
+        Document doc = Jsoup.parse(html);
 
-            OkResult result = OkHttp.get(encryptedUrl, getHeader());
-            byte[] encryptedData = result.getBodyBytes();
+        Elements items = doc.select("div.item-wrap.vertical");
+        ExecutorService executor = Executors.newFixedThreadPool(8); // 8个线程并发
 
-            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
-            cipher.init(Cipher.DECRYPT_MODE, keySpec);
+        List<Vod> tempList = new ArrayList<>();
 
-            byte[] decrypted = cipher.doFinal(encryptedData);
-            int pad = decrypted[decrypted.length - 1];
-            if (pad > 0 && pad <= 16) {
-                byte[] finalData = new byte[decrypted.length - pad];
-                System.arraycopy(decrypted, 0, finalData, 0, finalData.length);
-                return "data:image/jpeg;base64," + android.util.Base64.encodeToString(finalData, android.util.Base64.DEFAULT);
-            }
-            return "data:image/jpeg;base64," + android.util.Base64.encodeToString(decrypted, android.util.Base64.DEFAULT);
-        } catch (Exception e) {
-            e.printStackTrace();
-            return encryptedUrl;
+        for (Element item : items) {
+            Element a = item.selectFirst("a[href^=/movie/detail]");
+            if (a == null) continue;
+
+            String href = siteUrl + a.attr("href");
+            String name = a.attr("title");
+            String remark = item.selectFirst(".category") != null ? item.selectFirst(".category").text() : "";
+
+            Vod vod = new Vod();
+            vod.setVodId(href);
+            vod.setVodName(name);
+            vod.setVodRemarks(remark);
+            tempList.add(vod);
+
+            // 异步获取图片
+            executor.execute(() -> {
+                String pic = getBetterImage(name);
+                if (pic.isEmpty()) {
+                    pic = item.selectFirst("div.lazy-load") != null ? 
+                          item.selectFirst("div.lazy-load").attr("data-src") : "";
+                }
+                vod.setVodPic(pic);
+            });
         }
+
+        executor.shutdown();
+        try {
+            executor.awaitTermination(8, TimeUnit.SECONDS); // 最多等待8秒
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        list.addAll(tempList);
+        return list;
     }
 
-    private byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4) + Character.digit(hex.charAt(i + 1), 16));
-        }
-        return data;
+    // 通过 hongniuzy 搜索获取图片
+    private String getBetterImage(String title) {
+        try {
+            String url = imageSearchUrl + URLEncoder.encode(title, "UTF-8");
+            String json = OkHttp.string(url, getHeader());
+
+            JSONObject obj = new JSONObject(json);
+            JSONArray arr = obj.optJSONArray("list");
+            if (arr != null && arr.length() > 0) {
+                String pic = arr.getJSONObject(0).optString("pic");
+                if (pic.startsWith("http")) return pic;
+            }
+        } catch (Exception ignored) {}
+        return "";
     }
 
     @Override
@@ -88,9 +114,8 @@ public class FkTv extends Spider {
         classes.add(new Class("3", "综艺"));
         classes.add(new Class("8", "短剧"));
 
-        String url = siteUrl + "/channel?cat_id=1&page=1&page_size=32";
-        String html = OkHttp.string(url, getHeader());
-        List<Vod> list = parseList(html);
+        String html = OkHttp.string(siteUrl + "/channel?cat_id=1&page=1&page_size=32", getHeader());
+        List<Vod> list = parseListWithImage(html);
 
         return Result.string(classes, list);
     }
@@ -100,18 +125,17 @@ public class FkTv extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
         String html = OkHttp.string(url, getHeader());
-        List<Vod> list = parseList(html);
-
+        List<Vod> list = parseListWithImage(html);
         return Result.string(list);
     }
 
-    // 搜索（GET请求）
+    // 搜索
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         try {
             String url = siteUrl + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
             String html = OkHttp.string(url, getHeader());
-            List<Vod> list = parseList(html);
+            List<Vod> list = parseListWithImage(html);
             return Result.string(list);
         } catch (Exception e) {
             e.printStackTrace();
@@ -119,36 +143,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // 通用列表解析（分类 + 搜索共用）
-    private List<Vod> parseList(String html) {
-        List<Vod> list = new ArrayList<>();
-        Document doc = Jsoup.parse(html);
-
-        Elements items = doc.select("div.item-wrap.vertical");
-        for (Element item : items) {
-            Element a = item.selectFirst("a[href^=/movie/detail]");
-            if (a == null) continue;
-
-            String href = a.attr("href");
-            String name = a.attr("title");
-            String pic = item.selectFirst("div.lazy-load").attr("data-src");
-            String remark = item.selectFirst(".category") != null ? item.selectFirst(".category").text() : "";
-
-            if (!href.startsWith("http")) href = siteUrl + href;
-
-            String realPic = decryptImage(pic);
-
-            Vod vod = new Vod();
-            vod.setVodId(href);
-            vod.setVodName(name);
-            vod.setVodPic(realPic);
-            vod.setVodRemarks(remark);
-            list.add(vod);
-        }
-        return list;
-    }
-
-    // 详情页
+    // 详情页（使用单次搜索，更精准）
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -156,25 +151,15 @@ public class FkTv extends Spider {
         Document doc = Jsoup.parse(html);
 
         String name = doc.selectFirst(".name") != null ? doc.selectFirst(".name").text() : "";
-        String pic = "";
-        Element picEl = doc.selectFirst(".thumb.lazy-load");
-        if (picEl != null) pic = decryptImage(picEl.attr("data-src"));
-
-        String type = "", content = "";
+        String content = "";
         Element desc = doc.selectFirst(".desc");
         if (desc != null) content = desc.text();
 
-        Elements tags = doc.select(".tag-item");
-        for (Element tag : tags) {
-            String t = tag.text();
-            if (t.contains("剧") || t.contains("电影") || t.contains("综艺")) type = t;
-        }
-
-        // 提取 movieId 和 linkId
-        String movieId = extractRegex(html, "movieId\\s*=\\s*['\"](.*?)['\"]");
         String linkId = extractRegex(html, "linkId\\s*=\\s*['\"](.*?)['\"]");
 
-        // POST 获取播放线路
+        String pic = getBetterImage(name);
+
+        // 获取播放线路
         Map<String, String> postData = new HashMap<>();
         postData.put("link_id", linkId);
         postData.put("is_switch", "1");
@@ -194,14 +179,11 @@ public class FkTv extends Spider {
                 JSONArray playLinks = json.getJSONObject("data").getJSONArray("play_links");
                 List<String> urls = new ArrayList<>();
                 for (int i = 0; i < playLinks.length(); i++) {
-                    JSONObject line = playLinks.getJSONObject(i);
-                    String m3u8 = line.optString("m3u8_url");
+                    String m3u8 = playLinks.getJSONObject(i).optString("m3u8_url");
                     if (m3u8.startsWith("/")) m3u8 = siteUrl + m3u8;
                     urls.add("线路" + (i + 1) + "$" + m3u8);
                 }
-                if (!urls.isEmpty()) {
-                    playMap.put("默认线路", urls);
-                }
+                playMap.put("默认", urls);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -211,7 +193,6 @@ public class FkTv extends Spider {
         vod.setVodId(detailUrl);
         vod.setVodName(name);
         vod.setVodPic(pic);
-        vod.setTypeName(type);
         vod.setVodContent(content);
         vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
         vod.setVodPlayUrl(String.join("$$$", playMap.values().stream().map(v -> String.join("#", v)).toList()));
@@ -219,7 +200,6 @@ public class FkTv extends Spider {
         return Result.string(vod);
     }
 
-    // 播放
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         return Result.get().url(id).string();
