@@ -1,21 +1,18 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,13 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 public class FkTv extends Spider {
 
     private final String siteUrl = "https://fktv.me";
     private final String imageSearchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=";
-    
+
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
     private final String COOKIE = "_did=wEdXiQxa07zJ15hm0AsNjxsc4rZRSKzb; _device=pc";
 
@@ -43,13 +39,11 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // 多线程批量获取图片
-    private List<Vod> parseListWithImage(String html) {
+    // ==================== 快速解析列表（含异步补图）===================
+    private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
-
         Elements items = doc.select("div.item-wrap.vertical");
-        ExecutorService executor = Executors.newFixedThreadPool(8);
 
         for (Element item : items) {
             Element a = item.selectFirst("a[href^=/movie/detail]");
@@ -59,28 +53,39 @@ public class FkTv extends Spider {
             String name = a.attr("title");
             String remark = item.selectFirst(".category") != null ? item.selectFirst(".category").text() : "";
 
+            // 优先使用页面自带图片（快速）
+            Element img = item.selectFirst("div.lazy-load");
+            String pic = img != null ? img.attr("data-src") : "";
+
             Vod vod = new Vod();
             vod.setVodId(href);
             vod.setVodName(name);
+            vod.setVodPic(pic);
             vod.setVodRemarks(remark);
             list.add(vod);
-
-            executor.execute(() -> {
-                String pic = getBetterImage(name);
-                if (pic.isEmpty()) {
-                    Element img = item.selectFirst("div.lazy-load");
-                    pic = img != null ? img.attr("data-src") : "";
-                }
-                vod.setVodPic(pic);
-            });
         }
 
-        executor.shutdown();
-        try {
-            executor.awaitTermination(8, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {}
+        // 后台异步补高清图
+        if (!list.isEmpty()) {
+            asyncLoadBetterImages(list);
+        }
 
         return list;
+    }
+
+    private void asyncLoadBetterImages(List<Vod> vodList) {
+        ExecutorService executor = Executors.newFixedThreadPool(5);
+        for (Vod vod : vodList) {
+            executor.execute(() -> {
+                try {
+                    String betterPic = getBetterImage(vod.getVodName());
+                    if (!betterPic.isEmpty()) {
+                        vod.setVodPic(betterPic);
+                    }
+                } catch (Exception ignored) {}
+            });
+        }
+        executor.shutdown(); // 不等待
     }
 
     private String getBetterImage(String title) {
@@ -101,7 +106,7 @@ public class FkTv extends Spider {
     public void init(Context context, String extend) throws Exception {
     }
 
-    // 首页
+    // ==================== 首页 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -111,27 +116,26 @@ public class FkTv extends Spider {
         classes.add(new Class("8", "短剧"));
 
         String html = OkHttp.string(siteUrl + "/channel?cat_id=1&page=1&page_size=32", getHeader());
-        List<Vod> list = parseListWithImage(html);
-
+        List<Vod> list = parseList(html);
         return Result.string(classes, list);
     }
 
-    // 分类页
+    // ==================== 分类页 ====================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
         String html = OkHttp.string(url, getHeader());
-        List<Vod> list = parseListWithImage(html);
+        List<Vod> list = parseList(html);
         return Result.string(list);
     }
 
-    // 搜索
+    // ==================== 搜索 ====================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         try {
             String url = siteUrl + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
             String html = OkHttp.string(url, getHeader());
-            List<Vod> list = parseListWithImage(html);
+            List<Vod> list = parseList(html);
             return Result.string(list);
         } catch (Exception e) {
             e.printStackTrace();
@@ -139,7 +143,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // ==================== 详情页 - 多线路 + 多集 ====================
+    // ==================== 详情页（优化后）===================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -153,10 +157,51 @@ public class FkTv extends Spider {
 
         String pic = getBetterImage(name);
 
-        // 提取所有集数的 link_id
+        List<String> linkIds = extractLinkIds(html);
+        if (linkIds.isEmpty()) {
+            return Result.string(new Vod());
+        }
+
+        // 获取线路名称（只请求第一集）
+        List<String> lineNames = new ArrayList<>();
+        List<String> firstPlayList = getPlayUrls(detailUrl, linkIds.get(0));
+        for (String str : firstPlayList) {
+            String[] parts = str.split("\\$");
+            if (parts.length == 2) {
+                lineNames.add(parts[0]);
+            }
+        }
+
+        // 生成播放列表（懒加载）
+        Map<String, List<String>> lineMap = new LinkedHashMap<>();
+        for (int i = 0; i < linkIds.size(); i++) {
+            String episode = "第" + (i + 1) + "集";
+            String linkId = linkIds.get(i);
+            String playId = detailUrl + "|" + linkId;   // 关键：传递 detailUrl 和 linkId
+
+            for (String lineName : lineNames) {
+                lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
+                        .add(episode + "$" + playId);
+            }
+        }
+
+        Vod vod = new Vod();
+        vod.setVodId(detailUrl);
+        vod.setVodName(name);
+        vod.setVodPic(pic);
+        vod.setVodContent(content);
+        vod.setVodPlayFrom(String.join("$$$", lineNames));
+        vod.setVodPlayUrl(String.join("$$$", 
+                lineMap.values().stream().map(list -> String.join("#", list)).toList()));
+
+        return Result.string(vod);
+    }
+
+    private List<String> extractLinkIds(String html) {
         List<String> linkIds = new ArrayList<>();
+        Elements scripts = Jsoup.parse(html).select("script");
         String scriptText = "";
-        Elements scripts = doc.select("script");
+
         for (Element s : scripts) {
             if (s.html().contains("var links")) {
                 scriptText = s.html();
@@ -179,51 +224,9 @@ public class FkTv extends Spider {
             String defaultId = extractRegex(scriptText, "linkId\\s*=\\s*['\"](.*?)['\"]");
             if (!defaultId.isEmpty()) linkIds.add(defaultId);
         }
-
-        // 获取线路名称（以第一集为例）
-        List<String> lineNames = new ArrayList<>();
-        Map<String, List<String>> lineMap = new LinkedHashMap<>(); // 线路名 -> 剧集列表
-
-        if (!linkIds.isEmpty()) {
-            List<String> firstUrls = getPlayUrls(detailUrl, linkIds.get(0));
-            for (String str : firstUrls) {
-                String[] parts = str.split("\\$");
-                if (parts.length == 2) {
-                    lineNames.add(parts[0]);
-                }
-            }
-
-            // 遍历每一集，获取对应线路地址
-            for (int i = 0; i < linkIds.size(); i++) {
-                String linkId = linkIds.get(i);
-                List<String> playUrls = getPlayUrls(detailUrl, linkId);
-
-                for (String playStr : playUrls) {
-                    String[] arr = playStr.split("\\$");
-                    if (arr.length == 2) {
-                        String lineName = arr[0];
-                        String m3u8 = arr[1];
-                        String episode = "第" + (i + 1) + "集";
-                        lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
-                                .add(episode + "$" + m3u8);
-                    }
-                }
-            }
-        }
-
-        Vod vod = new Vod();
-        vod.setVodId(detailUrl);
-        vod.setVodName(name);
-        vod.setVodPic(pic);
-        vod.setVodContent(content);
-        vod.setVodPlayFrom(String.join("$$$", lineNames));
-        vod.setVodPlayUrl(String.join("$$$", lineMap.values().stream()
-                .map(list -> String.join("#", list)).toList()));
-
-        return Result.string(vod);
+        return linkIds;
     }
 
-    // 获取单集的所有线路地址
     private List<String> getPlayUrls(String detailUrl, String linkId) {
         List<String> urls = new ArrayList<>();
         try {
@@ -254,8 +257,24 @@ public class FkTv extends Spider {
         return urls;
     }
 
+    // ==================== 播放解析（按需请求）===================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        if (id.contains("|")) {
+            String[] parts = id.split("\\|");
+            String detailUrl = parts[0];
+            String linkId = parts[1];
+
+            List<String> playList = getPlayUrls(detailUrl, linkId);
+            if (!playList.isEmpty()) {
+                // 返回第一个线路的地址（可根据需要选择线路）
+                String[] arr = playList.get(0).split("\\$");
+                if (arr.length == 2) {
+                    return Result.get().url(arr[1]).string();
+                }
+            }
+        }
+        // 兜底
         return Result.get().url(id).string();
     }
 
