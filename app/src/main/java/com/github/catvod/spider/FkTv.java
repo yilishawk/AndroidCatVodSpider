@@ -1,6 +1,7 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
+import android.text.TextUtils;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -39,7 +40,7 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // ==================== 快速解析列表（含异步补图）===================
+    // ==================== 快速解析列表 + 异步补图 ====================
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -53,7 +54,6 @@ public class FkTv extends Spider {
             String name = a.attr("title");
             String remark = item.selectFirst(".category") != null ? item.selectFirst(".category").text() : "";
 
-            // 优先使用页面自带图片（快速）
             Element img = item.selectFirst("div.lazy-load");
             String pic = img != null ? img.attr("data-src") : "";
 
@@ -78,14 +78,17 @@ public class FkTv extends Spider {
         for (Vod vod : vodList) {
             executor.execute(() -> {
                 try {
-                    String betterPic = getBetterImage(vod.getVodName());
-                    if (!betterPic.isEmpty()) {
+                    String title = vod.getVodName();
+                    if (TextUtils.isEmpty(title)) return;
+
+                    String betterPic = getBetterImage(title);
+                    if (!TextUtils.isEmpty(betterPic)) {
                         vod.setVodPic(betterPic);
                     }
                 } catch (Exception ignored) {}
             });
         }
-        executor.shutdown(); // 不等待
+        executor.shutdown(); // 不阻塞
     }
 
     private String getBetterImage(String title) {
@@ -143,7 +146,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // ==================== 详情页（优化后）===================
+    // ==================== 详情页（优化版）===================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -162,7 +165,7 @@ public class FkTv extends Spider {
             return Result.string(new Vod());
         }
 
-        // 获取线路名称（只请求第一集）
+        // 获取线路名称（仅请求第一集）
         List<String> lineNames = new ArrayList<>();
         List<String> firstPlayList = getPlayUrls(detailUrl, linkIds.get(0));
         for (String str : firstPlayList) {
@@ -177,7 +180,7 @@ public class FkTv extends Spider {
         for (int i = 0; i < linkIds.size(); i++) {
             String episode = "第" + (i + 1) + "集";
             String linkId = linkIds.get(i);
-            String playId = detailUrl + "|" + linkId;   // 关键：传递 detailUrl 和 linkId
+            String playId = detailUrl + "|" + linkId;   // 重要：传递 detailUrl|linkId
 
             for (String lineName : lineNames) {
                 lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
@@ -257,24 +260,25 @@ public class FkTv extends Spider {
         return urls;
     }
 
-    // ==================== 播放解析（按需请求）===================
+    // ==================== 播放解析 ====================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (id.contains("|")) {
             String[] parts = id.split("\\|");
-            String detailUrl = parts[0];
-            String linkId = parts[1];
+            if (parts.length == 2) {
+                String detailUrl = parts[0];
+                String linkId = parts[1];
 
-            List<String> playList = getPlayUrls(detailUrl, linkId);
-            if (!playList.isEmpty()) {
-                // 返回第一个线路的地址（可根据需要选择线路）
-                String[] arr = playList.get(0).split("\\$");
-                if (arr.length == 2) {
-                    return Result.get().url(arr[1]).string();
+                List<String> playList = getPlayUrls(detailUrl, linkId);
+                if (!playList.isEmpty()) {
+                    String[] arr = playList.get(0).split("\\$");
+                    if (arr.length == 2) {
+                        return Result.get().url(arr[1]).string();
+                    }
                 }
             }
         }
-        // 兜底
+        // 兜底处理
         return Result.get().url(id).string();
     }
 
