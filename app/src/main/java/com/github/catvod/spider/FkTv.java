@@ -20,8 +20,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class FkTv extends Spider {
 
@@ -40,7 +38,7 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // ==================== 快速解析列表 + 异步补图 ====================
+    // ==================== 快速解析列表 ====================
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -65,43 +63,11 @@ public class FkTv extends Spider {
             list.add(vod);
         }
 
-        // 后台异步补高清图
-        if (!list.isEmpty()) {
-            asyncLoadBetterImages(list);
-        }
-
         return list;
     }
 
-    private void asyncLoadBetterImages(List<Vod> vodList) {
-        ExecutorService executor = Executors.newFixedThreadPool(5);
-        for (Vod vod : vodList) {
-            executor.execute(() -> {
-                try {
-                    // 通过反射或直接访问（兼容当前Vod类）
-                    String title = "";
-                    try {
-                        // 尝试调用 getVodName（部分版本有）
-                        java.lang.reflect.Method m = vod.getClass().getMethod("getVodName");
-                        title = (String) m.invoke(vod);
-                    } catch (Exception e) {
-                        // 兜底：使用已知的 set 时保存的名称
-                        title = vod.toString(); // 临时方案，实际项目中可优化
-                    }
-
-                    if (TextUtils.isEmpty(title)) return;
-
-                    String betterPic = getBetterImage(title);
-                    if (!TextUtils.isEmpty(betterPic)) {
-                        vod.setVodPic(betterPic);
-                    }
-                } catch (Exception ignored) {}
-            });
-        }
-        executor.shutdown();
-    }
-
     private String getBetterImage(String title) {
+        if (TextUtils.isEmpty(title)) return "";
         try {
             String url = imageSearchUrl + URLEncoder.encode(title, "UTF-8");
             String json = OkHttp.string(url);
@@ -156,7 +122,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // ==================== 详情页（优化版）===================
+    // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -168,7 +134,7 @@ public class FkTv extends Spider {
         Element desc = doc.selectFirst(".desc");
         if (desc != null) content = desc.text();
 
-        String pic = getBetterImage(name);
+        String pic = getBetterImage(name);   // 详情页使用高清图
 
         List<String> linkIds = extractLinkIds(html);
         if (linkIds.isEmpty()) {
