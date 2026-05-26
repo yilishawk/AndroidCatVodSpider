@@ -54,6 +54,7 @@ public class Y03YY extends Spider {
         OkHttp.string(host + "/", getHeader());
     }
 
+    // ==================== 首页 + 筛选 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -62,26 +63,36 @@ public class Y03YY extends Spider {
         classes.add(new Class("3", "综艺"));
         classes.add(new Class("48", "短剧"));
 
-        if (!filter) {
-            return Result.string(classes);
+        if (filter) {
+            LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+
+            filters.put("1", createTypeFilter(MOVIE_TYPES));
+            filters.put("13", createTypeFilter(TV_TYPES));
+            filters.put("3", createTypeFilter(VARIETY_TYPES));
+            filters.put("48", new ArrayList<>());  // 短剧不加筛选
+
+            // 必须同时返回 list（即使为空）
+            return Result.string(classes, new ArrayList<>(), filters);
         }
 
-        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
-
-        filters.put("1", createFilter(MOVIE_TYPES));
-        filters.put("13", createFilter(TV_TYPES));
-        filters.put("3", createFilter(VARIETY_TYPES));
-        filters.put("48", new ArrayList<>());   // 短剧不筛选
-
-        return Result.string(classes, filters);
+        // 不开启筛选时
+        return Result.string(classes, new ArrayList<>());
     }
 
-    private List<Filter> createFilter(String[][] types) {
-        List<Filter> list = new ArrayList<>();
+    // 辅助方法：创建筛选器
+    private List<Filter> createTypeFilter(String[][] types) {
+        List<Filter> filterList = new ArrayList<>();
+        
+        List<Filter.Value> values = new ArrayList<>();
         for (String[] t : types) {
-            list.add(new Filter.Value(t[0], t[1]));
+            values.add(new Filter.Value(t[0], t[1]));
         }
-        return list;
+
+        // 关键：Filter 构造器
+        Filter typeFilter = new Filter("type", "分类", values);
+        filterList.add(typeFilter);
+
+        return filterList;
     }
 
     // ==================== 分类页 ====================
