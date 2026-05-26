@@ -30,24 +30,28 @@ public class FkTv extends Spider {
 
     private final String siteUrl = "https://fktv.me";
     private final String imageSearchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=";
+    
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
+    
+    // 使用你提供的 Cookie
+    private final String COOKIE = "_did=wEdXiQxa07zJ15hm0AsNjxsc4rZRSKzb; _device=pc";
 
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Referer", siteUrl + "/");
+        headers.put("Accept", "application/json, text/javascript, */*; q=0.01");
+        headers.put("Cookie", COOKIE);           // 固定使用此 Cookie
         return headers;
     }
 
-    // 多线程批量获取图片
+    // 多线程获取图片
     private List<Vod> parseListWithImage(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
 
         Elements items = doc.select("div.item-wrap.vertical");
-        ExecutorService executor = Executors.newFixedThreadPool(8); // 8个线程并发
-
-        List<Vod> tempList = new ArrayList<>();
+        ExecutorService executor = Executors.newFixedThreadPool(8);
 
         for (Element item : items) {
             Element a = item.selectFirst("a[href^=/movie/detail]");
@@ -61,14 +65,13 @@ public class FkTv extends Spider {
             vod.setVodId(href);
             vod.setVodName(name);
             vod.setVodRemarks(remark);
-            tempList.add(vod);
+            list.add(vod);
 
-            // 异步获取图片
             executor.execute(() -> {
                 String pic = getBetterImage(name);
                 if (pic.isEmpty()) {
-                    pic = item.selectFirst("div.lazy-load") != null ? 
-                          item.selectFirst("div.lazy-load").attr("data-src") : "";
+                    Element img = item.selectFirst("div.lazy-load");
+                    pic = img != null ? img.attr("data-src") : "";
                 }
                 vod.setVodPic(pic);
             });
@@ -76,21 +79,16 @@ public class FkTv extends Spider {
 
         executor.shutdown();
         try {
-            executor.awaitTermination(8, TimeUnit.SECONDS); // 最多等待8秒
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+            executor.awaitTermination(8, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {}
 
-        list.addAll(tempList);
         return list;
     }
 
-    // 通过 hongniuzy 搜索获取图片
     private String getBetterImage(String title) {
         try {
             String url = imageSearchUrl + URLEncoder.encode(title, "UTF-8");
-            String json = OkHttp.string(url, getHeader());
-
+            String json = OkHttp.string(url);
             JSONObject obj = new JSONObject(json);
             JSONArray arr = obj.optJSONArray("list");
             if (arr != null && arr.length() > 0) {
@@ -143,7 +141,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // 详情页（使用单次搜索，更精准）
+    // 详情页
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
