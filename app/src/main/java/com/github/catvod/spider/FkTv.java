@@ -32,8 +32,6 @@ public class FkTv extends Spider {
     private final String imageSearchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=";
     
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
-    
-    // 使用你提供的 Cookie
     private final String COOKIE = "_did=wEdXiQxa07zJ15hm0AsNjxsc4rZRSKzb; _device=pc";
 
     private Map<String, String> getHeader() {
@@ -41,11 +39,11 @@ public class FkTv extends Spider {
         headers.put("User-Agent", UA);
         headers.put("Referer", siteUrl + "/");
         headers.put("Accept", "application/json, text/javascript, */*; q=0.01");
-        headers.put("Cookie", COOKIE);           // 固定使用此 Cookie
+        headers.put("Cookie", COOKIE);
         return headers;
     }
 
-    // 多线程获取图片
+    // 多线程批量获取图片
     private List<Vod> parseListWithImage(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -141,7 +139,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // 详情页
+    // ==================== 详情页 - 多线路 + 多集 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -153,38 +151,64 @@ public class FkTv extends Spider {
         Element desc = doc.selectFirst(".desc");
         if (desc != null) content = desc.text();
 
-        String linkId = extractRegex(html, "linkId\\s*=\\s*['\"](.*?)['\"]");
-
         String pic = getBetterImage(name);
 
-        // 获取播放线路
-        Map<String, String> postData = new HashMap<>();
-        postData.put("link_id", linkId);
-        postData.put("is_switch", "1");
-
-        Map<String, String> postHeader = new HashMap<>(getHeader());
-        postHeader.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        postHeader.put("X-Requested-With", "XMLHttpRequest");
-        postHeader.put("Origin", siteUrl);
-
-        OkResult postRes = OkHttp.post(detailUrl, postData, postHeader);
-        String jsonStr = postRes.getBody();
-
-        Map<String, List<String>> playMap = new LinkedHashMap<>();
-        try {
-            JSONObject json = new JSONObject(jsonStr);
-            if ("y".equals(json.optString("status"))) {
-                JSONArray playLinks = json.getJSONObject("data").getJSONArray("play_links");
-                List<String> urls = new ArrayList<>();
-                for (int i = 0; i < playLinks.length(); i++) {
-                    String m3u8 = playLinks.getJSONObject(i).optString("m3u8_url");
-                    if (m3u8.startsWith("/")) m3u8 = siteUrl + m3u8;
-                    urls.add("线路" + (i + 1) + "$" + m3u8);
-                }
-                playMap.put("默认", urls);
+        // 提取所有集数的 link_id
+        List<String> linkIds = new ArrayList<>();
+        String scriptText = "";
+        Elements scripts = doc.select("script");
+        for (Element s : scripts) {
+            if (s.html().contains("var links")) {
+                scriptText = s.html();
+                break;
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+        }
+
+        String linksStr = extractRegex(scriptText, "var links\\s*=\\s*(\\[.*?\\]);");
+        if (!linksStr.isEmpty()) {
+            try {
+                JSONArray arr = new JSONArray(linksStr);
+                for (int i = 0; i < arr.length(); i++) {
+                    String id = arr.getJSONObject(i).optString("id");
+                    if (!id.isEmpty()) linkIds.add(id);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (linkIds.isEmpty()) {
+            String defaultId = extractRegex(scriptText, "linkId\\s*=\\s*['\"](.*?)['\"]");
+            if (!defaultId.isEmpty()) linkIds.add(defaultId);
+        }
+
+        // 获取线路名称（以第一集为例）
+        List<String> lineNames = new ArrayList<>();
+        Map<String, List<String>> lineMap = new LinkedHashMap<>(); // 线路名 -> 剧集列表
+
+        if (!linkIds.isEmpty()) {
+            List<String> firstUrls = getPlayUrls(detailUrl, linkIds.get(0));
+            for (String str : firstUrls) {
+                String[] parts = str.split("\\$");
+                if (parts.length == 2) {
+                    lineNames.add(parts[0]);
+                }
+            }
+
+            // 遍历每一集，获取对应线路地址
+            for (int i = 0; i < linkIds.size(); i++) {
+                String linkId = linkIds.get(i);
+                List<String> playUrls = getPlayUrls(detailUrl, linkId);
+
+                for (String playStr : playUrls) {
+                    String[] arr = playStr.split("\\$");
+                    if (arr.length == 2) {
+                        String lineName = arr[0];
+                        String m3u8 = arr[1];
+                        String episode = "第" + (i + 1) + "集";
+                        lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
+                                .add(episode + "$" + m3u8);
+                    }
+                }
+            }
         }
 
         Vod vod = new Vod();
@@ -192,10 +216,42 @@ public class FkTv extends Spider {
         vod.setVodName(name);
         vod.setVodPic(pic);
         vod.setVodContent(content);
-        vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
-        vod.setVodPlayUrl(String.join("$$$", playMap.values().stream().map(v -> String.join("#", v)).toList()));
+        vod.setVodPlayFrom(String.join("$$$", lineNames));
+        vod.setVodPlayUrl(String.join("$$$", lineMap.values().stream()
+                .map(list -> String.join("#", list)).toList()));
 
         return Result.string(vod);
+    }
+
+    // 获取单集的所有线路地址
+    private List<String> getPlayUrls(String detailUrl, String linkId) {
+        List<String> urls = new ArrayList<>();
+        try {
+            Map<String, String> postData = new HashMap<>();
+            postData.put("link_id", linkId);
+            postData.put("is_switch", "1");
+
+            Map<String, String> postHeader = new HashMap<>(getHeader());
+            postHeader.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+            postHeader.put("X-Requested-With", "XMLHttpRequest");
+            postHeader.put("Origin", siteUrl);
+
+            OkResult res = OkHttp.post(detailUrl, postData, postHeader);
+            JSONObject json = new JSONObject(res.getBody());
+
+            if ("y".equals(json.optString("status"))) {
+                JSONArray playLinks = json.getJSONObject("data").getJSONArray("play_links");
+                for (int i = 0; i < playLinks.length(); i++) {
+                    JSONObject line = playLinks.getJSONObject(i);
+                    String m3u8 = line.optString("m3u8_url");
+                    if (m3u8.startsWith("/")) m3u8 = siteUrl + m3u8;
+                    urls.add("线路" + (i + 1) + "$" + m3u8);
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return urls;
     }
 
     @Override
