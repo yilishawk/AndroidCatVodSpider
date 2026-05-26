@@ -160,7 +160,7 @@ public class PPnix extends Spider {
     }
 
     private void handleRequest(Socket client) {
-        try (client) {
+        try (Socket _client = client) {
             BufferedReader in  = new BufferedReader(new InputStreamReader(client.getInputStream()));
             OutputStream   out = client.getOutputStream();
 
