@@ -35,6 +35,28 @@ public class QiYou extends Spider {
         return headers;
     }
 
+    // 防跳转重试方法（核心）
+    private String fetchWithRetry(String url, int maxRetry) {
+        for (int i = 0; i < maxRetry; i++) {
+            try {
+                String html = OkHttp.string(url, getHeader());
+                
+                if (html.contains("Loading......1S") || 
+                    html.contains("sx1420w415i.065846.xyz") ||
+                    html.length() < 500) {
+                    
+                    Thread.sleep(800);
+                    continue;
+                }
+                return html;
+            } catch (Exception e) {
+                e.printStackTrace();
+                try { Thread.sleep(1000); } catch (Exception ignored) {}
+            }
+        }
+        return "";
+    }
+
     @Override
     public void init(Context context, String extend) throws Exception {
     }
@@ -45,9 +67,9 @@ public class QiYou extends Spider {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("4", "综艺"));
+        classes.add(new Class("3", "综艺"));   // 改回3（你之前改成4了）
 
-        String homeHtml = OkHttp.string(siteUrl, getHeader());
+        String homeHtml = fetchWithRetry(siteUrl, 3);
         List<Vod> list = parseVodList(homeHtml);
 
         return Result.string(classes, list);
@@ -57,7 +79,7 @@ public class QiYou extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = siteUrl + "/list/" + tid + "_" + pg + ".html";
-        String html = OkHttp.string(url, getHeader());
+        String html = fetchWithRetry(url, 3);
         List<Vod> list = parseVodList(html);
 
         return Result.string(list);
@@ -65,12 +87,14 @@ public class QiYou extends Spider {
 
     // 通用列表解析
     private List<Vod> parseVodList(String html) {
+        if (html.isEmpty()) return new ArrayList<>();
+
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
 
         Elements items = doc.select("ul.stui-vodlist li");
         if (items.isEmpty()) {
-            items = doc.select("ul.stui-vodlist__media li");  // 搜索页
+            items = doc.select("ul.stui-vodlist__media li");
         }
 
         for (Element item : items) {
@@ -98,11 +122,13 @@ public class QiYou extends Spider {
         return list;
     }
 
-    // ==================== 优化后的详情页解析 ====================
+    // 详情页
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
-        String html = OkHttp.string(detailUrl, getHeader());
+        String html = fetchWithRetry(detailUrl, 3);
+        if (html.isEmpty()) return Result.string(new Vod());
+
         Document doc = Jsoup.parse(html);
 
         String name = doc.selectFirst("h1.line1") != null ? doc.selectFirst("h1.line1").text() : "";
@@ -112,11 +138,9 @@ public class QiYou extends Spider {
 
         String type = "", area = "", year = "", actor = "", director = "", content = "";
 
-        // 遍历所有 p 标签进行信息提取
         Elements ps = doc.select(".stui-content__detail p");
         for (Element p : ps) {
             String text = p.text().trim();
-
             if (text.contains("类型：")) {
                 type = p.selectFirst("a") != null ? p.selectFirst("a").text() : text.replace("类型：", "").trim();
             } else if (text.contains("地区：")) {
@@ -127,18 +151,14 @@ public class QiYou extends Spider {
                 actor = text.replace("主演：", "").trim();
             } else if (text.contains("导演：")) {
                 director = text.replace("导演：", "").trim();
-            } else if (text.contains("简介：") || text.contains("剧情：")) {
-                content = p.selectFirst(".desc") != null ? p.selectFirst(".desc").text() : text;
             }
         }
 
-        // 提取简介（更精确）
         Element descEl = doc.selectFirst(".desc.hidden-xs");
         if (descEl != null) {
             content = descEl.text().replace("简介：", "").replace("详情", "").trim();
         }
 
-        // 解析播放源
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         Elements playlists = doc.select(".tab-pane");
 
@@ -173,7 +193,7 @@ public class QiYou extends Spider {
         return Result.string(vod);
     }
 
-    // 搜索（POST）
+    // 搜索
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         try {
@@ -194,11 +214,11 @@ public class QiYou extends Spider {
         }
     }
 
-    // 播放解析（带降级嗅探）
+    // 播放解析
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
-            String html = OkHttp.string(id, getHeader());
+            String html = fetchWithRetry(id, 2);
             Document doc = Jsoup.parse(html);
 
             Element iframe = doc.selectFirst("iframe");
@@ -228,7 +248,6 @@ public class QiYou extends Spider {
             e.printStackTrace();
         }
 
-        // 解析失败 → 让壳子自己嗅探
         return Result.get()
                 .url(id)
                 .parse(1)
