@@ -24,12 +24,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 4k影视爬虫
- * 站点: https://www.4kvm.me
+ * 两个bt影视爬虫
+ * 站点: https://www.bttwo.me
  */
 public class Bttw extends Spider {
 
-    private String host = "https://www.bttwo.org";
+    private String host = "https://www.bttwo.me";
     private Map<String, String> headers;
 
     public Bttw() {
