@@ -20,6 +20,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class FkTv extends Spider {
 
@@ -38,9 +40,11 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // ==================== 快速解析列表 ====================
+    // ==================== 快速解析列表 + 异步补图 ====================
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
+        Map<Vod, String> titleMap = new HashMap<>();   // 用于异步补图时保存标题
+
         Document doc = Jsoup.parse(html);
         Elements items = doc.select("div.item-wrap.vertical");
 
@@ -60,10 +64,36 @@ public class FkTv extends Spider {
             vod.setVodName(name);
             vod.setVodPic(pic);
             vod.setVodRemarks(remark);
+
             list.add(vod);
+            titleMap.put(vod, name);   // 保存对应标题
+        }
+
+        // 启动异步补图
+        if (!list.isEmpty()) {
+            asyncLoadBetterImages(titleMap);
         }
 
         return list;
+    }
+
+    // 异步补高清图（关键修复）
+    private void asyncLoadBetterImages(Map<Vod, String> titleMap) {
+        ExecutorService executor = Executors.newFixedThreadPool(4);  // 限制并发
+        for (Map.Entry<Vod, String> entry : titleMap.entrySet()) {
+            Vod vod = entry.getKey();
+            String title = entry.getValue();
+
+            executor.execute(() -> {
+                try {
+                    String betterPic = getBetterImage(title);
+                    if (!TextUtils.isEmpty(betterPic)) {
+                        vod.setVodPic(betterPic);   // 更新图片
+                    }
+                } catch (Exception ignored) {}
+            });
+        }
+        executor.shutdown(); // 不等待完成
     }
 
     private String getBetterImage(String title) {
@@ -168,7 +198,7 @@ public class FkTv extends Spider {
         vod.setVodPic(pic);
         vod.setVodContent(content);
         vod.setVodPlayFrom(String.join("$$$", lineNames));
-        vod.setVodPlayUrl(String.join("$$$", 
+        vod.setVodPlayUrl(String.join("$$$",
                 lineMap.values().stream().map(list -> String.join("#", list)).toList()));
 
         return Result.string(vod);
@@ -178,14 +208,12 @@ public class FkTv extends Spider {
         List<String> linkIds = new ArrayList<>();
         Elements scripts = Jsoup.parse(html).select("script");
         String scriptText = "";
-
         for (Element s : scripts) {
             if (s.html().contains("var links")) {
                 scriptText = s.html();
                 break;
             }
         }
-
         String linksStr = extractRegex(scriptText, "var links\\s*=\\s*(\\[.*?\\]);");
         if (!linksStr.isEmpty()) {
             try {
@@ -196,7 +224,6 @@ public class FkTv extends Spider {
                 }
             } catch (Exception ignored) {}
         }
-
         if (linkIds.isEmpty()) {
             String defaultId = extractRegex(scriptText, "linkId\\s*=\\s*['\"](.*?)['\"]");
             if (!defaultId.isEmpty()) linkIds.add(defaultId);
@@ -241,7 +268,6 @@ public class FkTv extends Spider {
             if (parts.length == 2) {
                 String detailUrl = parts[0];
                 String linkId = parts[1];
-
                 List<String> playList = getPlayUrls(detailUrl, linkId);
                 if (!playList.isEmpty()) {
                     String[] arr = playList.get(0).split("\\$");
