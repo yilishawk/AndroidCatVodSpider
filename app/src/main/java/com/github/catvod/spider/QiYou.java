@@ -45,7 +45,7 @@ public class QiYou extends Spider {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("3", "综艺"));
+        classes.add(new Class("4", "综艺"));
 
         String homeHtml = OkHttp.string(siteUrl, getHeader());
         List<Vod> list = parseVodList(homeHtml);
@@ -98,7 +98,7 @@ public class QiYou extends Spider {
         return list;
     }
 
-    // 详情页
+    // ==================== 优化后的详情页解析 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0);
@@ -110,16 +110,32 @@ public class QiYou extends Spider {
         Element thumb = doc.selectFirst(".stui-content__thumb a");
         if (thumb != null) pic = thumb.attr("data-original");
 
-        String type = "", area = "", year = "", actor = "", director = "";
+        String type = "", area = "", year = "", actor = "", director = "", content = "";
 
-        Elements infos = doc.select(".stui-content__detail p.data");
-        for (Element p : infos) {
-            String text = p.text();
-            if (text.contains("类型：")) type = p.select("a").text();
-            else if (text.contains("地区：")) area = text.replaceAll("地区：", "").trim();
-            else if (text.contains("年份：")) year = text.replaceAll("年份：", "").trim();
-            else if (text.contains("主演：")) actor = text.replaceAll("主演：", "").trim();
-            else if (text.contains("导演：")) director = text.replaceAll("导演：", "").trim();
+        // 遍历所有 p 标签进行信息提取
+        Elements ps = doc.select(".stui-content__detail p");
+        for (Element p : ps) {
+            String text = p.text().trim();
+
+            if (text.contains("类型：")) {
+                type = p.selectFirst("a") != null ? p.selectFirst("a").text() : text.replace("类型：", "").trim();
+            } else if (text.contains("地区：")) {
+                area = text.replace("地区：", "").trim();
+            } else if (text.contains("年份：")) {
+                year = text.replace("年份：", "").trim();
+            } else if (text.contains("主演：")) {
+                actor = text.replace("主演：", "").trim();
+            } else if (text.contains("导演：")) {
+                director = text.replace("导演：", "").trim();
+            } else if (text.contains("简介：") || text.contains("剧情：")) {
+                content = p.selectFirst(".desc") != null ? p.selectFirst(".desc").text() : text;
+            }
+        }
+
+        // 提取简介（更精确）
+        Element descEl = doc.selectFirst(".desc.hidden-xs");
+        if (descEl != null) {
+            content = descEl.text().replace("简介：", "").replace("详情", "").trim();
         }
 
         // 解析播放源
@@ -150,6 +166,7 @@ public class QiYou extends Spider {
         vod.setVodYear(year);
         vod.setVodActor(actor);
         vod.setVodDirector(director);
+        vod.setVodContent(content);
         vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
         vod.setVodPlayUrl(String.join("$$$", playMap.values().stream().map(v -> String.join("#", v)).toList()));
 
