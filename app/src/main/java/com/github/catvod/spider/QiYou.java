@@ -7,14 +7,13 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Utils;
+import com.github.catvod.net.OkResult;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -64,14 +63,14 @@ public class QiYou extends Spider {
         return Result.string(list);
     }
 
-    // 通用列表解析（支持首页、分类、搜索）
+    // 通用列表解析
     private List<Vod> parseVodList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
 
         Elements items = doc.select("ul.stui-vodlist li");
         if (items.isEmpty()) {
-            items = doc.select("ul.stui-vodlist__media li");  // 搜索页结构
+            items = doc.select("ul.stui-vodlist__media li");  // 搜索页
         }
 
         for (Element item : items) {
@@ -87,7 +86,7 @@ public class QiYou extends Spider {
             if (remarkEl != null) remark = remarkEl.text();
 
             if (!href.startsWith("http")) href = siteUrl + href;
-            if (pic.startsWith("//")) pic = "https:" + pic;
+            if (pic != null && pic.startsWith("//")) pic = "https:" + pic;
 
             Vod vod = new Vod();
             vod.setVodId(href);
@@ -167,9 +166,10 @@ public class QiYou extends Spider {
             Map<String, String> headers = getHeader();
             headers.put("Content-Type", "application/x-www-form-urlencoded");
 
-            String html = OkHttp.post(siteUrl + "/search.php", params, headers);
-            List<Vod> list = parseVodList(html);
+            OkResult okResult = OkHttp.post(siteUrl + "/search.php", params, headers);
+            String html = okResult.getBody();
 
+            List<Vod> list = parseVodList(html);
             return Result.string(list);
         } catch (Exception e) {
             e.printStackTrace();
@@ -203,7 +203,7 @@ public class QiYou extends Spider {
 
                     if (!realUrl.isEmpty()) {
                         realUrl = realUrl.replace("\\", "");
-                        return Result.get(flag, realUrl);
+                        return Result.get().url(realUrl).string();
                     }
                 }
             }
@@ -211,14 +211,12 @@ public class QiYou extends Spider {
             e.printStackTrace();
         }
 
-        // 解析失败时，让壳子自己嗅探
-        Map<String, String> result = new HashMap<>();
-        result.put("parse", "1");
-        result.put("url", id);
-        result.put("header", UA);
-        result.put("jx", "0");
-
-        return Result.string(result);
+        // 解析失败 → 让壳子自己嗅探
+        return Result.get()
+                .url(id)
+                .parse(1)
+                .header(getHeader())
+                .string();
     }
 
     private String extractRegex(String text, String regex) {
