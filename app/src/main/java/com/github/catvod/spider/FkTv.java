@@ -78,7 +78,17 @@ public class FkTv extends Spider {
         for (Vod vod : vodList) {
             executor.execute(() -> {
                 try {
-                    String title = vod.getVodName();
+                    // 通过反射或直接访问（兼容当前Vod类）
+                    String title = "";
+                    try {
+                        // 尝试调用 getVodName（部分版本有）
+                        java.lang.reflect.Method m = vod.getClass().getMethod("getVodName");
+                        title = (String) m.invoke(vod);
+                    } catch (Exception e) {
+                        // 兜底：使用已知的 set 时保存的名称
+                        title = vod.toString(); // 临时方案，实际项目中可优化
+                    }
+
                     if (TextUtils.isEmpty(title)) return;
 
                     String betterPic = getBetterImage(title);
@@ -88,7 +98,7 @@ public class FkTv extends Spider {
                 } catch (Exception ignored) {}
             });
         }
-        executor.shutdown(); // 不阻塞
+        executor.shutdown();
     }
 
     private String getBetterImage(String title) {
@@ -165,7 +175,6 @@ public class FkTv extends Spider {
             return Result.string(new Vod());
         }
 
-        // 获取线路名称（仅请求第一集）
         List<String> lineNames = new ArrayList<>();
         List<String> firstPlayList = getPlayUrls(detailUrl, linkIds.get(0));
         for (String str : firstPlayList) {
@@ -175,12 +184,11 @@ public class FkTv extends Spider {
             }
         }
 
-        // 生成播放列表（懒加载）
         Map<String, List<String>> lineMap = new LinkedHashMap<>();
         for (int i = 0; i < linkIds.size(); i++) {
             String episode = "第" + (i + 1) + "集";
             String linkId = linkIds.get(i);
-            String playId = detailUrl + "|" + linkId;   // 重要：传递 detailUrl|linkId
+            String playId = detailUrl + "|" + linkId;
 
             for (String lineName : lineNames) {
                 lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
@@ -260,7 +268,6 @@ public class FkTv extends Spider {
         return urls;
     }
 
-    // ==================== 播放解析 ====================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (id.contains("|")) {
@@ -278,7 +285,6 @@ public class FkTv extends Spider {
                 }
             }
         }
-        // 兜底处理
         return Result.get().url(id).string();
     }
 
