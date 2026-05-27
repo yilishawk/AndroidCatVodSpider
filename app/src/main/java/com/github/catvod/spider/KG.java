@@ -11,6 +11,11 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.Collections;
 import java.util.List;
 import java.net.URLEncoder;
 import java.util.Map;
@@ -892,13 +897,74 @@ private String stripJson(String rule) {
     return rule.toLowerCase().startsWith("json:") ? rule.substring(5).trim() : rule.trim();
 }
 private String fixPicUrl(String pic) {
-    if (TextUtils.isEmpty(pic)) return pic;
-    if (pic.startsWith("http://") || pic.startsWith("https://")) return pic;
-    if (pic.startsWith("//")) return "http:" + pic;
-    // 有图片前缀用前缀，没有用站点域名
-    String picHost = rule.optString("pic_host", this.siteUrl);
-    return picHost + (pic.startsWith("/") ? "" : "/") + pic;
-}
+        if (TextUtils.isEmpty(pic)) return pic;
+
+        // 缓存命中直接返回（大幅提升性能）
+        if (picCache.containsKey(pic)) {
+            return picCache.get(pic);
+        }
+
+        // ==================== 新增：图片跳转 + API二次提取模式 ====================
+        if (rule.optBoolean("pic_jump", false)) {
+            String prefix = rule.optString("pic_prefix", "");
+            String suffix = rule.optString("pic_suffix", "");
+            String extractRule = rule.optString("pic_extract", "");
+
+            if (!TextUtils.isEmpty(prefix)) {
+                String apiUrl = prefix + pic + suffix;
+
+                try {
+                    // 多线程异步执行
+                    Future<String> future = picExecutor.submit(() -> {
+                        try {
+                            OkResult res = KaiGeNet.smartRequest(this.siteUrl, "get", apiUrl, null, getHeaders(null));
+                            String response = res.getBody();
+
+                            if (!TextUtils.isEmpty(response) && !TextUtils.isEmpty(extractRule)) {
+                                String finalPic = KaiGeEngine.doExtract(response, extractRule, "").value;
+
+                                if (!TextUtils.isEmpty(finalPic)) {
+                                    // 如果提取出来的是相对路径，补全 pic_host
+                                    if (!finalPic.startsWith("http")) {
+                                        String picHost = rule.optString("pic_host", "https://image.tmdb.org/t/p/w500");
+                                        finalPic = picHost + (finalPic.startsWith("/") ? "" : "/") + finalPic;
+                                    }
+                                    return finalPic;
+                                }
+                            }
+                        } catch (Exception e) {
+                            logger("⚠️ [pic_jump] 请求失败: " + e.getMessage());
+                        }
+                        return pic; // 失败时回退原值
+                    });
+
+                    // 最多等待8秒
+                    String result = future.get(8, TimeUnit.SECONDS);
+                    picCache.put(pic, result);
+                    return result;
+
+                } catch (Exception e) {
+                    logger("⚠️ [pic_jump] 多线程超时或异常: " + e.getMessage());
+                }
+            }
+        }
+
+        // ==================== 普通模式（向下兼容）====================
+        if (pic.startsWith("http://") || pic.startsWith("https://")) {
+            picCache.put(pic, pic);
+            return pic;
+        }
+        if (pic.startsWith("//")) {
+            String result = "https:" + pic;
+            picCache.put(pic, result);
+            return result;
+        }
+
+        String picHost = rule.optString("pic_host", this.siteUrl);
+        String result = picHost + (pic.startsWith("/") ? "" : "/") + pic;
+        picCache.put(pic, result);
+        return result;
+    }
 private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
