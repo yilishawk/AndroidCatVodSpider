@@ -6,98 +6,222 @@ import com.github.catvod.utils.Json;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import java.net.URLEncoder;
-import java.security.MessageDigest;
 
+import java.io.ByteArrayInputStream;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+
+/**
+ * DanmuHelper - 针对TVSpider 项目优化的弹幕助手
+ * 功能：多源搜索弹幕、JSON转XML、广告过滤、本地代理响应
+ */
 public class DanmuHelper {
 
-    public static String getDanmuXml(String title, int episodeNum) {
-    Proxy.log("🎯 [弹幕] 开始请求 title=" + title + " ep=" + episodeNum);
-    try {
-        // 1. 搜索获取原始链接 (严格匹配 titleTxt)
-        String rawUrl = search360kan(title, episodeNum);
-        Proxy.log("🎯 [弹幕] rawUrl=" + rawUrl);
-        if (rawUrl == null || rawUrl.isEmpty()) {
-            Proxy.log("🎯 [弹幕] rawUrl为空，返回空弹幕");
-            return generateEmpty(title, episodeNum);
-        }
+    private static final Random RANDOM = new Random();
 
-        // 2. MD5 加密清洗后的链接
-        String md5Id = getMd5(rawUrl);
-        Proxy.log("🎯 [弹幕] md5=" + md5Id);
+    // 弹幕源 API (可扩展)
+    private static final String[] DANMU_SOURCES = {
+            "https://danmu.zxz.ee/?type=xml&id={md5}",
+            "https://dmku.hls.one/?ac=dm&url={url}"
+    };
 
-        // 3. 调用指定接口获取 XML
-        String apiUrl = "https://danmu.zxz.ee/?type=xml&id=" + md5Id;
-        Proxy.log("🎯 [弹幕] 请求XML: " + apiUrl);
-        String xml = OkHttp.string(apiUrl);
-        Proxy.log("🎯 [弹幕] XML长度=" + (xml == null ? "null" : xml.length()));
+    // 弹幕颜色池
+    private static final String[] COLORS = {
+            "16711680", "16776960", "65280", "255", "16711935",
+            "65535", "16777215", "8388736", "16753920"
+    };
 
-        if (xml != null && xml.contains("<d")) return xml;
-    } catch (Exception e) {
-        Proxy.log("🎯 [弹幕] 异常: " + e.getMessage());
-    }
-    return generateEmpty(title, episodeNum);
-}
+    // 弹幕内容指纹过滤正则（去除采集站广告）
+    private static final String AD_PATTERN = ".*(请遵守弹幕礼仪|官方弹幕库|微信公众号|云烟小助手|未传入链接|弹幕列队|火花剧场|加群|防走失|备用|联系|侵权).*";
 
-    // 修改 search360kan 内部逻辑
-    private static String search360kan(String title, int episodeNum) {
+    /**
+     * 响应 Spider 类的 proxy 调用
+     * params 必须包含：
+     * - title: 视频标题
+     * - episode: 集数
+     */
+    public static Object[] getDanmuResponse(Map<String, String> params) {
         try {
-            String url = "https://api.so.360kan.com/index?force_v=1&kw=" + URLEncoder.encode(title, "UTF-8") + "&tab=all";
-            String res = OkHttp.string(url);
-            JsonObject root = Json.safeObject(res);
+            String title = params.get("title");
+            String episodeStr = params.get("episode");
 
-            // 🛡️ 防御 A: 检查 root 和 data 节点
-            if (root == null || !root.has("data") || root.get("data").isJsonNull()) return null;
-            JsonObject data = root.getAsJsonObject("data");
-
-            // 🛡️ 防御 B: 检查 longData 是否搜到结果
-            if (!data.has("longData") || data.get("longData").isJsonNull()) {
-                Proxy.log("⚠️ [Helper] 360未搜到该剧: " + title);
-                return null;
+            if (title == null || title.isEmpty()) title = "未知标题";
+            int episodeNum = 1;
+            if (episodeStr != null) {
+                try {
+                    episodeNum = Integer.parseInt(episodeStr.replaceAll("\\D", ""));
+                } catch (Exception ignored) {}
             }
-            JsonObject longData = data.getAsJsonObject("longData");
 
-            // 🛡️ 防御 C: 检查 rows 数组
-            if (!longData.has("rows") || longData.get("rows").isJsonNull()) return null;
-            JsonArray rows = longData.getAsJsonArray("rows");
+            // 获取视频 URL（可选逻辑，不依赖外部 url）
+            Proxy.log("🎯 [弹幕] title=" + title + " | episode=" + episodeNum);
+            String videoUrl = searchVideoUrl(title, episodeNum);
+            Proxy.log("🔗 [弹幕] searchVideoUrl结果=" + (videoUrl.isEmpty() ? "空！将不搜索弹幕" : videoUrl));
+
+            // 获取弹幕并转换为 XML
+            String xmlContent = "";
+            if (!videoUrl.isEmpty()) {
+                xmlContent = fetchAndConvert(videoUrl);
+            }
+
+            // 弹幕为空，生成系统提示
+            if (xmlContent.isEmpty()) {
+                xmlContent = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>"
+                        + "<d p=\"0,1,25,16777215,0,0,0,0\">[代理] " + escapeXml(title) + " 弹幕加载完成</d>"
+                        + "</i>";
+            }
+
+            return new Object[]{
+                    200,
+                    "application/xml; charset=utf-8",
+                    new ByteArrayInputStream(xmlContent.getBytes(StandardCharsets.UTF_8))
+            };
+        } catch (Exception e) {
+            Proxy.log("❌ [弹幕总异常] " + e.getMessage());
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "text/plain");
+            return new Object[]{
+                    500,
+                    "text/plain",
+                    new ByteArrayInputStream(e.getMessage().getBytes())
+            };
+        }
+    }
+
+    /**
+     * 视频 URL 搜索逻辑
+     * 可根据标题 + 集数匹配播放链接
+     */
+    private static String searchVideoUrl(String title, int episode) {
+        try {
+            String searchUrl = "https://api.so.360kan.com/index?force_v=1&kw="
+                    + URLEncoder.encode(title, "UTF-8") + "&tab=all";
+            String json = OkHttp.string(searchUrl);
+            JsonObject data = Json.safeObject(json).getAsJsonObject("data");
+            JsonArray rows = data.getAsJsonObject("longData").getAsJsonArray("rows");
 
             for (JsonElement el : rows) {
-                if (!el.isJsonObject()) continue;
                 JsonObject row = el.getAsJsonObject();
-                
-                // 严格匹配 titleTxt
-                String titleTxt = row.has("titleTxt") ? row.get("titleTxt").getAsString().replace(" ", "") : "";
-                if (!titleTxt.equalsIgnoreCase(title.replace(" ", ""))) continue;
+                String rowTitle = row.get("titleTxt").getAsString();
+                if (!rowTitle.contains(title) && !title.contains(rowTitle)) continue;
 
-                // 提取剧集链接
-                if (row.has("seriesPlaylinks") && row.get("seriesPlaylinks").isJsonArray()) {
+                if ("电影".equals(row.get("cat_name").getAsString())) {
+                    JsonObject playlinks = row.getAsJsonObject("playlinks");
+                    if (playlinks.has("qq")) return cleanUrl(playlinks.get("qq").getAsString());
+                    if (playlinks.has("qiyi")) return cleanUrl(playlinks.get("qiyi").getAsString());
+                } else {
                     JsonArray series = row.getAsJsonArray("seriesPlaylinks");
-                    if (series.size() >= episodeNum && episodeNum > 0) {
-                        JsonElement target = series.get(episodeNum - 1);
-                        String epUrl = target.isJsonObject() ? target.getAsJsonObject().get("url").getAsString() : target.getAsString();
-                        
-                        // 清洗 URL 参数对齐 MD5 逻辑
-                        return epUrl.contains("?") ? epUrl.split("\\?")[0] : epUrl;
+                    if (series.size() >= episode) {
+                        return cleanUrl(series.get(episode - 1).getAsJsonObject().get("url").getAsString());
                     }
                 }
             }
         } catch (Exception e) {
-            Proxy.log("❌ [Helper] 解析崩溃: " + e.getMessage());
-        }
-        return null;
+          Proxy.log("❌ [弹幕360搜索失败] " + e.getMessage());
+}
+return "";
     }
 
-    private static String getMd5(String text) {
+    /**
+     * 去掉 URL 参数
+     */
+    private static String cleanUrl(String url) {
+        return url.contains("?") ? url.split("\\?")[0] : url;
+    }
+
+    /**
+     * 抓取弹幕并转换为 XML
+     * ✅ 修复：增强 JSON 解析兼容性，防止 NPE
+     */
+    private static String fetchAndConvert(String videoUrl) {
+        Proxy.log("🔍 [弹幕搜索] 开始搜索，videoUrl=" + videoUrl);
+        // 预先计算 md5
+        String videoMd5 = "";
         try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] array = md.digest(text.getBytes("UTF-8"));
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(videoUrl.getBytes("UTF-8"));
             StringBuilder sb = new StringBuilder();
-            for (byte b : array) sb.append(Integer.toHexString((b & 0xFF) | 0x100).substring(1, 3));
-            return sb.toString();
-        } catch (Exception e) { return ""; }
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            videoMd5 = sb.toString();
+            Proxy.log("🔑 [弹幕] videoUrl MD5=" + videoMd5);
+        } catch (Exception e) {
+            Proxy.log("❌ [弹幕] MD5计算失败: " + e.getMessage());
+        }
+        for (String source : DANMU_SOURCES) {
+            try {
+                String api = source
+                        .replace("{md5}", videoMd5)
+                        .replace("{url}", URLEncoder.encode(videoUrl, "UTF-8"));
+                String res = OkHttp.string(api);
+
+                // 如果已经是 XML 格式
+                if (res.contains("<d")) return res;
+
+                // danmu.zxz.ee 无数据时返回空 <i></i>，跳过
+                if (res.contains("<i>") && !res.contains("<d")) {
+                    Proxy.log("⚠️ [弹幕] " + source + " 无弹幕数据，尝试下一源");
+                    continue;
+                }
+
+                // JSON 格式弹幕
+                JsonObject json = Json.safeObject(res);
+                JsonArray danmuku = null;
+
+                if (json.has("danmuku")) {
+                    danmuku = json.getAsJsonArray("danmuku");
+                } else if (json.has("data") && json.get("data").isJsonObject()) {
+                    JsonObject data = json.getAsJsonObject("data");
+                    if (data.has("danmuku")) {
+                        danmuku = data.getAsJsonArray("danmuku");
+                    }
+                }
+
+                if (danmuku == null && json.has("data") && json.get("data").isJsonArray()) {
+                    danmuku = json.getAsJsonArray("data");
+                }
+
+                Proxy.log("📦 [弹幕解析] source=" + source + " | danmuku条数=" + (danmuku != null ? danmuku.size() : 0));
+                if (danmuku != null && danmuku.size() > 0) {
+                    StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><i>\n");
+                    for (JsonElement d : danmuku) {
+                        if (!d.isJsonArray()) continue;
+                        JsonArray item = d.getAsJsonArray();
+                        if (item.size() < 6) continue;
+
+                        String content = item.get(5).getAsString();
+                        if (content.matches(AD_PATTERN)) continue;
+
+                        String time = item.get(0).getAsString();
+                        String fontSize = item.get(2).getAsString().replaceAll("[^0-9]", "");
+                        if (fontSize.isEmpty()) fontSize = "25";
+                        String color = item.get(4).getAsString().replaceAll("[^0-9]", "");
+                        if (color.isEmpty()) color = "16777215";
+                        long ts = System.currentTimeMillis() / 1000;
+                        xml.append(String.format("<d p=\"%s,1,%s,%s,%d,0,0,0\">%s</d>\n",
+                                time, fontSize, color, ts, escapeXml(content)));
+                    }
+                    xml.append("</i>");
+                    return xml.toString();
+                }
+            } catch (Exception e) {
+                Proxy.log("❌ [弹幕源失败] source=" + source + " | error=" + e.getMessage());
+            }
+        }
+        return "";
     }
 
-    private static String generateEmpty(String title, int ep) {
-        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?><i><d p=\"0,1,25,16777215\">[弹幕] " + title + " 第" + ep + "集 匹配成功</d></i>";
+    /**
+     * 转义 XML 特殊字符
+     */
+    private static String escapeXml(String text) {
+        if (text == null) return "";
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&apos;");
     }
 }
