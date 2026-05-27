@@ -12,13 +12,11 @@ import org.jsoup.select.Elements;
 
 import java.io.*;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class ProxyIPTV extends Spider {
 
     private static final String WORKER_URL = "https://tonkiang.us";
-    private static final int MAX_IP_PER_PAGE = 2;           // 只取2个IP源
+    private static final int MAX_IP_PER_PAGE = 2;
     private static final String IPTV_FILE = "/sdcard/Download/iptv.txt";
 
     private static boolean hasCrawled = false;
@@ -45,7 +43,7 @@ public class ProxyIPTV extends Spider {
         if (!lines.isEmpty()) {
             saveIPTV(lines);
             cachedM3u = buildM3u(lines);
-            log("✅ IPTV 抓取完成，共 " + lines.size() + " 行");
+            log("✅ IPTV 抓取完成！共 " + lines.size() + " 行数据");
         }
     }
 
@@ -72,7 +70,7 @@ public class ProxyIPTV extends Spider {
                 }
             }
         } catch (Exception e) {
-            log("⚠️ " + listPhp + " 抓取失败");
+            log("⚠️ " + listPhp + " 抓取异常");
         }
     }
 
@@ -106,7 +104,7 @@ public class ProxyIPTV extends Spider {
             String tk = params.get("tk");
             if (ip == null || tk == null) continue;
 
-            String region = "未知地区";
+            String region = "未知";
             Element i = div.selectFirst("i");
             if (i != null) region = i.text().trim();
 
@@ -144,24 +142,6 @@ public class ProxyIPTV extends Spider {
         return channels;
     }
 
-    private void saveIPTV(List<String> lines) {
-        try (FileWriter fw = new FileWriter(IPTV_FILE)) {
-            for (String line : lines) {
-                fw.write(line + "\n");
-            }
-        } catch (Exception e) {
-            log("保存文件失败");
-        }
-    }
-
-    private String buildM3u(List<String> lines) {
-        StringBuilder sb = new StringBuilder("#EXTM3U\n");
-        for (String line : lines) {
-            sb.append(line).append("\n");
-        }
-        return sb.toString();
-    }
-
     private Map<String, String> parseQuery(String url) {
         Map<String, String> map = new HashMap<>();
         try {
@@ -174,23 +154,40 @@ public class ProxyIPTV extends Spider {
         return map;
     }
 
+    private void saveIPTV(List<String> lines) {
+        try (FileWriter fw = new FileWriter(IPTV_FILE)) {
+            for (String line : lines) fw.write(line + "\n");
+            log("💾 已保存至: " + IPTV_FILE);
+        } catch (Exception e) {
+            log("❌ 保存失败");
+        }
+    }
+
+    private String buildM3u(List<String> lines) {
+        StringBuilder sb = new StringBuilder("#EXTM3U\n");
+        for (String line : lines) sb.append(line).append("\n");
+        return sb.toString();
+    }
+
     private void log(String msg) {
         Proxy.log("[ProxyIPTV] " + msg);
     }
 
-    // ==================== 重要：供 10086 代理调用 ====================
+    // ==================== 关键：处理 10086/proxy?do=iptv ====================
+    @Override
     public String proxy(String url) throws Exception {
-        if (url.contains("iptv.txt") || url.contains("live")) {
-            if (cachedM3u.isEmpty()) {
-                crawlIPTV(); // 懒加载
+        // 支持 ?do=iptv 参数
+        if (url.contains("do=iptv") || url.contains("iptv")) {
+            if (cachedM3u.isEmpty() && !hasCrawled) {
+                crawlIPTV();
             }
-            return cachedM3u;
+            return cachedM3u.isEmpty() ? "#EXTM3U\n# 暂无数据，正在抓取中..." : cachedM3u;
         }
         return "";
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        return Result.get().url(id).parse(0).string(); // 直链播放
+        return Result.get().url(id).parse(0).string();
     }
 }
