@@ -20,6 +20,7 @@ import java.util.List;
 import java.net.URLEncoder;
 import java.util.Map;
 import java.util.*;
+import java.util.Iterator;
 
 public class KG extends Spider {
     private String siteUrl = ""; 
@@ -900,7 +901,7 @@ private String parseList(String html, String pg, boolean isSearch) {
             return picCache.get(pic);
         }
 
-        // ==================== 图片跳转 + API二次提取模式（支持多线程） ====================
+        // ==================== 图片跳转 + API二次提取模式（多线程） ====================
         if (rule.optBoolean("pic_jump", false)) {
             String prefix = rule.optString("pic_prefix", "");
             String suffix = rule.optString("pic_suffix", "");
@@ -910,7 +911,6 @@ private String parseList(String html, String pg, boolean isSearch) {
                 String apiUrl = prefix + pic + suffix;
 
                 try {
-                    // 提交到线程池异步执行
                     Future<String> future = picExecutor.submit(() -> {
                         try {
                             OkResult res = KaiGeNet.smartRequest(this.siteUrl, "get", apiUrl, null, getHeaders(null));
@@ -920,7 +920,6 @@ private String parseList(String html, String pg, boolean isSearch) {
                                 String finalPic = KaiGeEngine.doExtract(response, extractRule, "").value;
 
                                 if (!TextUtils.isEmpty(finalPic)) {
-                                    // 完全由规则中的 pic_host 决定，不硬编码
                                     String picHost = rule.optString("pic_host", "");
                                     if (!finalPic.startsWith("http") && !TextUtils.isEmpty(picHost)) {
                                         finalPic = picHost + (finalPic.startsWith("/") ? "" : "/") + finalPic;
@@ -934,7 +933,6 @@ private String parseList(String html, String pg, boolean isSearch) {
                         return pic; // 失败回退
                     });
 
-                    // 等待结果（最长8秒）
                     String result = future.get(8, TimeUnit.SECONDS);
                     picCache.put(pic, result);
                     return result;
@@ -960,6 +958,15 @@ private String parseList(String html, String pg, boolean isSearch) {
         String result = picHost + (pic.startsWith("/") ? "" : "/") + pic;
         picCache.put(pic, result);
         return result;
+    }
+        // ==================== 新增：stripJson 方法（解决编译错误）====================
+    private String stripJson(String rule) {
+        if (TextUtils.isEmpty(rule)) return "";
+        String r = rule.trim();
+        if (r.toLowerCase().startsWith("json:")) {
+            return r.substring(5).trim();
+        }
+        return r;
     }
 private String extract(Object root, String ruleStr) {
         try {
