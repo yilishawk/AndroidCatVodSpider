@@ -868,31 +868,10 @@ private String parseList(String html, String pg, boolean isSearch) {
                 String vName = extract(item, nameRule);
                 vod.put("vod_name", TextUtils.isEmpty(vName) ? smartVod.optString("vod_name") : vName);
 
-                // ==================== 重点：cate_pic 调试日志 ====================
-String picRule = rule.optString(prefix + "pic", rule.optString("cate_pic", ""));
-
-Proxy.log("<b style='color:#9b59b6;'>🔍 [cate_pic 调试] 开始</b> picRule = " + picRule);
-
-String vPic = extract(item, picRule);
-
-Proxy.log("<b style='color:#3498db;'>   → extract() 直接返回: </b>" + vPic);
-Proxy.log("<b style='color:#3498db;'>   → item HTML 长度: </b>" + 
-          (item instanceof Element ? ((Element) item).outerHtml().length() : 0));
-
-if (TextUtils.isEmpty(vPic)) {
-    vPic = smartVod.optString("vod_pic");
-    Proxy.log("<b style='color:#f1c40f;'>   → 使用 Smart 兜底图片: </b>" + vPic);
-} else {
-    Proxy.log("<b style='color:#2ecc71;'>   → 规则提取成功: </b>" + vPic);
-}
-
-// 关键：查看 fixPicUrl 前后的地址
-Proxy.log("<b style='color:#e67e22;'>   → fixPicUrl 前: </b>" + vPic);
-vPic = fixPicUrl(vPic);
-Proxy.log("<b style='color:#2ecc71;'>   → fixPicUrl 后最终图片地址: </b>" + vPic);
-// ==================== 调试结束 ====================
-
-vod.put("vod_pic", vPic);
+                String vPic = extract(item, picRule);
+                if (TextUtils.isEmpty(vPic)) vPic = smartVod.optString("vod_pic");
+                vPic = fixPicUrl(vPic);
+                vod.put("vod_pic", vPic);
 
                 String vRemarks = extract(item, remarkRule);
                 vod.put("vod_remarks", TextUtils.isEmpty(vRemarks) ? smartVod.optString("vod_remarks") : vRemarks);
@@ -913,30 +892,12 @@ private String stripJson(String rule) {
     return rule.toLowerCase().startsWith("json:") ? rule.substring(5).trim() : rule.trim();
 }
 private String fixPicUrl(String pic) {
-    Proxy.log("<b style='color:#95a5a6;'>[fixPicUrl] 输入: </b>" + pic);
-    
-    if (TextUtils.isEmpty(pic)) {
-        Proxy.log("   → 图片地址为空，直接返回");
-        return pic;
-    }
-    
-    if (pic.startsWith("http://") || pic.startsWith("https://")) {
-        Proxy.log("   → 已为完整http地址，直接返回");
-        return pic;
-    }
-    
-    if (pic.startsWith("//")) {
-        Proxy.log("   → 处理 // 开头的协议相对路径");
-        return "http:" + pic;
-    }
-    
+    if (TextUtils.isEmpty(pic)) return pic;
+    if (pic.startsWith("http://") || pic.startsWith("https://")) return pic;
+    if (pic.startsWith("//")) return "http:" + pic;
+    // 有图片前缀用前缀，没有用站点域名
     String picHost = rule.optString("pic_host", this.siteUrl);
-    Proxy.log("   → 使用 pic_host = " + picHost);
-    
-    String result = picHost + (pic.startsWith("/") ? "" : "/") + pic;
-    Proxy.log("   → 最终拼接结果: " + result);
-    
-    return result;
+    return picHost + (pic.startsWith("/") ? "" : "/") + pic;
 }
 private String extract(Object root, String ruleStr) {
         try {
