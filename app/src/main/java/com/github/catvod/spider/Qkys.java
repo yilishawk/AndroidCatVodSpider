@@ -7,6 +7,7 @@ import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.github.catvod.net.OkResult;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
