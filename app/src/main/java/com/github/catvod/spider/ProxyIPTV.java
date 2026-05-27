@@ -9,14 +9,12 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.*;
 import java.util.*;
 
 public class ProxyIPTV extends Spider {
 
     private static final String WORKER_URL = "https://tonkiang.us";
     private static final int MAX_IP_PER_PAGE = 2;
-    private static final String IPTV_FILE = "/sdcard/Download/iptv.txt";
 
     private static boolean hasCrawled = false;
     private static String cachedM3u = "";
@@ -40,7 +38,6 @@ public class ProxyIPTV extends Spider {
         }
 
         if (!lines.isEmpty()) {
-            saveIPTV(lines);
             cachedM3u = buildM3u(lines);
             log("✅ IPTV 抓取完成！共 " + lines.size() + " 行");
         }
@@ -153,12 +150,6 @@ public class ProxyIPTV extends Spider {
         return map;
     }
 
-    private void saveIPTV(List<String> lines) {
-        try (FileWriter fw = new FileWriter(IPTV_FILE)) {
-            for (String line : lines) fw.write(line + "\n");
-        } catch (Exception ignored) {}
-    }
-
     private String buildM3u(List<String> lines) {
         StringBuilder sb = new StringBuilder("#EXTM3U\n");
         for (String line : lines) sb.append(line).append("\n");
@@ -169,13 +160,13 @@ public class ProxyIPTV extends Spider {
         Proxy.log("[ProxyIPTV] " + msg);
     }
 
-    // ==================== 关键：处理 proxy 请求 ====================
+    // ==================== 9978 端口调用 ====================
     public String proxy(String url) throws Exception {
         if (url != null && (url.contains("do=iptv") || url.contains("iptv"))) {
             if (cachedM3u.isEmpty() && !hasCrawled) {
                 crawlIPTV();
             }
-            return cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新直播源..." : cachedM3u;
+            return cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新..." : cachedM3u;
         }
         return "";
     }
