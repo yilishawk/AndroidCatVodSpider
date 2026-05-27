@@ -144,104 +144,158 @@ public class Qkys extends Spider {
     }
 
     // === 根据 Python 逻辑深度重构的视频解析部分 ===
-@Override
+    @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playUrl = id.startsWith("http") ? id : host + id;
 
-        // 1. 获取包含 player_aaaa 的网页源码
         HashMap<String, String> h1 = getHeaders();
         h1.put("Referer", host + "/");
+
         String html = "";
-        
-        // 对应 Python 的重试机制
-        for (int i = 0; i < 2; i++) {
-            html = OkHttp.string(playUrl, h1);
-            if (html.contains("player_aaaa")) break;
-            Thread.sleep(1000);
+        // 重试获取包含 player_aaaa 的页面
+        for (int i = 0; i < 3; i++) {
+            try {
+                html = OkHttp.string(playUrl, h1);
+                if (html.contains("player_aaaa")) {
+                    break;
+                }
+                Thread.sleep(1000);
+            } catch (Exception e) {
+                Thread.sleep(1000);
+            }
         }
 
-        if (html.isEmpty()) return Result.get().parse(1).url(playUrl).string();
+        if (!html.contains("player_aaaa")) {
+            return Result.get().parse(1).url(playUrl).string();
+        }
 
-        // 2. 提取 player_aaaa 变量并解析 JSON
+        // ==================== 提取 player_aaaa JSON（精确匹配Python） ====================
         JsonObject pdata;
         try {
             int start = html.indexOf("var player_aaaa=");
+            if (start == -1) throw new Exception("player_aaaa not found");
+
             start = html.indexOf("{", start);
-            int count = 1;
-            int pos = start + 1;
-            while (pos < html.length() && count > 0) {
-                char c = html.charAt(pos);
-                if (c == '{') count++;
-                else if (c == '}') count--;
-                pos++;
-            }
-            pdata = JsonParser.parseString(html.substring(start, pos)).getAsJsonObject();
+            if (start == -1) throw new Exception("json start not found");
+
+            int end = findJsonEnd(html, start);
+            String jsonStr = html.substring(start, end + 1).trim();
+
+            pdata = JsonParser.parseString(jsonStr).getAsJsonObject();
         } catch (Exception e) {
             return Result.get().parse(1).url(playUrl).string();
         }
 
-        // 3. 构建中转页请求（使用 Map 传参，OkHttp 工具类会自动处理 URL 编码）
+        // ==================== 请求中转页 index.php ====================
         Map<String, String> params = new HashMap<>();
         params.put("url", pdata.get("url").getAsString());
         params.put("type", pdata.get("from").getAsString());
-        params.put("next", pdata.has("link_next") ? pdata.get("link_next").getAsString() : "");
-        params.put("data", pdata.has("play_data") ? pdata.get("play_data").getAsString() : "");
+        if (pdata.has("link_next")) params.put("next", pdata.get("link_next").getAsString());
+        if (pdata.has("play_data")) params.put("data", pdata.get("play_data").getAsString());
+
+        String fullIdxLink = jxHost + "/index.php?" + urlEncodeParams(params);
 
         HashMap<String, String> h2 = getHeaders();
+        h2.put("Referer", host + "/");
         h2.put("Upgrade-Insecure-Requests", "1");
         h2.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
 
-        // 获取中转页源码
         String idxHtml = OkHttp.string(jxHost + "/index.php", params, h2);
 
-        // 4. 提取 config 变量中的核心字段
-        Matcher configMatch = Pattern.compile("var config = (\\{[\\s\\S]*?\\});").matcher(idxHtml);
-        if (!configMatch.find()) return Result.get().parse(1).url(playUrl).string();
-        
+        // ==================== 提取 config ====================
+        Matcher configMatch = Pattern.compile("var config\\s*=\\s*(\\{[\\s\\S]*?\\});", Pattern.DOTALL).matcher(idxHtml);
+        if (!configMatch.find()) {
+            return Result.get().parse(1).url(playUrl).string();
+        }
+
         String configStr = configMatch.group(1);
+
         String urlVal = extractField("url", configStr);
         String timeVal = extractField("time", configStr);
         String vkeyVal = extractField("vkey", configStr);
 
-        if (urlVal.isEmpty() || timeVal.isEmpty()) return Result.get().parse(1).url(playUrl).string();
+        if (urlVal.isEmpty() || timeVal.isEmpty()) {
+            return Result.get().parse(1).url(playUrl).string();
+        }
 
-        // 5. POST 获取真实地址
+        // ==================== POST 请求 mizhi_json.php ====================
         Map<String, String> apiPayload = new HashMap<>();
         apiPayload.put("url", urlVal);
         apiPayload.put("time", timeVal);
         apiPayload.put("key", "");
         apiPayload.put("vkey", vkeyVal);
 
-        HashMap<String, String> headersApi = new HashMap<>();
-        headersApi.put("X-Requested-With", "XMLHttpRequest");
-        headersApi.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        // Referer 必须是带参数的中转页全路径，手动还原 Python 里的 full_idx_link 逻辑
-        headersApi.put("Referer", jxHost + "/index.php?url=" + params.get("url")); 
-        headersApi.put("Origin", jxHost);
+        HashMap<String, String> apiHeaders = new HashMap<>();
+        apiHeaders.put("User-Agent", getHeaders().get("User-Agent"));
+        apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
+        apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+        apiHeaders.put("Origin", jxHost);
+        apiHeaders.put("Referer", fullIdxLink);
 
         try {
-            // 调用 OkHttp.post 返回 OkResult，获取 Body 并解析
-            String apiResp = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, headersApi).getBody();
-            JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
-            
-            String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : "";
-            if (finalUrl.isEmpty() && resJson.has("video_url")) finalUrl = resJson.get("video_url").getAsString();
+            OkResult apiRes = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders);
+            String apiResp = apiRes.getBody();
 
-            if (!finalUrl.isEmpty()) {
-                return Result.get().url(finalUrl).header(getHeaders()).string();
+            if (!apiResp.isEmpty()) {
+                JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
+                String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : 
+                                 (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
+
+                if (!finalUrl.isEmpty()) {
+                    return Result.get().url(finalUrl).header(getHeaders()).string();
+                }
             }
         } catch (Exception e) {
-            // 失败则兜底
+            e.printStackTrace();
         }
 
+        // 兜底
         return Result.get().parse(1).url(playUrl).string();
     }
 
-    // 强化版字段提取，完美兼容 Python 的 re 提取逻辑
+    // ==================== 辅助方法 ====================
+
+    private int findJsonEnd(String text, int start) {
+        int count = 0;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') count++;
+            else if (c == '}') {
+                count--;
+                if (count == 0) return i;
+            }
+        }
+        return text.length() - 1;
+    }
+
     private String extractField(String name, String text) {
-        // 兼容 "key":"value" , "key":'value' , "key":12345
-        Pattern p = Pattern.compile("[\"']" + name + "[\"']\\s*[:=]\\s*[\"']?(.*?)[\"']?[,}]");
-        Matcher m = p.matcher(text);
-        return m.find() ? m.group(1).trim() : "";
+        if (text == null || text.isEmpty()) return "";
+
+        // 支持 "key": "value"、'key': 'value'、key: value
+        String[] patterns = {
+            "\"?" + name + "\"?\\s*[:=]\\s*\"([^\"]*)\"",
+            "\"?" + name + "\"?\\s*[:=]\\s*'([^']*)'",
+            "\"?" + name + "\"?\\s*[:=]\\s*(\\d+)"
+        };
+
+        for (String pat : patterns) {
+            Matcher m = Pattern.compile(pat, Pattern.DOTALL).matcher(text);
+            if (m.find()) {
+                return m.group(1).trim();
+            }
+        }
+        return "";
+    }
+
+    private String urlEncodeParams(Map<String, String> params) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            if (sb.length() > 0) sb.append("&");
+            sb.append(URLEncoder.encode(entry.getKey(), "UTF-8"))
+              .append("=")
+              .append(URLEncoder.encode(entry.getValue(), "UTF-8"));
+        }
+        return sb.toString();
     }
 }
