@@ -892,8 +892,7 @@ private String parseList(String html, String pg, boolean isSearch) {
         return "{\"list\":[]}";
     }
 }
-
-private String fixPicUrl(String pic) {
+    private String fixPicUrl(String pic) {
         if (TextUtils.isEmpty(pic)) return pic;
 
         // 缓存命中直接返回
@@ -901,7 +900,7 @@ private String fixPicUrl(String pic) {
             return picCache.get(pic);
         }
 
-        // ==================== 图片跳转 + API二次提取模式 ====================
+        // ==================== 图片跳转 + API二次提取模式（支持多线程） ====================
         if (rule.optBoolean("pic_jump", false)) {
             String prefix = rule.optString("pic_prefix", "");
             String suffix = rule.optString("pic_suffix", "");
@@ -911,6 +910,7 @@ private String fixPicUrl(String pic) {
                 String apiUrl = prefix + pic + suffix;
 
                 try {
+                    // 提交到线程池异步执行
                     Future<String> future = picExecutor.submit(() -> {
                         try {
                             OkResult res = KaiGeNet.smartRequest(this.siteUrl, "get", apiUrl, null, getHeaders(null));
@@ -920,10 +920,8 @@ private String fixPicUrl(String pic) {
                                 String finalPic = KaiGeEngine.doExtract(response, extractRule, "").value;
 
                                 if (!TextUtils.isEmpty(finalPic)) {
-                                    // ==================== 重要修改 ====================
-                                    // 不再硬编码 TMDB 域名，完全由规则中的 pic_host 决定
+                                    // 完全由规则中的 pic_host 决定，不硬编码
                                     String picHost = rule.optString("pic_host", "");
-                                    
                                     if (!finalPic.startsWith("http") && !TextUtils.isEmpty(picHost)) {
                                         finalPic = picHost + (finalPic.startsWith("/") ? "" : "/") + finalPic;
                                     }
@@ -936,6 +934,7 @@ private String fixPicUrl(String pic) {
                         return pic; // 失败回退
                     });
 
+                    // 等待结果（最长8秒）
                     String result = future.get(8, TimeUnit.SECONDS);
                     picCache.put(pic, result);
                     return result;
@@ -957,7 +956,6 @@ private String fixPicUrl(String pic) {
             return result;
         }
 
-        // 普通模式也完全使用规则中的 pic_host
         String picHost = rule.optString("pic_host", this.siteUrl);
         String result = picHost + (pic.startsWith("/") ? "" : "/") + pic;
         picCache.put(pic, result);
@@ -1095,5 +1093,15 @@ public String homeContent(boolean filter) {
 
         return Proxy.getUrl() + "?do=danmu&title=" + URLEncoder.encode(title, "UTF-8")
              + "&episode=" + URLEncoder.encode(episode, "UTF-8");
+    }
+        @Override
+    public void destroy() {
+        try {
+            if (picExecutor != null && !picExecutor.isShutdown()) {
+                picExecutor.shutdownNow();
+                logger("🧹 [线程池] 图片多线程池已释放");
+            }
+            picCache.clear();
+        } catch (Exception ignored) {}
     }
 }
