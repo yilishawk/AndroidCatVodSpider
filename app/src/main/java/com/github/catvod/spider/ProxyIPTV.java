@@ -173,15 +173,13 @@ public class ProxyIPTV extends Spider {
         Proxy.log("[ProxyIPTV] " + msg);
     }
 
-    // ==================== 关键：处理 10086/proxy?do=iptv ====================
-    @Override
+    // ==================== 处理 10086 代理请求 ====================
     public String proxy(String url) throws Exception {
-        // 支持 ?do=iptv 参数
         if (url.contains("do=iptv") || url.contains("iptv")) {
             if (cachedM3u.isEmpty() && !hasCrawled) {
                 crawlIPTV();
             }
-            return cachedM3u.isEmpty() ? "#EXTM3U\n# 暂无数据，正在抓取中..." : cachedM3u;
+            return cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新..." : cachedM3u;
         }
         return "";
     }
