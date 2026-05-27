@@ -25,6 +25,8 @@ public class KG extends Spider {
     private String siteUrl = ""; 
     private JSONObject rule = new JSONObject();
     private Map<String, String> varPool = new HashMap<>();
+    private ExecutorService picExecutor = Executors.newFixedThreadPool(8);
+    private final Map<String, String> picCache = Collections.synchronizedMap(new HashMap<>());
 
     private void logger(String msg) {
         try {
@@ -891,20 +893,15 @@ private String parseList(String html, String pg, boolean isSearch) {
     }
 }
 
-// ✅ 工具方法：剥掉 json: 前缀，取字段名
-private String stripJson(String rule) {
-    if (TextUtils.isEmpty(rule)) return "";
-    return rule.toLowerCase().startsWith("json:") ? rule.substring(5).trim() : rule.trim();
-}
 private String fixPicUrl(String pic) {
         if (TextUtils.isEmpty(pic)) return pic;
 
-        // 缓存命中直接返回（大幅提升性能）
+        // 缓存命中直接返回
         if (picCache.containsKey(pic)) {
             return picCache.get(pic);
         }
 
-        // ==================== 新增：图片跳转 + API二次提取模式 ====================
+        // ==================== 图片跳转 + API二次提取模式 ====================
         if (rule.optBoolean("pic_jump", false)) {
             String prefix = rule.optString("pic_prefix", "");
             String suffix = rule.optString("pic_suffix", "");
@@ -914,7 +911,6 @@ private String fixPicUrl(String pic) {
                 String apiUrl = prefix + pic + suffix;
 
                 try {
-                    // 多线程异步执行
                     Future<String> future = picExecutor.submit(() -> {
                         try {
                             OkResult res = KaiGeNet.smartRequest(this.siteUrl, "get", apiUrl, null, getHeaders(null));
@@ -924,9 +920,11 @@ private String fixPicUrl(String pic) {
                                 String finalPic = KaiGeEngine.doExtract(response, extractRule, "").value;
 
                                 if (!TextUtils.isEmpty(finalPic)) {
-                                    // 如果提取出来的是相对路径，补全 pic_host
-                                    if (!finalPic.startsWith("http")) {
-                                        String picHost = rule.optString("pic_host", "https://image.tmdb.org/t/p/w500");
+                                    // ==================== 重要修改 ====================
+                                    // 不再硬编码 TMDB 域名，完全由规则中的 pic_host 决定
+                                    String picHost = rule.optString("pic_host", "");
+                                    
+                                    if (!finalPic.startsWith("http") && !TextUtils.isEmpty(picHost)) {
                                         finalPic = picHost + (finalPic.startsWith("/") ? "" : "/") + finalPic;
                                     }
                                     return finalPic;
@@ -935,10 +933,9 @@ private String fixPicUrl(String pic) {
                         } catch (Exception e) {
                             logger("⚠️ [pic_jump] 请求失败: " + e.getMessage());
                         }
-                        return pic; // 失败时回退原值
+                        return pic; // 失败回退
                     });
 
-                    // 最多等待8秒
                     String result = future.get(8, TimeUnit.SECONDS);
                     picCache.put(pic, result);
                     return result;
@@ -960,6 +957,7 @@ private String fixPicUrl(String pic) {
             return result;
         }
 
+        // 普通模式也完全使用规则中的 pic_host
         String picHost = rule.optString("pic_host", this.siteUrl);
         String result = picHost + (pic.startsWith("/") ? "" : "/") + pic;
         picCache.put(pic, result);
