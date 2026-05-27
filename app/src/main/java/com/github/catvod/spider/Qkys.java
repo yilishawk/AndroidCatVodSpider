@@ -252,6 +252,20 @@ public class Qkys extends Spider {
     return Result.get().parse(1).url(playUrl).string();
 }
 
+private int findJsonEnd(String text, int start) {
+    int count = 0;
+    for (int i = start; i < text.length(); i++) {
+        char c = text.charAt(i);
+        if (c == '{') {
+            count++;
+        } else if (c == '}') {
+            count--;
+            if (count == 0) return i;
+        }
+    }
+    return text.length() - 1;
+}
+
 private String extractFromConfig(String name, String text) {
     if (text == null || text.isEmpty()) return "";
 
@@ -277,14 +291,14 @@ private String extractFromConfig(String name, String text) {
     return "";
 }
 
-    private String urlEncodeParams(Map<String, String> params) throws Exception {
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, String> entry : params.entrySet()) {
-            if (sb.length() > 0) sb.append("&");
-            sb.append(URLEncoder.encode(entry.getKey(), "UTF-8"))
-              .append("=")
-              .append(URLEncoder.encode(entry.getValue(), "UTF-8"));
-        }
-        return sb.toString();
+private String urlEncodeParams(Map<String, String> params) throws Exception {
+    StringBuilder sb = new StringBuilder();
+    for (Map.Entry<String, String> entry : params.entrySet()) {
+        if (sb.length() > 0) sb.append("&");
+        sb.append(URLEncoder.encode(entry.getKey(), "UTF-8"))
+          .append("=")
+          .append(URLEncoder.encode(entry.getValue(), "UTF-8"));
     }
+    return sb.toString();
+}
 }
