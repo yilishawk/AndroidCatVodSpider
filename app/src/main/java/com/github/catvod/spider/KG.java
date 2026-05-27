@@ -13,6 +13,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import java.util.List;
 import java.net.URLEncoder;
+import java.util.Map;
 import java.util.*;
 
 public class KG extends Spider {
@@ -46,7 +47,7 @@ private void logCheck(String title, String html, boolean showSource) {
         try {
             logger("------------------------------------------");
             logger("🚀❤️ <b>凱哥全能獨立引擎啟動 (Full Power)...</b>");
-            
+
             if (TextUtils.isEmpty(extend)) {
                 logger("🚨 [系統] 初始化失敗: 配置路徑為空");
                 return;
@@ -57,7 +58,7 @@ private void logCheck(String title, String html, boolean showSource) {
                 // 🚀 關鍵修復：手動過濾掉可能包含中文Referer 隱患
                 Map<String, String> initHeaders = new HashMap<>();
                 initHeaders.put("Referer", ""); // 清空 Referer，防止 OkHttp 報錯
-                
+
                 // 使用最原始的 OkHttp 請求，避免被 smartRequest 裡的自動 Header 帶偏
                 OkResult res = OkHttp.get(extend, null, initHeaders);
                 json = res.getBody();
@@ -71,7 +72,76 @@ private void logCheck(String title, String html, boolean showSource) {
             }
 
             this.rule = new JSONObject(json);
-            // 🚀 從配置中自動提取域名
+            String indexUrl = rule.optString("index_url", "");
+            if (!TextUtils.isEmpty(indexUrl)) {
+                try {
+                    logger("🔍 [发布页] 正在请求: " + indexUrl);
+                    Map<String, String> indexHeaders = new HashMap<>();
+                    indexHeaders.put("User-Agent", rule.optString("ua", "Mozilla/5.0"));
+                    indexHeaders.put("Referer", "");
+
+                    // ✅ 情况一：先尝试跟随 302 跳转
+                    String realSite = "";
+                    try {
+                        Map<String, List<String>> locationHeaders = OkHttp.getLocationHeader(indexUrl, indexHeaders);
+                        String realLocation = OkHttp.getLocation(locationHeaders);
+                        if (!TextUtils.isEmpty(realLocation) && realLocation.startsWith("http")) {
+                            java.net.URL realUrl = new java.net.URL(realLocation);
+                            realSite = realUrl.getProtocol() + "://" + realUrl.getHost();
+                            logger("✅ [发布页] 302跳转检测到真实域名: " + realSite);
+                        }
+                    } catch (Exception ignored) {}
+
+                    // ✅ 情况二：302 没拿到，尝试解析 HTML 提取链接
+                    if (TextUtils.isEmpty(realSite)) {
+                        try {
+                            OkResult indexRes = KaiGeNet.smartRequest(indexUrl, "get", indexUrl, null, indexHeaders);
+                            String indexHtml = indexRes.getBody();
+                            if (!TextUtils.isEmpty(indexHtml)) {
+                                String indexRule = rule.optString("index_rule", "");
+                                String extracted = "";
+                                if (!TextUtils.isEmpty(indexRule)) {
+                                    extracted = KaiGeEngine.doExtract(indexHtml, indexRule, "").value;
+                                    logger("🔍 [发布页] 使用自定义规则提取: " + extracted);
+                                } else {
+                                    String indexHost = new java.net.URL(indexUrl).getHost();
+                                    Document indexDoc = Jsoup.parse(indexHtml);
+                                    for (Element a : indexDoc.select("a[href]")) {
+                                        String href = a.attr("abs:href");
+                                        if (!TextUtils.isEmpty(href) && href.startsWith("http")) {
+                                            String hrefHost = new java.net.URL(href).getHost();
+                                            if (!hrefHost.equals(indexHost)) {
+                                                extracted = href;
+                                                logger("🔍 [发布页] 智能识别到跳转链接: " + extracted);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!TextUtils.isEmpty(extracted) && extracted.startsWith("http")) {
+                                    java.net.URL realUrl = new java.net.URL(extracted);
+                                    realSite = realUrl.getProtocol() + "://" + realUrl.getHost();
+                                    logger("✅ [发布页] HTML提取真实域名: " + realSite);
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    // ✅ 更新域名
+                    if (!TextUtils.isEmpty(realSite)) {
+                        rule.put("site_url", realSite);
+                        rule.put("host", realSite);
+                        logger("🌐 [发布页] 域名已更新为: " + realSite);
+                    } else {
+                        logger("⚠️ [发布页] 两种方式均未获取到域名，保持原域名");
+                    }
+
+                } catch (Exception ex) {
+                    logger("⚠️ [发布页] 处理失败，保持原域名: " + ex.getMessage());
+                }
+            }
+
+            // 🚀 從配置中自動提取域名（必须在 index_url 处理之后）
             this.siteUrl = rule.optString("site_url", rule.optString("host", ""));
 
             logger("✅ [系統] 站點配置加載完成: " + rule.optString("site_name"));
@@ -192,7 +262,7 @@ private void logCheck(String title, String html, boolean showSource) {
                 Proxy.log("<b style='color:red;'>🚨 [網絡層錯誤] 請求返回為 0 字節！請檢查 Referer 或 UA。</b>");
             } else {
                 Proxy.log("<b style='color:#2ecc71;'>📥 [網絡層成功] 收到源碼: " + html.length() + " 字節</b>");
-                
+
                 // 先解析出 items，再进行逻辑判断
                 String itemRule = rule.optString("cate_item");
                 if (!TextUtils.isEmpty(itemRule)) {
@@ -257,7 +327,7 @@ private void logCheck(String title, String html, boolean showSource) {
 
             // 3. 🚀 關鍵修復：將寫死的 "get" 改為動態 method，將 null 改為 body
             OkResult res = KaiGeNet.smartRequest(this.siteUrl, method, url, body, getHeaders(null));
-            
+
             logCheck("搜索", res.getBody(), false);
             return parseList(res.getBody(), "1", true);
         } catch (Exception e) { 
@@ -270,7 +340,7 @@ private void logCheck(String title, String html, boolean showSource) {
     public String detailContent(List<String> ids) {
         try {
             String id = ids.get(0);
-            
+
             // 1. 動態讀取詳情配置
             String method = rule.optString("detail_method", "get").toLowerCase();
             String url = id.startsWith("http") ? id : this.siteUrl + (id.startsWith("/") ? "" : "/") + id;
@@ -315,6 +385,14 @@ if (html != null && html.trim().startsWith("{")) {
             vod.put("vod_play_from",item.optString("vod_play_from",""));
             vod.put("vod_play_url", item.optString("vod_play_url", ""));
             Proxy.log("<b style='color:#2ecc71;'>✅ [详情] JSON直解成功: </b>" + vod.optString("vod_name"));
+            // ✅ 保存标题和集数到 varPool，供弹幕使用
+            varPool.put("vod_name", vod.optString("vod_name", "未知标题"));
+            String playUrl = vod.optString("vod_play_url", "");
+            if (!TextUtils.isEmpty(playUrl)) {
+                String[] episodes = playUrl.split("#");
+                varPool.put("vod_total_episode", String.valueOf(episodes.length));
+                varPool.put("vod_play_url", playUrl);
+            }
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
         }
     } catch (Exception ex) {
@@ -324,29 +402,29 @@ if (html != null && html.trim().startsWith("{")) {
 
 // 原有HTML解析逻辑继续往下走
 Document doc = Jsoup.parse(html);
-            
+
             // 🚀 升級：智慧保底模式
             // 首先嘗試用 KaiGeSmart 掃描全圖
             JSONObject smartVod = KaiGeSmart.parseDetail(html);
-            
+
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
-            
+
             // 策略：如果規則有寫就用規則，規則沒寫或抓不到就用大腦智慧識別
             String name = extract(doc, rule.optString("dt_name"));
             vod.put("vod_name", TextUtils.isEmpty(name) ? smartVod.optString("vod_name") : name);
-            
+
             String pic = extract(doc, rule.optString("dt_pic"));
             vod.put("vod_pic", TextUtils.isEmpty(pic) ? smartVod.optString("vod_pic") : pic);
-            
+
             vod.put("vod_remarks", extract(doc, rule.optString("dt_remarks")));
-            
+
             String actor = extract(doc, rule.optString("dt_actor"));
             vod.put("vod_actor", TextUtils.isEmpty(actor) ? smartVod.optString("vod_actor") : actor);
-            
+
             String director = extract(doc, rule.optString("dt_director"));
             vod.put("vod_director", TextUtils.isEmpty(director) ? smartVod.optString("vod_director") : director);
-            
+
             String content = extract(doc, rule.optString("dt_content"));
             vod.put("vod_content", TextUtils.isEmpty(content) ? smartVod.optString("vod_content") : content);
 
@@ -360,6 +438,14 @@ Document doc = Jsoup.parse(html);
                 processOriginalDetail(doc, vod);
             }
 
+            // ✅ 保存标题和集数到 varPool，供弹幕使用
+            varPool.put("vod_name", vod.optString("vod_name", "未知标题"));
+            String playUrl = vod.optString("vod_play_url", "");
+            if (!TextUtils.isEmpty(playUrl)) {
+                String[] episodes = playUrl.split("#");
+                varPool.put("vod_total_episode", String.valueOf(episodes.length));
+                varPool.put("vod_play_url", playUrl);
+            }
             return new JSONObject().put("list", new JSONArray().put(vod)).toString();
         } catch (Exception e) { 
             Proxy.log("<b style='color:red;'>🚨 [詳情異常]:</b> " + e.getMessage());
@@ -434,8 +520,43 @@ Document doc = Jsoup.parse(html);
         try {
             // 🎬 啟動日誌
             Proxy.log("<b style='color:#e74c3c;'>🎬 [播放解析啟動]</b> 原始ID: " + originalUrl);
-            
+
+            // ✅ 备份弹幕数据（必须在 clear 之前！）
+            String danmuTitle = varPool.get("vod_name");
+            String danmuPlayUrl = varPool.get("vod_play_url");
+
             varPool.clear();
+            // ✅ 备份恢复，防止 clear 丢失
+            if (!TextUtils.isEmpty(danmuTitle)) varPool.put("vod_name", danmuTitle);
+            if (!TextUtils.isEmpty(danmuPlayUrl)) varPool.put("vod_play_url", danmuPlayUrl);
+
+            // ✅ 从播放链接反查集数（弹幕需要）
+            String currentEpisode = "1";
+if (!TextUtils.isEmpty(danmuPlayUrl)) {
+    String[] episodes = danmuPlayUrl.split("#");
+    Proxy.log("🔍 [弹幕集数] 共 " + episodes.length + " 集，正在匹配 id=" + id);
+    String cleanId = id.contains("?") ? id.split("\\?")[0] : id;
+    for (int i = 0; i < episodes.length; i++) {
+        String[] parts = episodes[i].split("\\$");
+        String epUrl = parts.length > 1 ? parts[parts.length - 1].trim() : "";
+        String cleanEpUrl = epUrl.contains("?") ? epUrl.split("\\?")[0] : epUrl;
+        if (!epUrl.isEmpty() && (epUrl.equals(id) || cleanEpUrl.equals(cleanId) || epUrl.contains(cleanId) || cleanId.contains(cleanEpUrl))) {
+            String epName = parts[0].replaceAll("[^0-9]", "");
+            currentEpisode = TextUtils.isEmpty(epName) ? String.valueOf(i + 1) : epName;
+            Proxy.log("✅ [弹幕集数] 匹配成功！第 " + currentEpisode + " 集，集名原文=" + parts[0]);
+            break;
+        }
+        // 最后一集仍未匹配，打印第一集信息便于排查
+        if (i == episodes.length - 1) {
+            Proxy.log("⚠️ [弹幕集数] 全部 " + episodes.length + " 集均未匹配，cleanId=" + cleanId + " | 第1集epUrl=" + (episodes[0].split("\\$").length > 1 ? episodes[0].split("\\$")[episodes[0].split("\\$").length - 1] : "无"));
+        }
+    }
+}
+
+            // ✅ 恢复弹幕数据到 varPool
+            if (!TextUtils.isEmpty(danmuTitle)) varPool.put("vod_name", danmuTitle);
+            varPool.put("vod_episode", currentEpisode);
+            Proxy.log("<span style='color:#9b59b6;'>[弹幕] 标题=" + varPool.get("vod_name") + ", 集数=" + currentEpisode + "</span>");
             varPool.put("play_id", originalUrl);
             varPool.put("final_url", originalUrl); 
 
@@ -507,6 +628,20 @@ Document doc = Jsoup.parse(html);
                 res.put("parse", isStream ? 0 : 1);
                 res.put("url", originalUrl);
                 res.put("header", getPlayHeaders(play));
+                // ✅ 注入弹幕
+                String _danmuTitle1 = varPool.get("vod_name");
+                String _danmuEp1 = varPool.get("vod_episode");
+                if (rule.optBoolean("danmaku", false) && !TextUtils.isEmpty(_danmuTitle1)) {
+                    try {
+                        String _danmakuUrl1 = "http://127.0.0.1:10086/danmu"
+        + "?title=" + URLEncoder.encode(_danmuTitle1, "UTF-8")
+        + "&episode=" + URLEncoder.encode(TextUtils.isEmpty(_danmuEp1) ? "1" : _danmuEp1, "UTF-8");
+                        res.put("danmaku", _danmakuUrl1);
+                        Proxy.log("<b style='color:#2ecc71;'>💬 [弹幕] 已注入 danmaku=" + _danmakuUrl1 + "</b>");
+                    } catch (Exception e) {
+                        Proxy.log("<b style='color:red;'>❌ [弹幕] 注入失败: " + e.getMessage() + "</b>");
+                    }
+                }
                 Proxy.log("<b style='color:#2ecc71;'>🚀 [Direct] 無解析步驟，直接推送原始地址</b>");
                 return res.toString();
             }
@@ -516,10 +651,10 @@ Document doc = Jsoup.parse(html);
                 JSONObject step = steps.getJSONObject(i);
                 String stepUrl = replaceStepVars(step.optString("url", varPool.get("final_url")));
                 String method = step.optString("method", "get");
-                
+
                 // 💡 獲取當前步驟的請求頭
                 Map<String, String> headers = getHeaders(step.optJSONObject("headers"));
-                
+
                 // 🚀 凱哥監控：Step 請求細節（含 URL 和 Headers）
                 Proxy.log("<span style='color:#3498db;'>[Step " + (i + 1) + " 請求]</span> " + method.toUpperCase() + " -> " + stepUrl);
                 Proxy.log("<span style='color:#9b59b6;'>[請求頭查看]</span> " + headers.toString());
@@ -527,7 +662,7 @@ Document doc = Jsoup.parse(html);
             // 1. 發起請求
             OkResult res = KaiGeNet.smartRequest(this.siteUrl, method, stepUrl, replaceStepVars(step.optString("body")), getHeaders(step.optJSONObject("headers")));
             String html = res.getBody();
-            
+
             // 🚀 凱哥暴力監控：不論 html 是否為空，通通打印！
             Proxy.log("<b style='color:#3498db;'>📥 [Step " + (i + 1) + " 返回監控]</b>");
             if (TextUtils.isEmpty(html)) {
@@ -548,28 +683,36 @@ if (vars != null) {
                         String k = it.next();
                         String vRule = vars.optString(k).trim(); // 去掉可能存在的空格
                         String val = "";
-                        
-                        // 🚀 1. 增強型 JSON 提取
-                        if (vRule.startsWith("json:")) {
-                            try {
-                                String keyName = vRule.substring(5).trim(); // 拿到 "url"
-                                JSONObject jsonObj = new JSONObject(html.trim());
-                                val = jsonObj.optString(keyName);
-                            } catch (Exception e) {
-                                Proxy.log("   └─ <b style='color:red;'>❌ JSON 解析失敗:</b> " + e.getMessage());
-                                val = "";
+
+                        String[] vRules = vRule.split("\\|\\|");
+                        for (String singleRule : vRules) {
+                            singleRule = singleRule.trim();
+                            if (singleRule.startsWith("json:")) {
+                                try {
+                                    String keyName = singleRule.substring(5).trim();
+                                    JSONObject jsonObj = new JSONObject(html.trim());
+                                    val = jsonObj.optString(keyName);
+                                } catch (Exception e) {
+                                    val = "";
+                                }
+                            } else {
+                                val = KaiGeEngine.doExtract(html, singleRule, this.siteUrl).value;
                             }
-                        } else {
-                            val = KaiGeEngine.doExtract(html, vRule, this.siteUrl).value;
+                            if (!TextUtils.isEmpty(val)) {
+                                Proxy.log("    └─ <span style='color:#f1c40f;'>[提取成功]</span> 命中規則: " + singleRule);
+                                break;
+                            } else {
+                                Proxy.log("    └─ <span style='color:#95a5a6;'>⚠️ [規則未命中]</span> 嘗試下一條: " + singleRule);
+                            }
                         }
 
                         // 🚀 2. 暴力清洗提取到的數據
                         if (!TextUtils.isEmpty(val)) {
                             // 幹掉所有反斜槓，把 \/ 變成 /
                             val = val.replace("\\/", "/").replace("\\", "").trim();
-                            
+
                             varPool.put(k, val);
-                            
+
                             // 💡 變量提取監控
                             Proxy.log("    └─ <span style='color:#f1c40f;'>[提取成功]</span> " + k + " = " + (val.length() > 80 ? val.substring(0, 80) + "..." : val));
 
@@ -594,7 +737,21 @@ if (vars != null) {
             resJson.put("parse", pValue);
             resJson.put("url", (pValue == 0) ? finalUrl : originalUrl);
             resJson.put("header", getPlayHeaders(play));
-            
+            // ✅ 注入弹幕
+            String _danmuTitle2 = varPool.get("vod_name");
+            String _danmuEp2 = varPool.get("vod_episode");
+            if (rule.optBoolean("danmaku", false) && !TextUtils.isEmpty(_danmuTitle2)) {
+                try {
+                    String _danmakuUrl2 = "http://127.0.0.1:10086/danmu"
+        + "?title=" + URLEncoder.encode(_danmuTitle2, "UTF-8")
+        + "&episode=" + URLEncoder.encode(TextUtils.isEmpty(_danmuEp2) ? "1" : _danmuEp2, "UTF-8");
+                    resJson.put("danmaku", _danmakuUrl2);
+                    Proxy.log("<b style='color:#2ecc71;'>💬 [弹幕] 已注入 danmaku=" + _danmakuUrl2 + "</b>");
+                } catch (Exception e) {
+                    Proxy.log("<b style='color:red;'>❌ [弹幕] 注入失败: " + e.getMessage() + "</b>");
+                }
+            }
+
             // 🚀 最終推送 JSON 日誌
             String finalPush = resJson.toString();
             Proxy.log("<b style='color:#2ecc71;'>🚀 [Final:推送 JSON]</b>");
@@ -657,7 +814,7 @@ private String parseList(String html, String pg, boolean isSearch) {
                     }
 
                     vod.put("vod_name", vName);
-                    if (!TextUtils.isEmpty(vPic) && vPic.startsWith("//")) vPic = "http:" + vPic;
+                    vPic = fixPicUrl(vPic);
                     vod.put("vod_pic",     vPic);
                     vod.put("vod_remarks", vRemarks);
 
@@ -713,7 +870,7 @@ private String parseList(String html, String pg, boolean isSearch) {
 
                 String vPic = extract(item, picRule);
                 if (TextUtils.isEmpty(vPic)) vPic = smartVod.optString("vod_pic");
-                if (!TextUtils.isEmpty(vPic) && vPic.startsWith("//")) vPic = "http:" + vPic;
+                vPic = fixPicUrl(vPic);
                 vod.put("vod_pic", vPic);
 
                 String vRemarks = extract(item, remarkRule);
@@ -734,11 +891,18 @@ private String stripJson(String rule) {
     if (TextUtils.isEmpty(rule)) return "";
     return rule.toLowerCase().startsWith("json:") ? rule.substring(5).trim() : rule.trim();
 }
-
+private String fixPicUrl(String pic) {
+    if (TextUtils.isEmpty(pic)) return pic;
+    if (pic.startsWith("http://") || pic.startsWith("https://")) return pic;
+    if (pic.startsWith("//")) return "http:" + pic;
+    // 有图片前缀用前缀，没有用站点域名
+    String picHost = rule.optString("pic_host", this.siteUrl);
+    return picHost + (pic.startsWith("/") ? "" : "/") + pic;
+}
 private String extract(Object root, String ruleStr) {
         try {
             if (TextUtils.isEmpty(ruleStr) || root == null) return "";
-            
+
             // 🚀 關鍵點 1：讓規則支持變量替換
             // 這樣你才能在規則裡寫 "{host}/vod/" 或者使用之前 vars 存下的 {kkk}
             String realRule = replaceStepVars(ruleStr);
@@ -792,7 +956,7 @@ public String homeContent(boolean filter) {
     try {
         logger("🏠 [主頁] 正在加載分類導航...");
         JSONArray classes = rule.optJSONArray("classes");
-        
+
         if (classes == null || classes.length() == 0) {
             logger("🚨 [主頁] 警告：JSON 規則中未定義 classes 或格式錯誤");
             return "";
@@ -805,26 +969,26 @@ public String homeContent(boolean filter) {
         for (int i = 0; i < classes.length(); i++) {
             JSONObject oldCate = classes.getJSONObject(i);
             JSONObject newCate = new JSONObject();
-            
+
             String name = oldCate.optString("type_name", oldCate.optString("name"));
             String id = oldCate.optString("type_id", oldCate.optString("id"));
-            
+
             newCate.put("type_name", name);
             newCate.put("type_id", id);
             resultClasses.put(newCate);
         }
 
         logger("✅ [主頁] 分類加載成功，共 " + resultClasses.length() + " 個頻道");
-        
+
         JSONObject result = new JSONObject();
         result.put("class", resultClasses);
         result.put("list", new JSONArray());
-        
+
         // 如果規則裡有篩選數據(filters)，也可以在這裡放進去
         if (rule.has("filters")) {
             result.put("filters", rule.optJSONObject("filters"));
         }
-        
+
         return result.toString();
     } catch (Exception e) {
         logger("🚨 [主頁異常]: " + e.getMessage());
@@ -846,5 +1010,26 @@ public String homeContent(boolean filter) {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * ✅ 弹幕入口方法
+     * FongMi 框架播放视频时会调用此方法获取弹幕地址
+     */
+    public String danmaku(String url) throws Exception {
+        String title = varPool.get("vod_name");
+        String episode = varPool.get("vod_episode");
+
+        // 兜底：从 URL 中提取集数
+        if (TextUtils.isEmpty(episode) && url.contains("$")) {
+            String epPart = url.split("\\$")[0];
+            episode = epPart.replaceAll("[^0-9]", "");
+        }
+
+        if (TextUtils.isEmpty(title)) title = "未知标题";
+        if (TextUtils.isEmpty(episode)) episode = "1";
+
+        return Proxy.getUrl() + "?do=danmu&title=" + URLEncoder.encode(title, "UTF-8")
+             + "&episode=" + URLEncoder.encode(episode, "UTF-8");
     }
 }
