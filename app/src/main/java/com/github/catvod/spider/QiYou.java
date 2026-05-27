@@ -1,14 +1,12 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
-
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -35,22 +33,19 @@ public class QiYou extends Spider {
         return headers;
     }
 
-    // 防跳转重试方法（核心）
+    // 防反爬重试方法
     private String fetchWithRetry(String url, int maxRetry) {
         for (int i = 0; i < maxRetry; i++) {
             try {
                 String html = OkHttp.string(url, getHeader());
-                
                 if (html.contains("Loading......1S") || 
-                    html.contains("sx1420w415i.065846.xyz") ||
-                    html.length() < 500) {
-                    
+                    html.contains("sx1420w415i.065846.xyz") || 
+                    html.length() < 800) {
                     Thread.sleep(800);
                     continue;
                 }
                 return html;
             } catch (Exception e) {
-                e.printStackTrace();
                 try { Thread.sleep(1000); } catch (Exception ignored) {}
             }
         }
@@ -67,7 +62,7 @@ public class QiYou extends Spider {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("3", "综艺"));   // 改回3（你之前改成4了）
+        classes.add(new Class("3", "综艺"));
 
         String homeHtml = fetchWithRetry(siteUrl, 3);
         List<Vod> list = parseVodList(homeHtml);
@@ -82,20 +77,16 @@ public class QiYou extends Spider {
         String html = fetchWithRetry(url, 3);
         List<Vod> list = parseVodList(html);
 
-        return Result.string(list);
+        return Result.string(list);   // 简单写法，FongMi会自动处理分页
     }
 
     // 通用列表解析
     private List<Vod> parseVodList(String html) {
-        if (html.isEmpty()) return new ArrayList<>();
-
         List<Vod> list = new ArrayList<>();
-        Document doc = Jsoup.parse(html);
+        if (html.isEmpty()) return list;
 
-        Elements items = doc.select("ul.stui-vodlist li");
-        if (items.isEmpty()) {
-            items = doc.select("ul.stui-vodlist__media li");
-        }
+        Document doc = Jsoup.parse(html);
+        Elements items = doc.select("ul.stui-vodlist li, ul.stui-vodlist__media li");
 
         for (Element item : items) {
             Element a = item.selectFirst("a.stui-vodlist__thumb");
@@ -106,8 +97,8 @@ public class QiYou extends Spider {
             String href = a.attr("href");
             String remark = "";
 
-            Element remarkEl = item.selectFirst(".pic-text");
-            if (remarkEl != null) remark = remarkEl.text();
+            Element remarkEl = item.selectFirst(".pic-text, .text-muted");
+            if (remarkEl != null) remark = remarkEl.text().trim();
 
             if (!href.startsWith("http")) href = siteUrl + href;
             if (pic != null && pic.startsWith("//")) pic = "https:" + pic;
@@ -130,65 +121,58 @@ public class QiYou extends Spider {
         if (html.isEmpty()) return Result.string(new Vod());
 
         Document doc = Jsoup.parse(html);
+        Vod vod = new Vod();
 
-        String name = doc.selectFirst("h1.line1") != null ? doc.selectFirst("h1.line1").text() : "";
-        String pic = "";
+        vod.setVodId(detailUrl);
+        vod.setVodName(doc.selectFirst("h1.line1") != null ? doc.selectFirst("h1.line1").text() : "");
+
         Element thumb = doc.selectFirst(".stui-content__thumb a");
-        if (thumb != null) pic = thumb.attr("data-original");
-
-        String type = "", area = "", year = "", actor = "", director = "", content = "";
+        if (thumb != null) {
+            String pic = thumb.attr("data-original");
+            if (pic.startsWith("//")) pic = "https:" + pic;
+            vod.setVodPic(pic);
+        }
 
         Elements ps = doc.select(".stui-content__detail p");
         for (Element p : ps) {
             String text = p.text().trim();
-            if (text.contains("类型：")) {
-                type = p.selectFirst("a") != null ? p.selectFirst("a").text() : text.replace("类型：", "").trim();
-            } else if (text.contains("地区：")) {
-                area = text.replace("地区：", "").trim();
-            } else if (text.contains("年份：")) {
-                year = text.replace("年份：", "").trim();
-            } else if (text.contains("主演：")) {
-                actor = text.replace("主演：", "").trim();
-            } else if (text.contains("导演：")) {
-                director = text.replace("导演：", "").trim();
-            }
+            if (text.contains("类型：")) vod.setTypeName(text.replace("类型：", "").trim());
+            else if (text.contains("地区：")) vod.setVodArea(text.replace("地区：", "").trim());
+            else if (text.contains("年份：")) vod.setVodYear(text.replace("年份：", "").trim());
+            else if (text.contains("主演：")) vod.setVodActor(text.replace("主演：", "").trim());
+            else if (text.contains("导演：")) vod.setVodDirector(text.replace("导演：", "").trim());
         }
 
         Element descEl = doc.selectFirst(".desc.hidden-xs");
         if (descEl != null) {
-            content = descEl.text().replace("简介：", "").replace("详情", "").trim();
+            vod.setVodContent(descEl.text().replace("简介：", "").trim());
         }
 
+        // 播放源解析
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         Elements playlists = doc.select(".tab-pane");
-
         for (int i = 0; i < playlists.size(); i++) {
             Element pane = playlists.get(i);
             Elements links = pane.select("ul.stui-content__playlist a");
-
             List<String> urls = new ArrayList<>();
             for (Element link : links) {
                 String playUrl = link.attr("href");
                 if (!playUrl.startsWith("http")) playUrl = siteUrl + playUrl;
-                urls.add(link.text() + "$" + playUrl);
+                urls.add(link.text().trim() + "$" + playUrl);
             }
             if (!urls.isEmpty()) {
                 playMap.put("播放源" + (i + 1), urls);
             }
         }
 
-        Vod vod = new Vod();
-        vod.setVodId(detailUrl);
-        vod.setVodName(name);
-        vod.setVodPic(pic);
-        vod.setTypeName(type);
-        vod.setVodArea(area);
-        vod.setVodYear(year);
-        vod.setVodActor(actor);
-        vod.setVodDirector(director);
-        vod.setVodContent(content);
-        vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
-        vod.setVodPlayUrl(String.join("$$$", playMap.values().stream().map(v -> String.join("#", v)).toList()));
+        if (!playMap.isEmpty()) {
+            vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
+            List<String> playUrls = new ArrayList<>();
+            for (List<String> urls : playMap.values()) {
+                playUrls.add(String.join("#", urls));
+            }
+            vod.setVodPlayUrl(String.join("$$$", playUrls));
+        }
 
         return Result.string(vod);
     }
@@ -203,8 +187,8 @@ public class QiYou extends Spider {
             Map<String, String> headers = getHeader();
             headers.put("Content-Type", "application/x-www-form-urlencoded");
 
-            OkResult okResult = OkHttp.post(siteUrl + "/search.php", params, headers);
-            String html = okResult.getBody();
+            OkResult result = OkHttp.post(siteUrl + "/search.php", params, headers);
+            String html = result.getBody();
 
             List<Vod> list = parseVodList(html);
             return Result.string(list);
@@ -218,29 +202,30 @@ public class QiYou extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
-            String html = fetchWithRetry(id, 2);
+            String html = fetchWithRetry(id, 3);
             Document doc = Jsoup.parse(html);
 
             Element iframe = doc.selectFirst("iframe");
-            String iframeSrc = iframe != null ? iframe.attr("src") : "";
+            if (iframe != null) {
+                String iframeSrc = iframe.attr("src");
+                if (!iframeSrc.isEmpty()) {
+                    String iframeHtml = OkHttp.string(iframeSrc, getHeader());
 
-            if (!iframeSrc.isEmpty()) {
-                String iframeHtml = OkHttp.string(iframeSrc, getHeader());
+                    String urlStr = extractRegex(iframeHtml, "const Url = \"(.*?)\";");
+                    String sign = extractRegex(iframeHtml, "const Sign = \"(.*?)\";");
+                    String from = extractRegex(iframeHtml, "const From = \"(.*?)\";");
 
-                String urlStr = extractRegex(iframeHtml, "const Url = \"(.*?)\";");
-                String sign = extractRegex(iframeHtml, "const Sign = \"(.*?)\";");
-                String from = extractRegex(iframeHtml, "const From = \"(.*?)\";");
+                    if (!urlStr.isEmpty() && !sign.isEmpty()) {
+                        String apiUrl = "http://meizi.yongfan99.com/player/api.php?url=" + urlStr
+                                + "&sign=" + sign + "&t=" + from;
 
-                if (!urlStr.isEmpty() && !sign.isEmpty()) {
-                    String apiUrl = "http://meizi.yongfan99.com/player/api.php?url=" + urlStr 
-                                  + "&sign=" + sign + "&t=" + from;
+                        String json = OkHttp.string(apiUrl, getHeader());
+                        String realUrl = extractRegex(json, "\"url\":\"(.*?)\"");
 
-                    String json = OkHttp.string(apiUrl, getHeader());
-                    String realUrl = extractRegex(json, "\"url\":\"(.*?)\"");
-
-                    if (!realUrl.isEmpty()) {
-                        realUrl = realUrl.replace("\\", "");
-                        return Result.get().url(realUrl).string();
+                        if (!realUrl.isEmpty()) {
+                            realUrl = realUrl.replace("\\", "");
+                            return Result.get().url(realUrl).string();
+                        }
                     }
                 }
             }
@@ -248,6 +233,7 @@ public class QiYou extends Spider {
             e.printStackTrace();
         }
 
+        // 兜底直链
         return Result.get()
                 .url(id)
                 .parse(1)
@@ -256,6 +242,7 @@ public class QiYou extends Spider {
     }
 
     private String extractRegex(String text, String regex) {
+        if (text == null) return "";
         Pattern pattern = Pattern.compile(regex);
         Matcher matcher = pattern.matcher(text);
         return matcher.find() ? matcher.group(1) : "";
