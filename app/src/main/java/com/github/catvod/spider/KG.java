@@ -850,19 +850,6 @@ private String parseList(String html, String pg, boolean isSearch) {
             Document doc = Jsoup.parse(html);
             Elements items = doc.select(itemRule);
 
-            // ══════════════════════════════════════════════════════════
-            // 🌐 TMDB 查图模式
-            // JSON 规则只需一行：  "TMDB": true
-            // Token、API地址、图片地址、语言、尺寸全部硬编码在 Java 里
-            // ══════════════════════════════════════════════════════════
-            boolean isTmdbPicMode = rule.optBoolean("TMDB", false);
-
-            if (isTmdbPicMode) {
-                Proxy.log("<b style='color:#3498db;'>🌐 [TMDB] 已激活，共 " + items.size() + " 条</b>");
-            }
-
-            int tmdbHit = 0, tmdbMiss = 0;
-
             for (Element item : items) {
                 JSONObject smartVod = KaiGeSmart.parseList(item);
                 JSONObject vod = new JSONObject();
@@ -879,47 +866,17 @@ private String parseList(String html, String pg, boolean isSearch) {
                 }
 
                 String vName = extract(item, nameRule);
-                if (TextUtils.isEmpty(vName)) vName = smartVod.optString("vod_name");
-                vod.put("vod_name", vName);
+                vod.put("vod_name", TextUtils.isEmpty(vName) ? smartVod.optString("vod_name") : vName);
 
-                String vPic = "";
-
-                if (isTmdbPicMode && !TextUtils.isEmpty(vName)) {
-                    // ── TMDB 查图：Token/URL/语言/尺寸全部硬编码在 fetchTmdbPic() 里 ──
-                    vPic = fetchTmdbPic(vName);
-                    if (!TextUtils.isEmpty(vPic)) {
-                        tmdbHit++;
-                        Proxy.log("  ✅ [TMDB命中] 「" + vName + "」→ " + vPic);
-                    } else {
-                        tmdbMiss++;
-                        // TMDB 查不到时回退到站内图（Smart 保底）
-                        String fallback = extract(item, picRule);
-                        if (TextUtils.isEmpty(fallback)) fallback = smartVod.optString("vod_pic");
-                        vPic = fixPicUrl(fallback);
-                        if (!TextUtils.isEmpty(vPic)) {
-                            Proxy.log("  ⚠️ [TMDB未命中] 「" + vName + "」→ 回退到站内图: " + vPic);
-                        } else {
-                            Proxy.log("  ❌ [TMDB未命中且无站内图] 「" + vName + "」");
-                        }
-                    }
-                } else {
-                    // 普通模式：原有逻辑不变
-                    vPic = extract(item, picRule);
-                    if (TextUtils.isEmpty(vPic)) vPic = smartVod.optString("vod_pic");
-                    vPic = fixPicUrl(vPic);
-                }
-
+                String vPic = extract(item, picRule);
+                if (TextUtils.isEmpty(vPic)) vPic = smartVod.optString("vod_pic");
+                vPic = fixPicUrl(vPic);
                 vod.put("vod_pic", vPic);
 
                 String vRemarks = extract(item, remarkRule);
                 vod.put("vod_remarks", TextUtils.isEmpty(vRemarks) ? smartVod.optString("vod_remarks") : vRemarks);
 
                 if (vod.has("vod_id")) list.put(vod);
-            }
-
-            if (isTmdbPicMode) {
-                Proxy.log("<b style='color:#2ecc71;'>🌐 [TMDB汇总] ✅命中=" + tmdbHit
-                        + "  ❌未命中=" + tmdbMiss + "  共=" + items.size() + "条</b>");
             }
         }
 
@@ -1052,76 +1009,6 @@ public String homeContent(boolean filter) {
             return current;
         } catch (Exception e) {
             return null;
-        }
-    }
-
-    /**
-     * 🌐 TMDB 联网查图
-     *
-     * JSON 规则只需一行：  "TMDB": true
-     * 其余所有配置（Token、API地址、图片地址、语言、尺寸）全部硬编码在此方法内，无需在规则里写任何额外字段。
-     *
-     * 搜索策略：
-     *   1. 先用 multi 搜索（同时覆盖电影和剧集）
-     *   2. 跳过 media_type=person（人物条目没有 poster_path）
-     *   3. 取第一条有 poster_path 的结果
-     *   4. TMDB 查不到时自动回退到站内图
-     *
-     * @param vName 片名（已由调用方提取好）
-     * @return 完整图片 URL（如 https://image.tmdb.org/t/p/w500/abc.jpg），失败返回空字符串
-     */
-    private String fetchTmdbPic(String vName) {
-        // ─────────────────────────────────────────────────────────────
-        // 所有 TMDB 配置硬编码在此，不读取任何 JSON 规则字段
-        // ─────────────────────────────────────────────────────────────
-        final String BEARER   = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIyOGMxMDJhODk3NjMwYzU3ZDNkZTAzMzAyZWVmZjQ4ZSIsIm5iZiI6MTc1OTIxOTI2MC40MjUsInN1YiI6IjY4ZGI4ZTNjNjFkNjhhY2NhNWUxYzNjZCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.n0-1IqRnmjYTv7PytAU2mNOSQxE2WF2E5SS_5MdzuOI";
-        final String API_URL  = "https://api.themoviedb.org/3/search/multi";
-        final String IMG_BASE = "https://image.tmdb.org/t/p/w500";
-        final String LANG     = "zh-CN";
-
-        try {
-            if (TextUtils.isEmpty(vName)) return "";
-
-            // 1. 拼搜索地址
-            String url = API_URL
-                    + "?query=" + URLEncoder.encode(vName, "UTF-8")
-                    + "&language=" + LANG
-                    + "&page=1";
-
-            // 2. 用 Bearer Token 请求 TMDB API
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Authorization", "Bearer " + BEARER);
-            headers.put("Accept", "application/json");
-            headers.put("User-Agent", "Mozilla/5.0");
-
-            OkResult res = OkHttp.get(url, null, headers);
-            String body = res.getBody();
-            if (TextUtils.isEmpty(body)) return "";
-
-            // 3. 解析结果，取第一条有 poster_path 的影片/剧集（跳过人物）
-            JSONObject json     = new JSONObject(body);
-            JSONArray  results  = json.optJSONArray("results");
-            if (results == null || results.length() == 0) return "";
-
-            String posterPath = "";
-            for (int i = 0; i < results.length(); i++) {
-                JSONObject entry = results.getJSONObject(i);
-                if ("person".equals(entry.optString("media_type"))) continue;
-                String p = entry.optString("poster_path", "");
-                if (!TextUtils.isEmpty(p) && !p.equals("null")) {
-                    posterPath = p;
-                    break;
-                }
-            }
-
-            if (TextUtils.isEmpty(posterPath)) return "";
-
-            // 4. 拼完整图片地址
-            return IMG_BASE + (posterPath.startsWith("/") ? "" : "/") + posterPath;
-
-        } catch (Exception e) {
-            Proxy.log("  ⚠️ [TMDB] 「" + vName + "」查图异常: " + e.getMessage());
-            return "";
         }
     }
 
