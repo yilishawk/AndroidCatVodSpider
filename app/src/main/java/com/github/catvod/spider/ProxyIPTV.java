@@ -1,7 +1,6 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import com.github.catvod.bean.Result;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
@@ -43,7 +42,7 @@ public class ProxyIPTV extends Spider {
         if (!lines.isEmpty()) {
             saveIPTV(lines);
             cachedM3u = buildM3u(lines);
-            log("✅ IPTV 抓取完成！共 " + lines.size() + " 行数据");
+            log("✅ IPTV 抓取完成！共 " + lines.size() + " 行");
         }
     }
 
@@ -70,7 +69,7 @@ public class ProxyIPTV extends Spider {
                 }
             }
         } catch (Exception e) {
-            log("⚠️ " + listPhp + " 抓取异常");
+            log("⚠️ " + listPhp + " 抓取失败");
         }
     }
 
@@ -104,7 +103,7 @@ public class ProxyIPTV extends Spider {
             String tk = params.get("tk");
             if (ip == null || tk == null) continue;
 
-            String region = "未知";
+            String region = "未知地区";
             Element i = div.selectFirst("i");
             if (i != null) region = i.text().trim();
 
@@ -157,10 +156,7 @@ public class ProxyIPTV extends Spider {
     private void saveIPTV(List<String> lines) {
         try (FileWriter fw = new FileWriter(IPTV_FILE)) {
             for (String line : lines) fw.write(line + "\n");
-            log("💾 已保存至: " + IPTV_FILE);
-        } catch (Exception e) {
-            log("❌ 保存失败");
-        }
+        } catch (Exception ignored) {}
     }
 
     private String buildM3u(List<String> lines) {
@@ -173,19 +169,14 @@ public class ProxyIPTV extends Spider {
         Proxy.log("[ProxyIPTV] " + msg);
     }
 
-    // ==================== 处理 10086 代理请求 ====================
+    // ==================== 关键：处理 proxy 请求 ====================
     public String proxy(String url) throws Exception {
-        if (url.contains("do=iptv") || url.contains("iptv")) {
+        if (url != null && (url.contains("do=iptv") || url.contains("iptv"))) {
             if (cachedM3u.isEmpty() && !hasCrawled) {
                 crawlIPTV();
             }
-            return cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新..." : cachedM3u;
+            return cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新直播源..." : cachedM3u;
         }
         return "";
-    }
-
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        return Result.get().url(id).parse(0).string();
     }
 }
