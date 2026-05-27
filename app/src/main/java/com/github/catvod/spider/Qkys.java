@@ -147,147 +147,135 @@ public class Qkys extends Spider {
     // === 根据 Python 逻辑深度重构的视频解析部分 ===
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : host + id;
+    String playUrl = id.startsWith("http") ? id : host + id;
 
-        HashMap<String, String> h1 = getHeaders();
-        h1.put("Referer", host + "/");
+    HashMap<String, String> h1 = getHeaders();
+    h1.put("Referer", host + "/");
 
-        String html = "";
-        // 重试获取包含 player_aaaa 的页面
-        for (int i = 0; i < 3; i++) {
-            try {
-                html = OkHttp.string(playUrl, h1);
-                if (html.contains("player_aaaa")) {
-                    break;
-                }
-                Thread.sleep(1000);
-            } catch (Exception e) {
-                Thread.sleep(1000);
-            }
-        }
-
-        if (!html.contains("player_aaaa")) {
-            return Result.get().parse(1).url(playUrl).string();
-        }
-
-        // ==================== 提取 player_aaaa JSON（精确匹配Python） ====================
-        JsonObject pdata;
+    String html = "";
+    for (int i = 0; i < 3; i++) {
         try {
-            int start = html.indexOf("var player_aaaa=");
-            if (start == -1) throw new Exception("player_aaaa not found");
-
-            start = html.indexOf("{", start);
-            if (start == -1) throw new Exception("json start not found");
-
-            int end = findJsonEnd(html, start);
-            String jsonStr = html.substring(start, end + 1).trim();
-
-            pdata = JsonParser.parseString(jsonStr).getAsJsonObject();
+            html = OkHttp.string(playUrl, h1);
+            if (html.contains("player_aaaa")) break;
+            Thread.sleep(1000);
         } catch (Exception e) {
-            return Result.get().parse(1).url(playUrl).string();
+            Thread.sleep(1000);
         }
+    }
 
-        // ==================== 请求中转页 index.php ====================
-        Map<String, String> params = new HashMap<>();
-        params.put("url", pdata.get("url").getAsString());
-        params.put("type", pdata.get("from").getAsString());
-        if (pdata.has("link_next")) params.put("next", pdata.get("link_next").getAsString());
-        if (pdata.has("play_data")) params.put("data", pdata.get("play_data").getAsString());
-
-        String fullIdxLink = jxHost + "/index.php?" + urlEncodeParams(params);
-
-        HashMap<String, String> h2 = getHeaders();
-        h2.put("Referer", host + "/");
-        h2.put("Upgrade-Insecure-Requests", "1");
-        h2.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
-
-        String idxHtml = OkHttp.string(jxHost + "/index.php", params, h2);
-
-        // ==================== 提取 config ====================
-        Matcher configMatch = Pattern.compile("var config\\s*=\\s*(\\{[\\s\\S]*?\\});", Pattern.DOTALL).matcher(idxHtml);
-        if (!configMatch.find()) {
-            return Result.get().parse(1).url(playUrl).string();
-        }
-
-        String configStr = configMatch.group(1);
-
-        String urlVal = extractField("url", configStr);
-        String timeVal = extractField("time", configStr);
-        String vkeyVal = extractField("vkey", configStr);
-
-        if (urlVal.isEmpty() || timeVal.isEmpty()) {
-            return Result.get().parse(1).url(playUrl).string();
-        }
-
-        // ==================== POST 请求 mizhi_json.php ====================
-        Map<String, String> apiPayload = new HashMap<>();
-        apiPayload.put("url", urlVal);
-        apiPayload.put("time", timeVal);
-        apiPayload.put("key", "");
-        apiPayload.put("vkey", vkeyVal);
-
-        HashMap<String, String> apiHeaders = new HashMap<>();
-        apiHeaders.put("User-Agent", getHeaders().get("User-Agent"));
-        apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
-        apiHeaders.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        apiHeaders.put("X-Requested-With", "XMLHttpRequest");
-        apiHeaders.put("Origin", jxHost);
-        apiHeaders.put("Referer", fullIdxLink);
-
-        try {
-            OkResult apiRes = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders);
-            String apiResp = apiRes.getBody();
-
-            if (!apiResp.isEmpty()) {
-                JsonObject resJson = JsonParser.parseString(apiResp).getAsJsonObject();
-                String finalUrl = resJson.has("url") ? resJson.get("url").getAsString() : 
-                                 (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
-
-                if (!finalUrl.isEmpty()) {
-                    return Result.get().url(finalUrl).header(getHeaders()).string();
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        // 兜底
+    if (!html.contains("player_aaaa")) {
         return Result.get().parse(1).url(playUrl).string();
     }
 
-    // ==================== 辅助方法 ====================
-
-    private int findJsonEnd(String text, int start) {
-        int count = 0;
-        for (int i = start; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '{') count++;
-            else if (c == '}') {
-                count--;
-                if (count == 0) return i;
-            }
-        }
-        return text.length() - 1;
+    // 第一步：提取 player_aaaa 字段
+    JsonObject pdata;
+    try {
+        int start = html.indexOf("var player_aaaa=");
+        if (start == -1) throw new Exception("player_aaaa not found");
+        start = html.indexOf("{", start);
+        if (start == -1) throw new Exception("json start not found");
+        int end = findJsonEnd(html, start);
+        String jsonStr = html.substring(start, end + 1).trim();
+        pdata = JsonParser.parseString(jsonStr).getAsJsonObject();
+    } catch (Exception e) {
+        return Result.get().parse(1).url(playUrl).string();
     }
 
-    private String extractField(String name, String text) {
-        if (text == null || text.isEmpty()) return "";
+    String pUrl      = pdata.has("url")       ? pdata.get("url").getAsString()       : "";
+    String pFrom     = pdata.has("from")       ? pdata.get("from").getAsString()      : "";
+    String pNext     = pdata.has("link_next")  ? pdata.get("link_next").getAsString() : "";
+    String pPlayData = pdata.has("play_data")  ? pdata.get("play_data").getAsString() : "";
 
-        // 支持 "key": "value"、'key': 'value'、key: value
-        String[] patterns = {
-            "\"?" + name + "\"?\\s*[:=]\\s*\"([^\"]*)\"",
-            "\"?" + name + "\"?\\s*[:=]\\s*'([^']*)'",
-            "\"?" + name + "\"?\\s*[:=]\\s*(\\d+)"
-        };
+    // link_next 补全为完整 URL
+    if (!pNext.isEmpty()) {
+        pNext = "https://www.qkw1.com" + pNext;
+    }
 
-        for (String pat : patterns) {
-            Matcher m = Pattern.compile(pat, Pattern.DOTALL).matcher(text);
-            if (m.find()) {
-                return m.group(1).trim();
+    // 第二步：GET 中转页，从 var config 提取字段
+    String fullIdxLink = jxHost + "/index.php"
+            + "?url="  + URLEncoder.encode(pUrl,      "UTF-8")
+            + "&type=" + URLEncoder.encode(pFrom,     "UTF-8")
+            + "&next=" + URLEncoder.encode(pNext,     "UTF-8")
+            + "&data=" + URLEncoder.encode(pPlayData, "UTF-8");
+
+    HashMap<String, String> h2 = new HashMap<>();
+    h2.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
+    h2.put("Referer", "https://www.qkw1.com/");
+    h2.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+
+    String idxHtml = OkHttp.string(fullIdxLink, h2);
+
+    String vUrl  = extractFromConfig("url",  idxHtml);
+    String vTime = extractFromConfig("time", idxHtml);
+    String vKey  = extractFromConfig("vkey", idxHtml);
+
+    if (vUrl.isEmpty() || vTime.isEmpty()) {
+        return Result.get().parse(1).url(playUrl).string();
+    }
+
+    // 第三步：POST mizhi_json.php
+    Map<String, String> apiPayload = new HashMap<>();
+    apiPayload.put("url",  vUrl);
+    apiPayload.put("time", vTime);
+    apiPayload.put("key",  "");
+    apiPayload.put("vkey", vKey);
+
+    HashMap<String, String> apiHeaders = new HashMap<>();
+    apiHeaders.put("Host",             "zyz-omtcqq-com-oss-cn-hangzhou-shanghai-yys-valipl-vip-cp11.xmsu8.top");
+    apiHeaders.put("Accept",           "application/json, text/javascript, */*; q=0.01");
+    apiHeaders.put("X-Requested-With", "XMLHttpRequest");
+    apiHeaders.put("User-Agent",       "Mozilla/5.0 (Linux; Android 12; Redmi K30 5G Build/SKQ1.211006.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/96.0.4664.104 Mobile Safari/537.36");
+    apiHeaders.put("Content-Type",     "application/x-www-form-urlencoded; charset=UTF-8");
+    apiHeaders.put("Origin",           jxHost);
+    apiHeaders.put("Referer",          fullIdxLink);
+
+    try {
+        OkResult apiRes  = OkHttp.post(jxHost + "/admin/mizhi_json.php", apiPayload, apiHeaders);
+        String   apiResp = apiRes.getBody();
+
+        if (!apiResp.isEmpty()) {
+            JsonObject resJson  = JsonParser.parseString(apiResp).getAsJsonObject();
+            String     finalUrl = resJson.has("url")
+                    ? resJson.get("url").getAsString()
+                    : (resJson.has("video_url") ? resJson.get("video_url").getAsString() : "");
+
+            if (!finalUrl.isEmpty()) {
+                HashMap<String, String> playHeaders = new HashMap<>();
+                playHeaders.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36");
+                return Result.get().url(finalUrl).header(playHeaders).string();
             }
         }
-        return "";
+    } catch (Exception e) {
+        e.printStackTrace();
     }
+
+    return Result.get().parse(1).url(playUrl).string();
+}
+
+private String extractFromConfig(String name, String text) {
+    if (text == null || text.isEmpty()) return "";
+
+    int configStart = text.indexOf("var config");
+    if (configStart == -1) return "";
+
+    int braceStart = text.indexOf("{", configStart);
+    if (braceStart == -1) return "";
+
+    int braceEnd = findJsonEnd(text, braceStart);
+    String configBlock = text.substring(braceStart, braceEnd + 1);
+
+    String[] patterns = {
+        "\"" + name + "\"\\s*:\\s*\"([^\"]*)\"",
+        "'" + name + "'\\s*:\\s*'([^']*)'",
+        "\"" + name + "\"\\s*:\\s*(\\d+)"
+    };
+
+    for (String pat : patterns) {
+        Matcher m = Pattern.compile(pat).matcher(configBlock);
+        if (m.find()) return m.group(1).trim();
+    }
+    return "";
+}
 
     private String urlEncodeParams(Map<String, String> params) throws Exception {
         StringBuilder sb = new StringBuilder();
