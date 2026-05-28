@@ -402,7 +402,7 @@ public class Dyrs extends Spider {
             String respHtml = OkHttp.string(lineUrl, headers);
 
             // 提取 JSON 数据
-            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\('(.*?)'\);", Pattern.DOTALL);
+            Pattern pattern = Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\('(.*?)'\\);", Pattern.DOTALL);
             Matcher matcher = pattern.matcher(respHtml);
             if (!matcher.find()) return null;
 
