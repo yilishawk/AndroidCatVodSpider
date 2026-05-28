@@ -155,42 +155,60 @@ public class FkTv extends Spider {
     // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String detailUrl = ids.get(0);
-        String html = OkHttp.string(detailUrl, getHeader());
-        Document doc = Jsoup.parse(html);
+    String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+    String html = OkHttp.string(detailUrl, getHeaders());
+    Document doc = Jsoup.parse(html);
 
-        String name = doc.selectFirst(".name") != null ? doc.selectFirst(".name").text() : "";
-        String content = "";
-        Element desc = doc.selectFirst(".desc");
-        if (desc != null) content = desc.text();
+    Vod vod = new Vod();
+    vod.setVodId(detailUrl);
 
-        String pic = getBetterImage(name);   // 详情页使用高清图
+    // 標題
+    Element nameEl = doc.selectFirst(".name");
+    vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
 
-        List<String> linkIds = extractLinkIds(html);
-        if (linkIds.isEmpty()) {
-            return Result.string(new Vod());
-        }
+    // 簡介
+    Element desc = doc.selectFirst(".desc");
+    vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-        List<String> lineNames = new ArrayList<>();
-        List<String> firstPlayList = getPlayUrls(detailUrl, linkIds.get(0));
-        for (String str : firstPlayList) {
-            String[] parts = str.split("\\$");
-            if (parts.length == 2) {
-                lineNames.add(parts[0]);
+    // 圖片
+    String pic = getBetterImage(vod.getVodName() != null ? vod.getVodName() : "");
+    vod.setVodPic(pic);
+
+    // 提取 linkIds
+    List<String> linkIds = extractLinkIds(html);
+    if (linkIds.isEmpty()) {
+        return Result.get().vod(vod).string();
+    }
+
+    // 獲取播放線路樣本
+    List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
+
+    List<String> fromList = new ArrayList<>();
+    List<String> urlList = new ArrayList<>();
+
+    for (String line : playLines) {
+        String[] parts = line.split("\\$");
+        if (parts.length == 2) {
+            String lineName = parts[0];
+            fromList.add(lineName);
+
+            // 生成各集（限制集數）
+            List<String> episodes = new ArrayList<>();
+            for (int i = 0; i < linkIds.size(); i++) {
+                if (i >= 120) break;   // 重要：限制集數，避免電視端卡頓
+                String episodeName = "第" + (i + 1) + "集";
+                String playId = detailUrl + "|" + linkIds.get(i);
+                episodes.add(episodeName + "$" + playId);
             }
+            urlList.add(String.join("#", episodes));
         }
+    }
 
-        Map<String, List<String>> lineMap = new LinkedHashMap<>();
-        for (int i = 0; i < linkIds.size(); i++) {
-            String episode = "第" + (i + 1) + "集";
-            String linkId = linkIds.get(i);
-            String playId = detailUrl + "|" + linkId;
+    vod.setVodPlayFrom(String.join("$$$", fromList));
+    vod.setVodPlayUrl(String.join("$$$", urlList));
 
-            for (String lineName : lineNames) {
-                lineMap.computeIfAbsent(lineName, k -> new ArrayList<>())
-                        .add(episode + "$" + playId);
-            }
-        }
+    return Result.get().vod(vod).string();
+}
 
         Vod vod = new Vod();
         vod.setVodId(detailUrl);
