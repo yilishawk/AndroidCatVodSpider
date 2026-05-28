@@ -216,53 +216,105 @@ public class Tvbyun extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-        String html = OkHttp.string(detailUrl, getHeaders());
-        Document doc = Jsoup.parse(html);
-        Vod vod = new Vod();
-        vod.setVodId(ids.get(0));
-        vod.setVodName(doc.selectFirst("h1.title") != null ? doc.selectFirst("h1.title").text().trim() : "");
-        vod.setVodPic(doc.selectFirst(".myui-content__thumb img") != null ? 
-                     doc.selectFirst(".myui-content__thumb img").attr("data-original") : "");
+    String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+    String html = OkHttp.string(detailUrl, getHeaders());
+    Document doc = Jsoup.parse(html);
 
-        vod.setVodYear(doc.select("p.data:contains(年份) a").text().trim());
-        vod.setVodArea(doc.select("p.data:contains(地區) a").text().trim());
+    Vod vod = new Vod();
+    vod.setVodId(ids.get(0));
 
-        Elements actors = doc.select("p.data:contains(主演) a");
-        List<String> actorList = new ArrayList<>();
-        for (Element a : actors) actorList.add(a.text());
-        vod.setVodActor(TextUtils.join(", ", actorList));
-
-        vod.setVodDirector(doc.select("p.data:contains(導演) a").text().trim());
-        vod.setVodRemarks(doc.select("p.data:contains(更新) .text-red").text().trim());
-
-        Element contentEl = doc.selectFirst(".col-pd.text-collapse.content .data");
-        vod.setVodContent(contentEl != null ? contentEl.text().trim() : doc.select(".sketch.content").text().trim());
-
-        Elements playPanels = doc.select(".myui-panel-bg");
-        List<String> fromList = new ArrayList<>();
-        List<String> urlList = new ArrayList<>();
-        for (Element panel : playPanels) {
-            Element head = panel.selectFirst(".myui-panel__head h3.title");
-            if (head == null) continue;
-            String fromName = head.text().trim();
-            if (fromName.contains("劇情") || fromName.contains("猜你喜歡")) continue;
-
-            Elements nameUrls = panel.select("ul.myui-content__list a");
-            if (nameUrls.isEmpty()) continue;
-
-            List<String> urls = new ArrayList<>();
-            for (Element urlItem : nameUrls) {
-                urls.add(urlItem.text() + "$" + urlItem.attr("href"));
-            }
-            fromList.add(fromName);
-            urlList.add(TextUtils.join("#", urls));
-        }
-        vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
-        vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
-
-        return Result.string(vod);
+    // 标题
+    Element titleElem = doc.selectFirst("h1.title");
+    if (titleElem != null) {
+        vod.setVodName(titleElem.text().trim());
+    } else {
+        titleElem = doc.selectFirst(".stui-content__detail .title"); // 兼容stui模板
+        if (titleElem != null) vod.setVodName(titleElem.text().trim());
     }
+    if (TextUtils.isEmpty(vod.getVodName())) {
+        vod.setVodName("未知标题");
+    }
+
+    // 图片
+    Element thumbImg = doc.selectFirst(".myui-content__thumb img");
+    if (thumbImg == null) thumbImg = doc.selectFirst(".stui-content__thumb img");
+    if (thumbImg != null) {
+        String pic = thumbImg.attr("data-original");
+        if (TextUtils.isEmpty(pic)) pic = thumbImg.attr("src");
+        vod.setVodPic(pic);
+    }
+
+    // 基础信息（增加更多容错）
+    vod.setVodYear(getInfo(doc, "年份"));
+    vod.setVodArea(getInfo(doc, "地区"));
+    vod.setVodDirector(getInfo(doc, "导演"));
+    vod.setVodRemarks(getInfo(doc, "更新"));
+
+    // 主演
+    Elements actors = doc.select("p.data:contains(主演) a");
+    if (actors.isEmpty()) actors = doc.select(".stui-content__detail p.data:contains(主演) a");
+    List<String> actorList = new ArrayList<>();
+    for (Element a : actors) {
+        actorList.add(a.text().trim());
+    }
+    vod.setVodActor(TextUtils.join(", ", actorList));
+
+    // 简介
+    Element desc = doc.selectFirst(".col-pd.text-collapse.content .data");
+    if (desc == null) desc = doc.selectFirst(".stui-content__desc");
+    if (desc == null) desc = doc.selectFirst(".sketch.content");
+    vod.setVodContent(desc != null ? desc.text().trim() : "");
+
+    // ==================== 播放线路（关键优化）====================
+    List<String> fromList = new ArrayList<>();
+    List<String> urlList = new ArrayList<>();
+
+    Elements panels = doc.select(".myui-panel-bg");
+    if (panels.isEmpty()) panels = doc.select(".stui-pannel");
+
+    for (Element panel : panels) {
+        Element head = panel.selectFirst(".myui-panel__head h3.title, .stui-pannel__head h3.title");
+        if (head == null) continue;
+
+        String fromName = head.text().trim();
+        if (fromName.contains("剧情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) {
+            continue;
+        }
+
+        Elements links = panel.select("ul.myui-content__list a, ul.stui-content__playlist a");
+        if (links.isEmpty()) continue;
+
+        List<String> episodeList = new ArrayList<>();
+        int maxEp = 0;
+
+        for (Element a : links) {
+            if (maxEp >= 150) break;   // 限制最大集数，防止电视端内存爆炸
+            String epName = a.text().trim();
+            String epUrl = a.attr("href");
+            if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+            episodeList.add(epName + "$" + epUrl);
+            maxEp++;
+        }
+
+        if (!episodeList.isEmpty()) {
+            fromList.add(fromName);
+            urlList.add(TextUtils.join("#", episodeList));
+        }
+    }
+
+    vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
+    vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
+
+    return Result.get().vod(vod).string();   // 推荐使用这种写法
+}
+
+// 辅助方法：提取信息
+private String getInfo(Document doc, String key) {
+    Element el = doc.selectFirst("p.data:contains(" + key + ")");
+    if (el == null) return "";
+    String text = el.text();
+    return text.replace(key + "：", "").replace(key + ":", "").trim();
+}
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
