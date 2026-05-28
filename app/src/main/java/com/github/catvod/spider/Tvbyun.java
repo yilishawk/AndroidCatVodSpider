@@ -224,30 +224,29 @@ public class Tvbyun extends Spider {
     vod.setVodId(ids.get(0));
 
     // 标题
+    String vodName = "";
     Element titleElem = doc.selectFirst("h1.title");
-    if (titleElem != null) {
-        vod.setVodName(titleElem.text().trim());
-    } else {
-        titleElem = doc.selectFirst(".stui-content__detail .title"); // 兼容stui模板
-        if (titleElem != null) vod.setVodName(titleElem.text().trim());
+    if (titleElem != null) vodName = titleElem.text().trim();
+    if (TextUtils.isEmpty(vodName)) {
+        titleElem = doc.selectFirst(".stui-content__detail .title");
+        if (titleElem != null) vodName = titleElem.text().trim();
     }
-    if (TextUtils.isEmpty(vod.getVodName())) {
-        vod.setVodName("未知标题");
-    }
+    vod.setVodName(TextUtils.isEmpty(vodName) ? "未知标题" : vodName);
 
     // 图片
+    String vodPic = "";
     Element thumbImg = doc.selectFirst(".myui-content__thumb img");
     if (thumbImg == null) thumbImg = doc.selectFirst(".stui-content__thumb img");
     if (thumbImg != null) {
-        String pic = thumbImg.attr("data-original");
-        if (TextUtils.isEmpty(pic)) pic = thumbImg.attr("src");
-        vod.setVodPic(pic);
+        vodPic = thumbImg.attr("data-original");
+        if (TextUtils.isEmpty(vodPic)) vodPic = thumbImg.attr("src");
     }
+    vod.setVodPic(vodPic);
 
-    // 基础信息（增加更多容错）
+    // 其他信息
     vod.setVodYear(getInfo(doc, "年份"));
-    vod.setVodArea(getInfo(doc, "地区"));
-    vod.setVodDirector(getInfo(doc, "导演"));
+    vod.setVodArea(getInfo(doc, "地區"));
+    vod.setVodDirector(getInfo(doc, "導演"));
     vod.setVodRemarks(getInfo(doc, "更新"));
 
     // 主演
@@ -265,30 +264,25 @@ public class Tvbyun extends Spider {
     if (desc == null) desc = doc.selectFirst(".sketch.content");
     vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-    // ==================== 播放线路（关键优化）====================
+    // 播放线路
     List<String> fromList = new ArrayList<>();
     List<String> urlList = new ArrayList<>();
 
-    Elements panels = doc.select(".myui-panel-bg");
-    if (panels.isEmpty()) panels = doc.select(".stui-pannel");
-
+    Elements panels = doc.select(".myui-panel-bg, .stui-pannel");
     for (Element panel : panels) {
         Element head = panel.selectFirst(".myui-panel__head h3.title, .stui-pannel__head h3.title");
         if (head == null) continue;
 
         String fromName = head.text().trim();
-        if (fromName.contains("剧情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) {
-            continue;
-        }
+        if (fromName.contains("劇情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) continue;
 
         Elements links = panel.select("ul.myui-content__list a, ul.stui-content__playlist a");
         if (links.isEmpty()) continue;
 
         List<String> episodeList = new ArrayList<>();
         int maxEp = 0;
-
         for (Element a : links) {
-            if (maxEp >= 150) break;   // 限制最大集数，防止电视端内存爆炸
+            if (maxEp >= 150) break;  // 限制集数，防止电视端卡顿
             String epName = a.text().trim();
             String epUrl = a.attr("href");
             if (!epUrl.startsWith("http")) epUrl = host + epUrl;
@@ -305,10 +299,10 @@ public class Tvbyun extends Spider {
     vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
     vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
 
-    return Result.get().vod(vod).string();   // 推荐使用这种写法
+    return Result.get().vod(vod).string();
 }
 
-// 辅助方法：提取信息
+// 辅助方法
 private String getInfo(Document doc, String key) {
     Element el = doc.selectFirst("p.data:contains(" + key + ")");
     if (el == null) return "";
