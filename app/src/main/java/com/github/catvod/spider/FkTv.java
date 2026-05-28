@@ -145,7 +145,7 @@ public class FkTv extends Spider {
         }
     }
 
-    // ==================== 詳情頁（已修正）===================
+    // ==================== 詳情頁 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : siteUrl + ids.get(0);
@@ -156,12 +156,13 @@ public class FkTv extends Spider {
         vod.setVodId(detailUrl);
 
         Element nameEl = doc.selectFirst(".name");
-        vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
+        String vodName = nameEl != null ? nameEl.text().trim() : "未知標題";
+        vod.setVodName(vodName);
 
         Element desc = doc.selectFirst(".desc");
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-        String pic = getBetterImage(vod.getVodName() != null ? vod.getVodName() : "");
+        String pic = getBetterImage(vodName);
         vod.setVodPic(pic);
 
         List<String> linkIds = extractLinkIds(html);
