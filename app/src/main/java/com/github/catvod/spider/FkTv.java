@@ -155,60 +155,59 @@ public class FkTv extends Spider {
     // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
-    String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-    String html = OkHttp.string(detailUrl, getHeaders());
-    Document doc = Jsoup.parse(html);
+        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+        String html = OkHttp.string(detailUrl, getHeaders());
+        Document doc = Jsoup.parse(html);
 
-    Vod vod = new Vod();
-    vod.setVodId(detailUrl);
+        Vod vod = new Vod();
+        vod.setVodId(detailUrl);
 
-    // 標題
-    Element nameEl = doc.selectFirst(".name");
-    vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
+        // 標題
+        Element nameEl = doc.selectFirst(".name");
+        vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
 
-    // 簡介
-    Element desc = doc.selectFirst(".desc");
-    vod.setVodContent(desc != null ? desc.text().trim() : "");
+        // 簡介
+        Element desc = doc.selectFirst(".desc");
+        vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-    // 圖片
-    String pic = getBetterImage(vod.getVodName() != null ? vod.getVodName() : "");
-    vod.setVodPic(pic);
+        // 圖片
+        String pic = getBetterImage(vod.getVodName() != null ? vod.getVodName() : "");
+        vod.setVodPic(pic);
 
-    // 提取 linkIds
-    List<String> linkIds = extractLinkIds(html);
-    if (linkIds.isEmpty()) {
+        // 提取 linkIds
+        List<String> linkIds = extractLinkIds(html);
+        if (linkIds.isEmpty()) {
+            return Result.get().vod(vod).string();
+        }
+
+        // 獲取播放線路
+        List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
+
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
+
+        for (String line : playLines) {
+            String[] parts = line.split("\\$");
+            if (parts.length == 2) {
+                String lineName = parts[0];
+                fromList.add(lineName);
+
+                List<String> episodes = new ArrayList<>();
+                for (int i = 0; i < linkIds.size(); i++) {
+                    if (i >= 120) break;   // 限制集數
+                    String episodeName = "第" + (i + 1) + "集";
+                    String playId = detailUrl + "|" + linkIds.get(i);
+                    episodes.add(episodeName + "$" + playId);
+                }
+                urlList.add(String.join("#", episodes));
+            }
+        }
+
+        vod.setVodPlayFrom(String.join("$$$", fromList));
+        vod.setVodPlayUrl(String.join("$$$", urlList));
+
         return Result.get().vod(vod).string();
     }
-
-    // 獲取播放線路樣本
-    List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
-
-    List<String> fromList = new ArrayList<>();
-    List<String> urlList = new ArrayList<>();
-
-    for (String line : playLines) {
-        String[] parts = line.split("\\$");
-        if (parts.length == 2) {
-            String lineName = parts[0];
-            fromList.add(lineName);
-
-            // 生成各集（限制集數）
-            List<String> episodes = new ArrayList<>();
-            for (int i = 0; i < linkIds.size(); i++) {
-                if (i >= 120) break;   // 重要：限制集數，避免電視端卡頓
-                String episodeName = "第" + (i + 1) + "集";
-                String playId = detailUrl + "|" + linkIds.get(i);
-                episodes.add(episodeName + "$" + playId);
-            }
-            urlList.add(String.join("#", episodes));
-        }
-    }
-
-    vod.setVodPlayFrom(String.join("$$$", fromList));
-    vod.setVodPlayUrl(String.join("$$$", urlList));
-
-    return Result.get().vod(vod).string();
-}
 
         Vod vod = new Vod();
         vod.setVodId(detailUrl);
