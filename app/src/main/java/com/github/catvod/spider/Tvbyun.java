@@ -7,7 +7,6 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.bean.Filter;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -31,13 +30,13 @@ public class Tvbyun extends Spider {
 
     private static final Map<String, String> jiexiUrlMap = new HashMap<>();
     static {
-        jiexiUrlMap.put("lzm3u8", "http://111.229.219.148:808/xun3.php?url=");
+        jiexiUrlMap.put("lzm3u8",   "http://111.229.219.148:808/xun3.php?url=");
         jiexiUrlMap.put("bfzym3u8", "http://111.229.219.148:808/xun3.php?url=");
-        jiexiUrlMap.put("mytvb", "http://111.229.219.148:808/index.php?url=");
-        jiexiUrlMap.put("YYNB", "http://111.229.219.148:808/index.php?url=");
-        jiexiUrlMap.put("ffm3u8", "http://111.229.219.148:808/xun3.php?url=");
-        jiexiUrlMap.put("1080zyk", "http://111.229.219.148:808/xun3.php?url=");
-        jiexiUrlMap.put("mytv", "http://111.229.219.148:808/index.php?url=");
+        jiexiUrlMap.put("mytvb",    "http://111.229.219.148:808/index.php?url=");
+        jiexiUrlMap.put("YYNB",     "http://111.229.219.148:808/index.php?url=");
+        jiexiUrlMap.put("ffm3u8",   "http://111.229.219.148:808/xun3.php?url=");
+        jiexiUrlMap.put("1080zyk",  "http://111.229.219.148:808/xun3.php?url=");
+        jiexiUrlMap.put("mytv",     "http://111.229.219.148:808/index.php?url=");
     }
 
     private HashMap<String, String> getHeaders() {
@@ -50,25 +49,20 @@ public class Tvbyun extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        
         classes.add(new Class("13", "国产剧"));
-        classes.add(new Class("2", "電視劇"));
-        classes.add(new Class("1", "電影"));
-        classes.add(new Class("3", "綜藝"));
-        classes.add(new Class("5", "短劇"));
+        classes.add(new Class("2",  "電視劇"));
+        classes.add(new Class("1",  "電影"));
+        classes.add(new Class("3",  "綜藝"));
+        classes.add(new Class("5",  "短劇"));
 
         Result result = new Result().classes(classes);
-        if (filter) {
-            result.filters(getFilterConfig());
-        }
+        if (filter) result.filters(getFilterConfig());
         return result.toString();
     }
 
-    // 【已移除 @Override】
     protected LinkedHashMap<String, List<Filter>> getFilterConfig() {
         LinkedHashMap<String, List<Filter>> filterConfig = new LinkedHashMap<>();
 
-        // 国产剧 (13)
         List<Filter> guochanFilters = new ArrayList<>();
         guochanFilters.add(new Filter("class", "劇情", Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("古裝", "古裝"),
@@ -85,7 +79,6 @@ public class Tvbyun extends Spider {
         guochanFilters.add(new Filter("by", "排序", getSortValues()));
         filterConfig.put("13", guochanFilters);
 
-        // 電視劇 (2)
         List<Filter> tvFilters = new ArrayList<>();
         tvFilters.add(new Filter("id", "類型", Arrays.asList(
                 new Filter.Value("全部", "2"), new Filter.Value("港台劇", "14"),
@@ -108,7 +101,6 @@ public class Tvbyun extends Spider {
         tvFilters.add(new Filter("by", "排序", getSortValues()));
         filterConfig.put("2", tvFilters);
 
-        // 電影 (1)
         List<Filter> movieFilters = new ArrayList<>();
         movieFilters.add(new Filter("id", "類型", Arrays.asList(
                 new Filter.Value("全部", "1"), new Filter.Value("動作片", "6"), new Filter.Value("喜劇片", "7"),
@@ -131,7 +123,6 @@ public class Tvbyun extends Spider {
         movieFilters.add(new Filter("by", "排序", getSortValues()));
         filterConfig.put("1", movieFilters);
 
-        // 綜藝 (3)
         List<Filter> varietyFilters = new ArrayList<>();
         varietyFilters.add(new Filter("id", "類型", Arrays.asList(
                 new Filter.Value("全部", "3"), new Filter.Value("大陸綜藝", "21"),
@@ -147,7 +138,6 @@ public class Tvbyun extends Spider {
         varietyFilters.add(new Filter("by", "排序", getSortValues()));
         filterConfig.put("3", varietyFilters);
 
-        // 短劇 (5)
         List<Filter> shortFilters = new ArrayList<>();
         shortFilters.add(new Filter("class", "劇情", Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("喜劇", "喜劇"), new Filter.Value("愛情", "愛情"),
@@ -216,99 +206,123 @@ public class Tvbyun extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-    String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-    String html = OkHttp.string(detailUrl, getHeaders());
-    Document doc = Jsoup.parse(html);
+        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+        String html = OkHttp.string(detailUrl, getHeaders());
+        Document doc = Jsoup.parse(html);
 
-    Vod vod = new Vod();
-    vod.setVodId(ids.get(0));
+        Vod vod = new Vod();
+        vod.setVodId(ids.get(0));
 
-    // 标题
-    String vodName = "";
-    Element titleElem = doc.selectFirst("h1.title");
-    if (titleElem != null) vodName = titleElem.text().trim();
-    if (TextUtils.isEmpty(vodName)) {
-        titleElem = doc.selectFirst(".stui-content__detail .title");
+        // 标题
+        String vodName = "";
+        Element titleElem = doc.selectFirst("h1.title");
         if (titleElem != null) vodName = titleElem.text().trim();
-    }
-    vod.setVodName(TextUtils.isEmpty(vodName) ? "未知标题" : vodName);
+        if (TextUtils.isEmpty(vodName)) {
+            titleElem = doc.selectFirst(".stui-content__detail .title");
+            if (titleElem != null) vodName = titleElem.text().trim();
+        }
+        vod.setVodName(TextUtils.isEmpty(vodName) ? "未知标题" : vodName);
 
-    // 图片
-    String vodPic = "";
-    Element thumbImg = doc.selectFirst(".myui-content__thumb img");
-    if (thumbImg == null) thumbImg = doc.selectFirst(".stui-content__thumb img");
-    if (thumbImg != null) {
-        vodPic = thumbImg.attr("data-original");
-        if (TextUtils.isEmpty(vodPic)) vodPic = thumbImg.attr("src");
-    }
-    vod.setVodPic(vodPic);
+        // 图片
+        String vodPic = "";
+        Element thumbImg = doc.selectFirst(".myui-content__thumb img");
+        if (thumbImg == null) thumbImg = doc.selectFirst(".stui-content__thumb img");
+        if (thumbImg != null) {
+            vodPic = thumbImg.attr("data-original");
+            if (TextUtils.isEmpty(vodPic)) vodPic = thumbImg.attr("src");
+        }
+        vod.setVodPic(vodPic);
 
-    // 其他信息
-    vod.setVodYear(getInfo(doc, "年份"));
-    vod.setVodArea(getInfo(doc, "地區"));
-    vod.setVodDirector(getInfo(doc, "導演"));
-    vod.setVodRemarks(getInfo(doc, "更新"));
+        vod.setVodYear(getInfo(doc, "年份"));
+        vod.setVodArea(getInfo(doc, "地區"));
+        vod.setVodDirector(getInfo(doc, "導演"));
+        vod.setVodRemarks(getInfo(doc, "更新"));
 
-    // 主演
-    Elements actors = doc.select("p.data:contains(主演) a");
-    if (actors.isEmpty()) actors = doc.select(".stui-content__detail p.data:contains(主演) a");
-    List<String> actorList = new ArrayList<>();
-    for (Element a : actors) {
-        actorList.add(a.text().trim());
-    }
-    vod.setVodActor(TextUtils.join(", ", actorList));
+        Elements actors = doc.select("p.data:contains(主演) a");
+        if (actors.isEmpty()) actors = doc.select(".stui-content__detail p.data:contains(主演) a");
+        List<String> actorList = new ArrayList<>();
+        for (Element a : actors) actorList.add(a.text().trim());
+        vod.setVodActor(TextUtils.join(", ", actorList));
 
-    // 简介
-    Element desc = doc.selectFirst(".col-pd.text-collapse.content .data");
-    if (desc == null) desc = doc.selectFirst(".stui-content__desc");
-    if (desc == null) desc = doc.selectFirst(".sketch.content");
-    vod.setVodContent(desc != null ? desc.text().trim() : "");
+        Element desc = doc.selectFirst(".col-pd.text-collapse.content .data");
+        if (desc == null) desc = doc.selectFirst(".stui-content__desc");
+        if (desc == null) desc = doc.selectFirst(".sketch.content");
+        vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-    // 播放线路
-    List<String> fromList = new ArrayList<>();
-    List<String> urlList = new ArrayList<>();
+        // ── 修复：只选播放列表区域，跳过推荐/简介等无关 panel ──────────────
+        // 用更精准的选择器，直接找含有播放列表的 tab 内容区
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList  = new ArrayList<>();
 
-    Elements panels = doc.select(".myui-panel-bg, .stui-pannel");
-    for (Element panel : panels) {
-        Element head = panel.selectFirst(".myui-panel__head h3.title, .stui-pannel__head h3.title");
-        if (head == null) continue;
+        // myui 结构：.myui-panel 下的 .tab-content > .tab-pane，每个 pane 是一条线路
+        Elements panes = doc.select("#playlist .myui-content__list, .tab-content .tab-pane ul.myui-content__list, .tab-content .tab-pane ul.stui-content__playlist");
 
-        String fromName = head.text().trim();
-        if (fromName.contains("劇情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) continue;
+        if (!panes.isEmpty()) {
+            // 取对应线路名：.nav-tabs 或 .myui-tab__head 里的 li
+            Elements tabs = doc.select(".myui-tab__head li a, .stui-pannel__head .nav-tabs li a, ul.nav-tabs li a");
 
-        Elements links = panel.select("ul.myui-content__list a, ul.stui-content__playlist a");
-        if (links.isEmpty()) continue;
+            for (int i = 0; i < panes.size(); i++) {
+                Element ul = panes.get(i);
+                Elements links = ul.select("a");
+                if (links.isEmpty()) continue;
 
-        List<String> episodeList = new ArrayList<>();
-        int maxEp = 0;
-        for (Element a : links) {
-            if (maxEp >= 150) break;  // 限制集数，防止电视端卡顿
-            String epName = a.text().trim();
-            String epUrl = a.attr("href");
-            if (!epUrl.startsWith("http")) epUrl = host + epUrl;
-            episodeList.add(epName + "$" + epUrl);
-            maxEp++;
+                // 线路名：尽量从 tab 标题取，取不到就用序号
+                String fromName = (i < tabs.size()) ? tabs.get(i).text().trim() : ("線路" + (i + 1));
+                if (fromName.isEmpty()) fromName = "線路" + (i + 1);
+
+                List<String> episodeList = new ArrayList<>();
+                int max = Math.min(links.size(), 150); // 电视端限制集数
+                for (int j = 0; j < max; j++) {
+                    Element a = links.get(j);
+                    String epName = a.text().trim();
+                    String epUrl  = a.attr("href");
+                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+                    episodeList.add(epName + "$" + epUrl);
+                }
+
+                fromList.add(fromName);
+                urlList.add(TextUtils.join("#", episodeList));
+            }
         }
 
-        if (!episodeList.isEmpty()) {
-            fromList.add(fromName);
-            urlList.add(TextUtils.join("#", episodeList));
+        // 降级回原逻辑（以防新选择器在该站失效）
+        if (fromList.isEmpty()) {
+            Elements panels = doc.select(".myui-panel-bg .myui-panel__head h3.title, .stui-pannel .stui-pannel__head h3.title");
+            for (Element head : panels) {
+                String fromName = head.text().trim();
+                if (fromName.contains("劇情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) continue;
+
+                Element ul = head.closest(".myui-panel-bg, .stui-pannel");
+                if (ul == null) continue;
+                Elements links = ul.select("ul.myui-content__list a, ul.stui-content__playlist a");
+                if (links.isEmpty()) continue;
+
+                List<String> episodeList = new ArrayList<>();
+                int max = Math.min(links.size(), 150);
+                for (int j = 0; j < max; j++) {
+                    Element a = links.get(j);
+                    String epName = a.text().trim();
+                    String epUrl  = a.attr("href");
+                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+                    episodeList.add(epName + "$" + epUrl);
+                }
+                fromList.add(fromName);
+                urlList.add(TextUtils.join("#", episodeList));
+            }
         }
+
+        vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
+        vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
+
+        return Result.get().vod(vod).string();
     }
 
-    vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
-    vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
-
-    return Result.get().vod(vod).string();
-}
-
-// 辅助方法
-private String getInfo(Document doc, String key) {
-    Element el = doc.selectFirst("p.data:contains(" + key + ")");
-    if (el == null) return "";
-    String text = el.text();
-    return text.replace(key + "：", "").replace(key + ":", "").trim();
-}
+    private String getInfo(Document doc, String key) {
+        Element el = doc.selectFirst("p.data:contains(" + key + ")");
+        if (el == null) return "";
+        String text = el.text();
+        return text.replace(key + "：", "").replace(key + ":", "").trim();
+    }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
@@ -316,17 +330,6 @@ private String getInfo(Document doc, String key) {
         HashMap<String, String> currentHeaders = getHeaders();
 
         try {
-            OkResult cookieRes = OkHttp.get(playUrl, null, currentHeaders);
-            Map<String, List<String>> respHeaders = cookieRes.getResp();
-            if (respHeaders != null && respHeaders.containsKey("set-cookie")) {
-                List<String> cookies = respHeaders.get("set-cookie");
-                StringBuilder sb = new StringBuilder();
-                for (String c : cookies) {
-                    sb.append(c.split(";")[0]).append("; ");
-                }
-                currentHeaders.put("Cookie", sb.toString().trim());
-            }
-
             String html = OkHttp.string(playUrl, currentHeaders);
 
             String marker = "var player_data=";
@@ -339,7 +342,7 @@ private String getInfo(Document doc, String key) {
             String jsonStr = html.substring(start, end).trim();
             JsonObject playerData = JsonParser.parseString(jsonStr).getAsJsonObject();
             String rawUrl = playerData.get("url").getAsString();
-            String from = playerData.get("from").getAsString();
+            String from   = playerData.get("from").getAsString();
 
             if (jiexiUrlMap.containsKey(from)) {
                 try {
