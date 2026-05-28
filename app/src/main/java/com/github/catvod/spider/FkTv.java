@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,59 +41,9 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // ==================== 列表解析 + 异步补图 ====================
-    private List<Vod> parseList(String html) {
-        List<Vod> list = new ArrayList<>();
-        Map<Vod, String> titleMap = new HashMap<>();
-
-        Document doc = Jsoup.parse(html);
-        Elements items = doc.select("div.item-wrap.vertical");
-
-        for (Element item : items) {
-            Element a = item.selectFirst("a[href^=/movie/detail]");
-            if (a == null) continue;
-
-            String href = siteUrl + a.attr("href");
-            String name = a.attr("title");
-            String remark = item.selectFirst(".category") != null ? item.selectFirst(".category").text() : "";
-
-            Element img = item.selectFirst("div.lazy-load");
-            String pic = img != null ? img.attr("data-src") : "";
-
-            Vod vod = new Vod();
-            vod.setVodId(href);
-            vod.setVodName(name);
-            vod.setVodPic(pic);
-            vod.setVodRemarks(remark);
-
-            list.add(vod);
-            titleMap.put(vod, name);
-        }
-
-        if (!list.isEmpty()) {
-            asyncLoadBetterImages(titleMap);
-        }
-
-        return list;
+    @Override
+    public void init(Context context, String extend) throws Exception {
     }
-
-    private void asyncLoadBetterImages(Map<Vod, String> titleMap) {
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        for (Map.Entry<Vod, String> entry : titleMap.entrySet()) {
-            Vod vod = entry.getKey();
-            String title = entry.getValue();
-            executor.execute(() -> {
-                try {
-                    String betterPic = getBetterImage(title);
-                    if (!TextUtils.isEmpty(betterPic)) {
-                        vod.setVodPic(betterPic);
-                    }
-                } catch (Exception ignored) {}
-            });
-        }
-        executor.shutdown();
-    }
-
     private String getBetterImage(String title) {
         if (TextUtils.isEmpty(title)) return "";
         try {
@@ -108,8 +59,51 @@ public class FkTv extends Spider {
         return "";
     }
 
-    @Override
-    public void init(Context context, String extend) throws Exception {
+
+    // ── 列表解析：多线程并发补图，所有图片同时取，最慢的那张决定总耗时 ──
+    private List<Vod> parseList(String html) {
+        List<Vod> list = new ArrayList<>();
+        Document doc = Jsoup.parse(html);
+        Elements items = doc.select("div.item-wrap.vertical");
+
+        for (Element item : items) {
+            Element a = item.selectFirst("a[href^=/movie/detail]");
+            if (a == null) continue;
+
+            String href   = siteUrl + a.attr("href");
+            String name   = a.attr("title");
+            String remark = item.selectFirst(".category") != null
+                    ? item.selectFirst(".category").text() : "";
+
+            Vod vod = new Vod();
+            vod.setVodId(href);
+            vod.setVodName(name);
+            vod.setVodRemarks(remark);
+            list.add(vod);
+        }
+
+        if (!list.isEmpty()) {
+            // 所有条目并发取图，用 CountDownLatch 等全部完成再返回
+            ExecutorService executor = Executors.newFixedThreadPool(Math.min(list.size(), 8));
+            CountDownLatch latch = new CountDownLatch(list.size());
+            for (Vod vod : list) {
+                executor.execute(() -> {
+                    try {
+                        String pic = getBetterImage(vod.getVodName());
+                        if (!TextUtils.isEmpty(pic)) vod.setVodPic(pic);
+                    } catch (Exception ignored) {
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+            try {
+                latch.await(); // 等所有线程完成
+            } catch (InterruptedException ignored) {}
+            executor.shutdown();
+        }
+
+        return list;
     }
 
     @Override
@@ -129,8 +123,7 @@ public class FkTv extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
         String html = OkHttp.string(url, getHeader());
-        List<Vod> list = parseList(html);
-        return Result.string(list);
+        return Result.string(parseList(html));
     }
 
     @Override
@@ -138,14 +131,13 @@ public class FkTv extends Spider {
         try {
             String url = siteUrl + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
             String html = OkHttp.string(url, getHeader());
-            List<Vod> list = parseList(html);
-            return Result.string(list);
+            return Result.string(parseList(html));
         } catch (Exception e) {
             return Result.string(new ArrayList<>());
         }
     }
 
-    // ==================== 詳情頁 ====================
+    // ── 详情页：一次请求搞定，图片直接从页面取，不再搜图 ────────────
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : siteUrl + ids.get(0);
@@ -156,40 +148,43 @@ public class FkTv extends Spider {
         vod.setVodId(detailUrl);
 
         Element nameEl = doc.selectFirst(".name");
-        String vodName = nameEl != null ? nameEl.text().trim() : "未知標題";
-        vod.setVodName(vodName);
+        vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
 
         Element desc = doc.selectFirst(".desc");
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-        String pic = getBetterImage(vodName);
-        vod.setVodPic(pic);
+        // 详情页不补图，列表页已经有图了
 
+        // 提取所有集数 linkId
         List<String> linkIds = extractLinkIds(html);
         if (linkIds.isEmpty()) {
             return Result.get().vod(vod).string();
         }
 
+        // 只用第一个 linkId 请求一次，拿到所有线路名
         List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
+        if (playLines.isEmpty()) {
+            return Result.get().vod(vod).string();
+        }
 
         List<String> fromList = new ArrayList<>();
-        List<String> urlList = new ArrayList<>();
+        List<String> urlList  = new ArrayList<>();
 
         for (String line : playLines) {
-            String[] parts = line.split("\\$");
-            if (parts.length == 2) {
-                String lineName = parts[0];
-                fromList.add(lineName);
+            String[] parts = line.split("\\$", 2);
+            if (parts.length != 2) continue;
 
-                List<String> episodes = new ArrayList<>();
-                for (int i = 0; i < linkIds.size(); i++) {
-                    if (i >= 120) break;
-                    String episodeName = "第" + (i + 1) + "集";
-                    String playId = detailUrl + "|" + linkIds.get(i);
-                    episodes.add(episodeName + "$" + playId);
-                }
-                urlList.add(String.join("#", episodes));
+            fromList.add(parts[0]); // 线路名
+
+            // 集数列表：playId 直接存 m3u8 地址，playerContent 无需再请求
+            List<String> episodes = new ArrayList<>();
+            int limit = Math.min(linkIds.size(), 120);
+            for (int i = 0; i < limit; i++) {
+                String episodeName = "第" + (i + 1) + "集";
+                // 把 detailUrl + linkId 存进来，playerContent 按线路索引取对应 url
+                episodes.add(episodeName + "$" + detailUrl + "|" + linkIds.get(i) + "|" + playLines.indexOf(line));
             }
+            urlList.add(String.join("#", episodes));
         }
 
         vod.setVodPlayFrom(String.join("$$$", fromList));
@@ -197,6 +192,35 @@ public class FkTv extends Spider {
 
         return Result.get().vod(vod).string();
     }
+
+    // ── playerContent：直接发请求拿当前集+当前线路的 m3u8 ─────────────
+    // id 格式：detailUrl|linkId|lineIndex
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        if (id.contains("|")) {
+            String[] parts = id.split("\\|");
+            if (parts.length >= 3) {
+                String detailUrl = parts[0];
+                String linkId    = parts[1];
+                int lineIndex    = 0;
+                try { lineIndex = Integer.parseInt(parts[2]); } catch (Exception ignored) {}
+
+                List<String> playList = getPlayUrls(detailUrl, linkId);
+                if (lineIndex < playList.size()) {
+                    String[] arr = playList.get(lineIndex).split("\\$", 2);
+                    if (arr.length == 2) return Result.get().url(arr[1]).string();
+                }
+                // 降级：用第一条线路
+                if (!playList.isEmpty()) {
+                    String[] arr = playList.get(0).split("\\$", 2);
+                    if (arr.length == 2) return Result.get().url(arr[1]).string();
+                }
+            }
+        }
+        return Result.get().url(id).string();
+    }
+
+    // ── 工具方法 ──────────────────────────────────────────────────
 
     private List<String> extractLinkIds(String html) {
         List<String> linkIds = new ArrayList<>();
@@ -213,8 +237,8 @@ public class FkTv extends Spider {
             try {
                 JSONArray arr = new JSONArray(linksStr);
                 for (int i = 0; i < arr.length(); i++) {
-                    String id = arr.getJSONObject(i).optString("id");
-                    if (!id.isEmpty()) linkIds.add(id);
+                    String lid = arr.getJSONObject(i).optString("id");
+                    if (!lid.isEmpty()) linkIds.add(lid);
                 }
             } catch (Exception ignored) {}
         }
@@ -253,25 +277,6 @@ public class FkTv extends Spider {
             e.printStackTrace();
         }
         return urls;
-    }
-
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (id.contains("|")) {
-            String[] parts = id.split("\\|");
-            if (parts.length == 2) {
-                String detailUrl = parts[0];
-                String linkId = parts[1];
-                List<String> playList = getPlayUrls(detailUrl, linkId);
-                if (!playList.isEmpty()) {
-                    String[] arr = playList.get(0).split("\\$");
-                    if (arr.length == 2) {
-                        return Result.get().url(arr[1]).string();
-                    }
-                }
-            }
-        }
-        return Result.get().url(id).string();
     }
 
     private String extractRegex(String text, String regex) {
