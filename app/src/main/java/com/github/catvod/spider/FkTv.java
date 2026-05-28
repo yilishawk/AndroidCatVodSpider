@@ -14,10 +14,10 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -40,10 +40,10 @@ public class FkTv extends Spider {
         return headers;
     }
 
-    // ==================== 快速解析列表 + 异步补图 ====================
+    // ==================== 列表解析 + 异步补图 ====================
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
-        Map<Vod, String> titleMap = new HashMap<>();   // 用于异步补图时保存标题
+        Map<Vod, String> titleMap = new HashMap<>();
 
         Document doc = Jsoup.parse(html);
         Elements items = doc.select("div.item-wrap.vertical");
@@ -66,10 +66,9 @@ public class FkTv extends Spider {
             vod.setVodRemarks(remark);
 
             list.add(vod);
-            titleMap.put(vod, name);   // 保存对应标题
+            titleMap.put(vod, name);
         }
 
-        // 启动异步补图
         if (!list.isEmpty()) {
             asyncLoadBetterImages(titleMap);
         }
@@ -77,23 +76,21 @@ public class FkTv extends Spider {
         return list;
     }
 
-    // 异步补高清图（关键修复）
     private void asyncLoadBetterImages(Map<Vod, String> titleMap) {
-        ExecutorService executor = Executors.newFixedThreadPool(4);  // 限制并发
+        ExecutorService executor = Executors.newFixedThreadPool(4);
         for (Map.Entry<Vod, String> entry : titleMap.entrySet()) {
             Vod vod = entry.getKey();
             String title = entry.getValue();
-
             executor.execute(() -> {
                 try {
                     String betterPic = getBetterImage(title);
                     if (!TextUtils.isEmpty(betterPic)) {
-                        vod.setVodPic(betterPic);   // 更新图片
+                        vod.setVodPic(betterPic);
                     }
                 } catch (Exception ignored) {}
             });
         }
-        executor.shutdown(); // 不等待完成
+        executor.shutdown();
     }
 
     private String getBetterImage(String title) {
@@ -115,7 +112,6 @@ public class FkTv extends Spider {
     public void init(Context context, String extend) throws Exception {
     }
 
-    // ==================== 首页 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -129,7 +125,6 @@ public class FkTv extends Spider {
         return Result.string(classes, list);
     }
 
-    // ==================== 分类页 ====================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
@@ -138,7 +133,6 @@ public class FkTv extends Spider {
         return Result.string(list);
     }
 
-    // ==================== 搜索 ====================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         try {
@@ -147,40 +141,34 @@ public class FkTv extends Spider {
             List<Vod> list = parseList(html);
             return Result.string(list);
         } catch (Exception e) {
-            e.printStackTrace();
             return Result.string(new ArrayList<>());
         }
     }
 
-    // ==================== 详情页 ====================
+    // ==================== 詳情頁（已修正）===================
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-        String html = OkHttp.string(detailUrl, getHeaders());
+        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : siteUrl + ids.get(0);
+        String html = OkHttp.string(detailUrl, getHeader());
         Document doc = Jsoup.parse(html);
 
         Vod vod = new Vod();
         vod.setVodId(detailUrl);
 
-        // 標題
         Element nameEl = doc.selectFirst(".name");
         vod.setVodName(nameEl != null ? nameEl.text().trim() : "未知標題");
 
-        // 簡介
         Element desc = doc.selectFirst(".desc");
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-        // 圖片
         String pic = getBetterImage(vod.getVodName() != null ? vod.getVodName() : "");
         vod.setVodPic(pic);
 
-        // 提取 linkIds
         List<String> linkIds = extractLinkIds(html);
         if (linkIds.isEmpty()) {
             return Result.get().vod(vod).string();
         }
 
-        // 獲取播放線路
         List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
 
         List<String> fromList = new ArrayList<>();
@@ -194,7 +182,7 @@ public class FkTv extends Spider {
 
                 List<String> episodes = new ArrayList<>();
                 for (int i = 0; i < linkIds.size(); i++) {
-                    if (i >= 120) break;   // 限制集數
+                    if (i >= 120) break;
                     String episodeName = "第" + (i + 1) + "集";
                     String playId = detailUrl + "|" + linkIds.get(i);
                     episodes.add(episodeName + "$" + playId);
@@ -207,18 +195,6 @@ public class FkTv extends Spider {
         vod.setVodPlayUrl(String.join("$$$", urlList));
 
         return Result.get().vod(vod).string();
-    }
-
-        Vod vod = new Vod();
-        vod.setVodId(detailUrl);
-        vod.setVodName(name);
-        vod.setVodPic(pic);
-        vod.setVodContent(content);
-        vod.setVodPlayFrom(String.join("$$$", lineNames));
-        vod.setVodPlayUrl(String.join("$$$",
-                lineMap.values().stream().map(list -> String.join("#", list)).toList()));
-
-        return Result.string(vod);
     }
 
     private List<String> extractLinkIds(String html) {
