@@ -62,7 +62,10 @@ public class FkTv extends Spider {
 
     // ── 列表解析：多线程并发补图，所有图片同时取，最慢的那张决定总耗时 ──
     private List<Vod> parseList(String html) {
+        // 用 Map 把 vod 和 name 配对，方便后面 lambda 直接用 name
         List<Vod> list = new ArrayList<>();
+        Map<Vod, String> nameMap = new HashMap<>();
+
         Document doc = Jsoup.parse(html);
         Elements items = doc.select("div.item-wrap.vertical");
 
@@ -80,16 +83,19 @@ public class FkTv extends Spider {
             vod.setVodName(name);
             vod.setVodRemarks(remark);
             list.add(vod);
+            nameMap.put(vod, name);
         }
 
         if (!list.isEmpty()) {
             // 所有条目并发取图，用 CountDownLatch 等全部完成再返回
             ExecutorService executor = Executors.newFixedThreadPool(Math.min(list.size(), 8));
             CountDownLatch latch = new CountDownLatch(list.size());
-            for (Vod vod : list) {
+            for (Map.Entry<Vod, String> entry : nameMap.entrySet()) {
+                final Vod vod = entry.getKey();
+                final String name = entry.getValue();
                 executor.execute(() -> {
                     try {
-                        String pic = getBetterImage(vod.getVodName());
+                        String pic = getBetterImage(name);
                         if (!TextUtils.isEmpty(pic)) vod.setVodPic(pic);
                     } catch (Exception ignored) {
                     } finally {
