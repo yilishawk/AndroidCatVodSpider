@@ -107,7 +107,6 @@ public class Dyrs extends Spider {
                 new Filter.Value("年份", "year")
         );
 
-        // 电视剧
         filters.put("dianshiju", Arrays.asList(
                 new Filter("class", "分类", getTvClass()),
                 new Filter("area", "地区", getTvArea()),
@@ -115,7 +114,6 @@ public class Dyrs extends Spider {
                 new Filter("sort", "排序", sortValues)
         ));
 
-        // 电影
         filters.put("dianying", Arrays.asList(
                 new Filter("class", "分类", getMovieClass()),
                 new Filter("area", "地区", getMovieArea()),
@@ -123,7 +121,6 @@ public class Dyrs extends Spider {
                 new Filter("sort", "排序", sortValues)
         ));
 
-        // 综艺
         filters.put("zongyi", Arrays.asList(
                 new Filter("class", "分类", getVarietyClass()),
                 new Filter("area", "地区", getVarietyArea()),
@@ -131,7 +128,6 @@ public class Dyrs extends Spider {
                 new Filter("sort", "排序", sortValues)
         ));
 
-        // 短剧
         filters.put("duanju", Arrays.asList(
                 new Filter("class", "分类", getShortClass()),
                 new Filter("area", "地区", getShortArea()),
@@ -143,65 +139,62 @@ public class Dyrs extends Spider {
     }
 
     private List<Filter.Value> getTvClass() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("剧情", "剧情"), new Filter.Value("爱情", "爱情"),
                 new Filter.Value("喜剧", "喜剧"), new Filter.Value("悬疑", "悬疑"), new Filter.Value("犯罪", "犯罪"),
                 new Filter.Value("古装", "古装"), new Filter.Value("惊悚", "惊悚"), new Filter.Value("奇幻", "奇幻"),
-                new Filter.Value("动作", "动作"), new Filter.Value("家庭", "家庭"), new Filter.Value("都市", "都市"),
-                new Filter.Value("科幻", "科幻"), new Filter.Value("历史", "历史"), new Filter.Value("战争", "战争")
-        });
+                new Filter.Value("动作", "动作"), new Filter.Value("家庭", "家庭"), new Filter.Value("都市", "都市")
+        );
     }
 
     private List<Filter.Value> getTvArea() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("内地", "内地"), new Filter.Value("美国", "美国"),
                 new Filter.Value("中国香港", "中国香港"), new Filter.Value("日本", "日本"), new Filter.Value("韩国", "韩国")
-        });
+        );
     }
 
     private List<Filter.Value> getMovieClass() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("剧情", "剧情"), new Filter.Value("喜剧", "喜剧"),
                 new Filter.Value("动作", "动作"), new Filter.Value("爱情", "爱情"), new Filter.Value("惊悚", "惊悚"),
-                new Filter.Value("犯罪", "犯罪"), new Filter.Value("悬疑", "悬疑"), new Filter.Value("恐怖", "恐怖"),
-                new Filter.Value("奇幻", "奇幻"), new Filter.Value("科幻", "科幻"), new Filter.Value("动画", "动画")
-        });
+                new Filter.Value("犯罪", "犯罪"), new Filter.Value("悬疑", "悬疑"), new Filter.Value("恐怖", "恐怖")
+        );
     }
 
     private List<Filter.Value> getMovieArea() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("美国", "美国"), new Filter.Value("内地", "内地"),
                 new Filter.Value("中国香港", "中国香港"), new Filter.Value("日本", "日本"), new Filter.Value("韩国", "韩国")
-        });
+        );
     }
 
     private List<Filter.Value> getVarietyClass() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("真人秀", "真人秀"), new Filter.Value("大陆综艺", "大陆综艺"),
-                new Filter.Value("综艺", "综艺"), new Filter.Value("纪录片", "纪录片"), new Filter.Value("脱口秀", "脱口秀")
-        });
+                new Filter.Value("综艺", "综艺"), new Filter.Value("纪录片", "纪录片")
+        );
     }
 
     private List<Filter.Value> getVarietyArea() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("大陆", "大陆"), new Filter.Value("内地", "内地"),
-                new Filter.Value("美国", "美国"), new Filter.Value("韩国", "韩国"), new Filter.Value("香港", "香港")
-        });
+                new Filter.Value("美国", "美国"), new Filter.Value("韩国", "韩国")
+        );
     }
 
     private List<Filter.Value> getShortClass() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("短剧", "短剧"), new Filter.Value("剧情", "剧情"),
-                new Filter.Value("爱情", "爱情"), new Filter.Value("古装", "古装"), new Filter.Value("玄幻", "玄幻"),
-                new Filter.Value("悬疑", "悬疑"), new Filter.Value("都市", "都市")
-        });
+                new Filter.Value("爱情", "爱情"), new Filter.Value("古装", "古装"), new Filter.Value("玄幻", "玄幻")
+        );
     }
 
     private List<Filter.Value> getShortArea() {
-        return Arrays.asList(new Filter.Value[]{
+        return Arrays.asList(
                 new Filter.Value("全部", ""), new Filter.Value("中国大陆", "中国大陆"), new Filter.Value("内地", "内地"),
-                new Filter.Value("韩国", "韩国"), new Filter.Value("日本", "日本"), new Filter.Value("美国", "美国")
-        });
+                new Filter.Value("韩国", "韩国"), new Filter.Value("日本", "日本")
+        );
     }
 
     @Override
@@ -212,7 +205,7 @@ public class Dyrs extends Spider {
         String year = extend.getOrDefault("year", "");
         String sort = extend.getOrDefault("sort", "play_hot");
 
-        StringBuilder sb = new StringBuilder(host + "/" + tid + ".html?");
+        StringBuilder sb = new StringBuilder(host).append("/").append(tid).append(".html?");
         if (!area.isEmpty()) sb.append("area=").append(URLEncoder.encode(area, "UTF-8")).append("&");
         if (!cls.isEmpty()) sb.append("class=").append(URLEncoder.encode(cls, "UTF-8")).append("&");
         if (!year.isEmpty()) sb.append("year=").append(URLEncoder.encode(year, "UTF-8")).append("&");
@@ -232,7 +225,7 @@ public class Dyrs extends Spider {
             Vod vod = new Vod();
             vod.setVodId(a.attr("href"));
             vod.setVodName(a.attr("title"));
-            String pic = img != null ? img.attr("data-src") != null ? img.attr("data-src") : img.attr("src") : "";
+            String pic = (img != null) ? img.attr("data-src") != null ? img.attr("data-src") : img.attr("src") : "";
             vod.setVodPic(fixPic(pic));
             Element remark = item.selectFirst("div.top-2");
             vod.setVodRemarks(remark != null ? remark.text().trim() : "");
@@ -251,40 +244,57 @@ public class Dyrs extends Spider {
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
 
+        String vodName = "";
+        String vodPic = "";
+        String vodYear = "";
+        String vodArea = "";
+        String vodContent = "";
+
         // JSON-LD 解析
         Element ldJson = doc.selectFirst("script[type=application/ld+json]");
         if (ldJson != null) {
             try {
                 JsonObject jd = JsonParser.parseString(ldJson.html()).getAsJsonObject();
-                vod.setVodName(jd.has("name") ? jd.get("name").getAsString() : "");
-                vod.setVodPic(jd.has("image") ? fixPic(jd.get("image").getAsString()) : "");
-                vod.setVodYear(jd.has("releaseDate") ? jd.get("releaseDate").getAsString().substring(0, 4) : "");
-                vod.setVodArea(jd.has("countryOfOrigin") ? jd.get("countryOfOrigin").getAsString() : "");
-                vod.setVodContent(jd.has("description") ? jd.get("description").getAsString() : "");
+                vodName = jd.has("name") ? jd.get("name").getAsString() : "";
+                vodPic = jd.has("image") ? fixPic(jd.get("image").getAsString()) : "";
+                if (jd.has("releaseDate")) {
+                    String date = jd.get("releaseDate").getAsString();
+                    vodYear = date.length() >= 4 ? date.substring(0, 4) : "";
+                }
+                vodArea = jd.has("countryOfOrigin") ? jd.get("countryOfOrigin").getAsString() : "";
+                vodContent = jd.has("description") ? jd.get("description").getAsString() : "";
             } catch (Exception ignored) {}
         }
 
-        // HTML 补充解析
-        if (TextUtils.isEmpty(vod.getVodName())) {
+        // HTML 补充
+        if (TextUtils.isEmpty(vodName)) {
             Element titleEl = doc.selectFirst("h3[title]");
-            vod.setVodName(titleEl != null ? titleEl.attr("title") : "未知");
+            vodName = titleEl != null ? titleEl.attr("title") : "未知";
         }
-        if (TextUtils.isEmpty(vod.getVodPic())) {
+        if (TextUtils.isEmpty(vodPic)) {
             Element img = doc.selectFirst("img.lazy-image");
-            String pic = img != null ? img.attr("data-src") != null ? img.attr("data-src") : img.attr("src") : "";
-            vod.setVodPic(fixPic(pic));
+            String pic = img != null ? (img.attr("data-src") != null ? img.attr("data-src") : img.attr("src")) : "";
+            vodPic = fixPic(pic);
+        }
+        if (TextUtils.isEmpty(vodContent)) {
+            Element cont = doc.selectFirst("div.text-justify");
+            vodContent = cont != null ? cont.text().trim() : "";
         }
 
-        // 播放线路
+        vod.setVodName(vodName);
+        vod.setVodPic(vodPic);
+        vod.setVodYear(vodYear);
+        vod.setVodArea(vodArea);
+        vod.setVodContent(vodContent);
+
+        // 播放线路解析
         Elements tabs = doc.select("#originTabs a");
         List<String> fromList = new ArrayList<>();
         List<String> urlList = new ArrayList<>();
 
-        ExecutorService executor = Executors.newFixedThreadPool(Math.min(tabs.size(), 8));
-        List<Runnable> tasks = new ArrayList<>();
-
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(8, tabs.size()));
         for (Element tab : tabs) {
-            tasks.add(() -> {
+            executor.execute(() -> {
                 try {
                     Map<String, String> line = parseLine(tab);
                     if (line != null && !TextUtils.isEmpty(line.get("url"))) {
@@ -296,9 +306,10 @@ public class Dyrs extends Spider {
                 } catch (Exception ignored) {}
             });
         }
-        tasks.forEach(executor::execute);
         executor.shutdown();
-        executor.awaitTermination(15, TimeUnit.SECONDS);
+        try {
+            executor.awaitTermination(12, TimeUnit.SECONDS);
+        } catch (Exception ignored) {}
 
         vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
         vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
@@ -308,7 +319,9 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab) {
         try {
-            String fromName = tab.selectFirst("button").attr("data-origin");
+            Element btn = tab.selectFirst("button");
+            String fromName = btn != null ? btn.attr("data-origin") : tab.text().trim();
+
             String lineUrl = host + tab.attr("href");
             String respHtml = OkHttp.string(lineUrl, headers);
 
@@ -316,26 +329,19 @@ public class Dyrs extends Spider {
             Matcher matcher = pattern.matcher(respHtml);
             if (!matcher.find()) return null;
 
-            String raw = matcher.group(1);
-            raw = raw.replace("\\/", "/");
-            // 处理 unicode 转义
-            raw = raw.replace("\\u", "\\u");
+            String raw = matcher.group(1).replace("\\/", "/");
             JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
 
             List<String> urls = new ArrayList<>();
             for (JsonElement e : epData) {
                 JsonObject ep = e.getAsJsonObject();
-                String title = ep.get("title").getAsString();
-                String url = ep.get("url").getAsString();
+                String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
+                String url = ep.has("url") ? ep.get("url").getAsString() : "";
 
-                if (url.startsWith("http")) {
-                    // ok
-                } else if (url.startsWith("//")) {
-                    url = "https:" + url;
-                } else if (url.startsWith("/")) {
-                    url = host + url;
-                } else {
-                    url = host + "/" + url;
+                if (!url.startsWith("http")) {
+                    if (url.startsWith("//")) url = "https:" + url;
+                    else if (url.startsWith("/")) url = host + url;
+                    else url = host + "/" + url;
                 }
                 urls.add(title + "$" + url);
             }
@@ -366,7 +372,7 @@ public class Dyrs extends Spider {
                 vod.setVodId(a.attr("href"));
                 vod.setVodName(a.attr("title"));
                 Element img = item.selectFirst("img");
-                String pic = img != null ? img.attr("data-src") != null ? img.attr("data-src") : img.attr("src") : "";
+                String pic = img != null ? (img.attr("data-src") != null ? img.attr("data-src") : img.attr("src")) : "";
                 vod.setVodPic(fixPic(pic));
                 Element remark = item.selectFirst("div.top-2");
                 vod.setVodRemarks(remark != null ? remark.text().trim() : "");
