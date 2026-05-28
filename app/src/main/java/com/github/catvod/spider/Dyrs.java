@@ -402,13 +402,13 @@ public class Dyrs extends Spider {
             String respHtml = OkHttp.string(lineUrl, headers);
 
             // 提取 JSON 数据
-            Pattern pattern = Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\('(.*?)'\\);", Pattern.DOTALL);
+            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON.parse\\('(.*?)'\\);", Pattern.DOTALL);
             Matcher matcher = pattern.matcher(respHtml);
             if (!matcher.find()) return null;
 
             // 处理 unicode_escape 编码（对齐 Python 版两步解码）
             String raw = matcher.group(1).replace("\\/", "/");
-            // Java 中处理 \uXXXX 转义
+            // Java 中处理 \\uXXXX 转义
             raw = unescapeUnicode(raw);
 
             JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
