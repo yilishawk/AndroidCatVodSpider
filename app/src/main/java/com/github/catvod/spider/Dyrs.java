@@ -1,5 +1,6 @@
 package com.github.catvod.spider;
 
+import android.content.Context;
 import android.text.TextUtils;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
@@ -23,9 +24,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,10 +35,18 @@ public class Dyrs extends Spider {
 
     private String host = "https://dyrs1.vip";
     private final HashMap<String, String> headers = new HashMap<>();
+    // 只拉取一次备用域名
+    private final AtomicBoolean backupFetched = new AtomicBoolean(false);
 
     public Dyrs() {
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
         headers.put("Referer", host);
+    }
+
+    // ── 域名管理：只在 init 里调一次 ─────────────────────────────────
+    @Override
+    public void init(Context context, String extend) throws Exception {
+        ensureHost();
     }
 
     private void ensureHost() {
@@ -48,6 +58,8 @@ public class Dyrs extends Spider {
     }
 
     private void fetchBackupHost() {
+        // 只拉一次，避免重复请求
+        if (!backupFetched.compareAndSet(false, true)) return;
         try {
             String json = OkHttp.string("https://ysgcw.cc/api/videox/least", headers);
             JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
@@ -57,10 +69,7 @@ public class Dyrs extends Spider {
                 JsonArray arr = obj.getAsJsonArray("urls");
                 for (JsonElement e : arr) {
                     String u = e.getAsString();
-                    if (u.startsWith("http")) {
-                        newHost = u;
-                        break;
-                    }
+                    if (u.startsWith("http")) { newHost = u; break; }
                 }
             }
             if (!TextUtils.isEmpty(newHost)) {
@@ -76,19 +85,17 @@ public class Dyrs extends Spider {
         return host + (pic.startsWith("/") ? pic : "/" + pic);
     }
 
+    // ── 首页 ──────────────────────────────────────────────────────
     @Override
     public String homeContent(boolean filter) throws Exception {
-        ensureHost();
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("dianshiju", "电视剧"));
-        classes.add(new Class("dianying", "电影"));
-        classes.add(new Class("zongyi", "综艺"));
-        classes.add(new Class("duanju", "短剧"));
+        classes.add(new Class("dianying",  "电影"));
+        classes.add(new Class("zongyi",    "综艺"));
+        classes.add(new Class("duanju",    "短剧"));
 
         Result result = new Result().classes(classes);
-        if (filter) {
-            result.filters(getFilterConfig());
-        }
+        if (filter) result.filters(getFilterConfig());
         return result.toString();
     }
 
@@ -97,9 +104,8 @@ public class Dyrs extends Spider {
 
         List<Filter.Value> yearValues = new ArrayList<>();
         yearValues.add(new Filter.Value("全部", ""));
-        for (int i = 2026; i >= 2000; i--) {
+        for (int i = 2026; i >= 2000; i--)
             yearValues.add(new Filter.Value(String.valueOf(i), String.valueOf(i)));
-        }
 
         List<Filter.Value> sortValues = Arrays.asList(
                 new Filter.Value("默认", ""),
@@ -108,29 +114,90 @@ public class Dyrs extends Spider {
         );
 
         filters.put("dianshiju", Arrays.asList(
-                new Filter("class", "分类", getTvClass()),
-                new Filter("area", "地区", getTvArea()),
+                new Filter("class", "分类", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("剧情","剧情"),new Filter.Value("爱情","爱情"),
+                        new Filter.Value("喜剧","喜剧"),new Filter.Value("悬疑","悬疑"),new Filter.Value("犯罪","犯罪"),
+                        new Filter.Value("古装","古装"),new Filter.Value("惊悚","惊悚"),new Filter.Value("奇幻","奇幻"),
+                        new Filter.Value("动作","动作"),new Filter.Value("家庭","家庭"),new Filter.Value("都市","都市"),
+                        new Filter.Value("科幻","科幻"),new Filter.Value("历史","历史"),new Filter.Value("战争","战争"),
+                        new Filter.Value("冒险","冒险"),new Filter.Value("武侠","武侠"),new Filter.Value("青春","青春"),
+                        new Filter.Value("恐怖","恐怖"),new Filter.Value("传记","传记"),new Filter.Value("谍战","谍战")
+                )),
+                new Filter("area", "地区", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("内地","内地"),new Filter.Value("美国","美国"),
+                        new Filter.Value("中国香港","中国香港"),new Filter.Value("日本","日本"),new Filter.Value("英国","英国"),
+                        new Filter.Value("韩国","韩国"),new Filter.Value("泰国","泰国"),new Filter.Value("中国台湾","中国台湾"),
+                        new Filter.Value("加拿大","加拿大"),new Filter.Value("西班牙","西班牙"),new Filter.Value("德国","德国"),
+                        new Filter.Value("法国","法国"),new Filter.Value("澳大利亚","澳大利亚"),new Filter.Value("意大利","意大利"),
+                        new Filter.Value("墨西哥","墨西哥"),new Filter.Value("印度","印度"),new Filter.Value("新加坡","新加坡"),
+                        new Filter.Value("俄罗斯","俄罗斯"),new Filter.Value("土耳其","土耳其"),new Filter.Value("巴西","巴西")
+                )),
                 new Filter("year", "年份", yearValues),
                 new Filter("sort", "排序", sortValues)
         ));
 
         filters.put("dianying", Arrays.asList(
-                new Filter("class", "分类", getMovieClass()),
-                new Filter("area", "地区", getMovieArea()),
+                new Filter("class", "分类", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("剧情","剧情"),new Filter.Value("喜剧","喜剧"),
+                        new Filter.Value("动作","动作"),new Filter.Value("爱情","爱情"),new Filter.Value("惊悚","惊悚"),
+                        new Filter.Value("犯罪","犯罪"),new Filter.Value("院线","院线"),new Filter.Value("悬疑","悬疑"),
+                        new Filter.Value("恐怖","恐怖"),new Filter.Value("冒险","冒险"),new Filter.Value("奇幻","奇幻"),
+                        new Filter.Value("科幻","科幻"),new Filter.Value("家庭","家庭"),new Filter.Value("战争","战争"),
+                        new Filter.Value("古装","古装"),new Filter.Value("历史","历史"),new Filter.Value("传记","传记"),
+                        new Filter.Value("武侠","武侠"),new Filter.Value("动画","动画"),new Filter.Value("音乐","音乐")
+                )),
+                new Filter("area", "地区", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("美国","美国"),new Filter.Value("内地","内地"),
+                        new Filter.Value("中国香港","中国香港"),new Filter.Value("日本","日本"),new Filter.Value("英国","英国"),
+                        new Filter.Value("法国","法国"),new Filter.Value("韩国","韩国"),new Filter.Value("加拿大","加拿大"),
+                        new Filter.Value("德国","德国"),new Filter.Value("中国台湾","中国台湾"),new Filter.Value("印度","印度"),
+                        new Filter.Value("意大利","意大利"),new Filter.Value("其它地区","其它地区"),new Filter.Value("西班牙","西班牙"),
+                        new Filter.Value("澳大利亚","澳大利亚"),new Filter.Value("泰国","泰国"),new Filter.Value("俄罗斯","俄罗斯"),
+                        new Filter.Value("比利时","比利时"),new Filter.Value("丹麦","丹麦"),new Filter.Value("墨西哥","墨西哥")
+                )),
                 new Filter("year", "年份", yearValues),
                 new Filter("sort", "排序", sortValues)
         ));
 
         filters.put("zongyi", Arrays.asList(
-                new Filter("class", "分类", getVarietyClass()),
-                new Filter("area", "地区", getVarietyArea()),
+                new Filter("class", "分类", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("真人秀","真人秀"),new Filter.Value("大陆综艺","大陆综艺"),
+                        new Filter.Value("综艺","综艺"),new Filter.Value("纪录片","纪录片"),new Filter.Value("脱口秀","脱口秀"),
+                        new Filter.Value("音乐","音乐"),new Filter.Value("晚会","晚会"),new Filter.Value("喜剧","喜剧"),
+                        new Filter.Value("相声","相声"),new Filter.Value("歌舞","歌舞"),new Filter.Value("日韩综艺","日韩综艺"),
+                        new Filter.Value("欧美综艺","欧美综艺"),new Filter.Value("游戏","游戏"),new Filter.Value("爱情","爱情"),
+                        new Filter.Value("生活","生活"),new Filter.Value("文化","文化"),new Filter.Value("历史","历史")
+                )),
+                new Filter("area", "地区", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("大陆","大陆"),new Filter.Value("内地","内地"),
+                        new Filter.Value("美国","美国"),new Filter.Value("韩国","韩国"),new Filter.Value("中国大陆","中国大陆"),
+                        new Filter.Value("香港","香港"),new Filter.Value("英国","英国"),new Filter.Value("台湾","台湾"),
+                        new Filter.Value("日本","日本"),new Filter.Value("加拿大","加拿大"),new Filter.Value("泰国","泰国"),
+                        new Filter.Value("法国","法国"),new Filter.Value("澳大利亚","澳大利亚"),new Filter.Value("德国","德国"),
+                        new Filter.Value("印度","印度")
+                )),
                 new Filter("year", "年份", yearValues),
                 new Filter("sort", "排序", sortValues)
         ));
 
         filters.put("duanju", Arrays.asList(
-                new Filter("class", "分类", getShortClass()),
-                new Filter("area", "地区", getShortArea()),
+                new Filter("class", "分类", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("短剧","短剧"),new Filter.Value("剧情","剧情"),
+                        new Filter.Value("爱情","爱情"),new Filter.Value("爽文","爽文"),new Filter.Value("古装","古装"),
+                        new Filter.Value("短片","短片"),new Filter.Value("奇幻","奇幻"),new Filter.Value("喜剧","喜剧"),
+                        new Filter.Value("悬疑","悬疑"),new Filter.Value("玄幻","玄幻"),new Filter.Value("都市","都市"),
+                        new Filter.Value("穿越","穿越"),new Filter.Value("犯罪","犯罪"),new Filter.Value("家庭","家庭"),
+                        new Filter.Value("科幻","科幻"),new Filter.Value("武侠","武侠"),new Filter.Value("惊悚","惊悚"),
+                        new Filter.Value("冒险","冒险"),new Filter.Value("动作","动作")
+                )),
+                new Filter("area", "地区", Arrays.asList(
+                        new Filter.Value("全部",""),new Filter.Value("中国大陆","中国大陆"),new Filter.Value("大陆","大陆"),
+                        new Filter.Value("内地","内地"),new Filter.Value("韩国","韩国"),new Filter.Value("日本","日本"),
+                        new Filter.Value("美国","美国"),new Filter.Value("泰国","泰国"),new Filter.Value("台湾","台湾"),
+                        new Filter.Value("中国","中国"),new Filter.Value("加拿大","加拿大"),new Filter.Value("俄罗斯","俄罗斯"),
+                        new Filter.Value("巴西","巴西"),new Filter.Value("中国香港","中国香港"),new Filter.Value("中国台湾","中国台湾"),
+                        new Filter.Value("英国","英国")
+                )),
                 new Filter("year", "年份", yearValues),
                 new Filter("sort", "排序", sortValues)
         ));
@@ -138,94 +205,36 @@ public class Dyrs extends Spider {
         return filters;
     }
 
-    private List<Filter.Value> getTvClass() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("剧情", "剧情"), new Filter.Value("爱情", "爱情"),
-                new Filter.Value("喜剧", "喜剧"), new Filter.Value("悬疑", "悬疑"), new Filter.Value("犯罪", "犯罪"),
-                new Filter.Value("古装", "古装"), new Filter.Value("惊悚", "惊悚"), new Filter.Value("奇幻", "奇幻"),
-                new Filter.Value("动作", "动作"), new Filter.Value("家庭", "家庭"), new Filter.Value("都市", "都市")
-        );
-    }
-
-    private List<Filter.Value> getTvArea() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("内地", "内地"), new Filter.Value("美国", "美国"),
-                new Filter.Value("中国香港", "中国香港"), new Filter.Value("日本", "日本"), new Filter.Value("韩国", "韩国")
-        );
-    }
-
-    private List<Filter.Value> getMovieClass() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("剧情", "剧情"), new Filter.Value("喜剧", "喜剧"),
-                new Filter.Value("动作", "动作"), new Filter.Value("爱情", "爱情"), new Filter.Value("惊悚", "惊悚"),
-                new Filter.Value("犯罪", "犯罪"), new Filter.Value("悬疑", "悬疑"), new Filter.Value("恐怖", "恐怖")
-        );
-    }
-
-    private List<Filter.Value> getMovieArea() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("美国", "美国"), new Filter.Value("内地", "内地"),
-                new Filter.Value("中国香港", "中国香港"), new Filter.Value("日本", "日本"), new Filter.Value("韩国", "韩国")
-        );
-    }
-
-    private List<Filter.Value> getVarietyClass() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("真人秀", "真人秀"), new Filter.Value("大陆综艺", "大陆综艺"),
-                new Filter.Value("综艺", "综艺"), new Filter.Value("纪录片", "纪录片")
-        );
-    }
-
-    private List<Filter.Value> getVarietyArea() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("大陆", "大陆"), new Filter.Value("内地", "内地"),
-                new Filter.Value("美国", "美国"), new Filter.Value("韩国", "韩国")
-        );
-    }
-
-    private List<Filter.Value> getShortClass() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("短剧", "短剧"), new Filter.Value("剧情", "剧情"),
-                new Filter.Value("爱情", "爱情"), new Filter.Value("古装", "古装"), new Filter.Value("玄幻", "玄幻")
-        );
-    }
-
-    private List<Filter.Value> getShortArea() {
-        return Arrays.asList(
-                new Filter.Value("全部", ""), new Filter.Value("中国大陆", "中国大陆"), new Filter.Value("内地", "内地"),
-                new Filter.Value("韩国", "韩国"), new Filter.Value("日本", "日本")
-        );
-    }
-
+    // ── 分类列表 ──────────────────────────────────────────────────
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        ensureHost();
         String area = extend.getOrDefault("area", "");
-        String cls = extend.getOrDefault("class", "");
+        String cls  = extend.getOrDefault("class", "");
         String year = extend.getOrDefault("year", "");
-        String sort = extend.getOrDefault("sort", "play_hot");
+        String sort = extend.getOrDefault("sort", "play_hot"); // 默认热度，与 Python 版一致
 
         StringBuilder sb = new StringBuilder(host).append("/").append(tid).append(".html?");
         if (!area.isEmpty()) sb.append("area=").append(URLEncoder.encode(area, "UTF-8")).append("&");
-        if (!cls.isEmpty()) sb.append("class=").append(URLEncoder.encode(cls, "UTF-8")).append("&");
+        if (!cls.isEmpty())  sb.append("class=").append(URLEncoder.encode(cls, "UTF-8")).append("&");
         if (!year.isEmpty()) sb.append("year=").append(URLEncoder.encode(year, "UTF-8")).append("&");
-        if (!sort.isEmpty()) sb.append("sort_field=").append(URLEncoder.encode(sort, "UTF-8")).append("&");
-        if (!"1".equals(pg)) sb.append("page=").append(pg);
+        sb.append("sort_field=").append(URLEncoder.encode(sort, "UTF-8"));
+        if (!"1".equals(pg)) sb.append("&page=").append(pg);
 
-        String url = sb.toString().replaceAll("&$", "");
-        String html = OkHttp.string(url, headers);
+        String html = OkHttp.string(sb.toString(), headers);
         Document doc = Jsoup.parse(html);
 
         List<Vod> list = new ArrayList<>();
-        Elements items = doc.select("div.group.relative");
-        for (Element item : items) {
+        // 修复：class 属性含空格时要用 CSS 选择器，不能直接用 . 连接全部 class
+        for (Element item : doc.select("div.group.relative")) {
             Element a = item.selectFirst("a[title]");
             if (a == null) continue;
             Element img = item.selectFirst("img");
+            String pic = img != null
+                    ? (img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src"))
+                    : "";
             Vod vod = new Vod();
             vod.setVodId(a.attr("href"));
             vod.setVodName(a.attr("title"));
-            String pic = (img != null) ? img.attr("data-src") != null ? img.attr("data-src") : img.attr("src") : "";
             vod.setVodPic(fixPic(pic));
             Element remark = item.selectFirst("div.top-2");
             vod.setVodRemarks(remark != null ? remark.text().trim() : "");
@@ -234,9 +243,9 @@ public class Dyrs extends Spider {
         return Result.string(list);
     }
 
+    // ── 详情页 ────────────────────────────────────────────────────
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        ensureHost();
         String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
         String html = OkHttp.string(detailUrl, headers);
         Document doc = Jsoup.parse(html);
@@ -244,72 +253,138 @@ public class Dyrs extends Spider {
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
 
-        String vodName = "";
-        String vodPic = "";
-        String vodYear = "";
-        String vodArea = "";
-        String vodContent = "";
+        String vodName = "", vodPic = "", vodYear = "", vodArea = "",
+               vodContent = "", vodDirector = "", vodActor = "", vodLang = "", vodType = "";
 
-        // JSON-LD 解析
+        // JSON-LD 解析（与 Python 版对齐）
         Element ldJson = doc.selectFirst("script[type=application/ld+json]");
         if (ldJson != null) {
             try {
                 JsonObject jd = JsonParser.parseString(ldJson.html()).getAsJsonObject();
-                vodName = jd.has("name") ? jd.get("name").getAsString() : "";
-                vodPic = jd.has("image") ? fixPic(jd.get("image").getAsString()) : "";
+                vodName    = jd.has("name") ? jd.get("name").getAsString() : "";
+                vodPic     = jd.has("image") ? fixPic(jd.get("image").getAsString()) : "";
+                vodContent = jd.has("description") ? jd.get("description").getAsString()
+                        .replaceAll("<[^>]+>", "").trim() : "";
                 if (jd.has("releaseDate")) {
-                    String date = jd.get("releaseDate").getAsString();
-                    vodYear = date.length() >= 4 ? date.substring(0, 4) : "";
+                    Matcher m = Pattern.compile("(19|20)\\d{2}").matcher(jd.get("releaseDate").getAsString());
+                    if (m.find()) vodYear = m.group();
                 }
+                if (TextUtils.isEmpty(vodYear) && jd.has("year"))
+                    vodYear = jd.get("year").getAsString();
                 vodArea = jd.has("countryOfOrigin") ? jd.get("countryOfOrigin").getAsString() : "";
-                vodContent = jd.has("description") ? jd.get("description").getAsString() : "";
+                vodLang = jd.has("inLanguage") ? jd.get("inLanguage").getAsString() : "";
+                // 导演
+                if (jd.has("director")) {
+                    JsonElement d = jd.get("director");
+                    if (d.isJsonObject()) vodDirector = d.getAsJsonObject().get("name").getAsString();
+                    else if (d.isJsonArray() && d.getAsJsonArray().size() > 0)
+                        vodDirector = d.getAsJsonArray().get(0).getAsJsonObject().get("name").getAsString();
+                    else vodDirector = d.getAsString();
+                }
+                // 主演
+                if (jd.has("actor")) {
+                    JsonArray actors = jd.getAsJsonArray("actor");
+                    List<String> actorList = new ArrayList<>();
+                    for (JsonElement e : actors) {
+                        if (e.isJsonObject()) actorList.add(e.getAsJsonObject().get("name").getAsString());
+                        else actorList.add(e.getAsString());
+                    }
+                    vodActor = TextUtils.join(", ", actorList);
+                }
+                // 类型
+                if (jd.has("genre")) {
+                    JsonElement g = jd.get("genre");
+                    if (g.isJsonArray()) {
+                        List<String> genres = new ArrayList<>();
+                        for (JsonElement e : g.getAsJsonArray()) genres.add(e.getAsString());
+                        vodType = TextUtils.join(", ", genres);
+                    } else vodType = g.getAsString();
+                }
             } catch (Exception ignored) {}
         }
 
-        // HTML 补充
+        // HTML 降级（与 Python 版对齐）
         if (TextUtils.isEmpty(vodName)) {
-            Element titleEl = doc.selectFirst("h3[title]");
-            vodName = titleEl != null ? titleEl.attr("title") : "未知";
+            Element h3 = doc.selectFirst("h3[title]");
+            vodName = h3 != null ? h3.attr("title") : "未知";
         }
         if (TextUtils.isEmpty(vodPic)) {
             Element img = doc.selectFirst("img.lazy-image");
-            String pic = img != null ? (img.attr("data-src") != null ? img.attr("data-src") : img.attr("src")) : "";
-            vodPic = fixPic(pic);
+            if (img != null) vodPic = fixPic(img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src"));
         }
         if (TextUtils.isEmpty(vodContent)) {
             Element cont = doc.selectFirst("div.text-justify");
-            vodContent = cont != null ? cont.text().trim() : "";
+            if (cont != null) vodContent = cont.text().trim();
+        }
+        // 从页面信息块补充导演/主演/年份/地区/语言/类型
+        if (TextUtils.isEmpty(vodDirector) && TextUtils.isEmpty(vodActor)) {
+            Element infoDiv = doc.selectFirst("div.flex.flex-col.gap-y-2");
+            if (infoDiv != null) {
+                for (Element line : infoDiv.select("div.flex")) {
+                    String text = line.text().replace("\n", "").trim();
+                    if (text.contains("导演") && TextUtils.isEmpty(vodDirector))
+                        vodDirector = text.replace("导演：", "").replace("导演:", "").trim();
+                    else if (text.contains("主演") && TextUtils.isEmpty(vodActor))
+                        vodActor = text.replace("主演：", "").replace("主演:", "").trim();
+                    else if (text.contains("上映") && TextUtils.isEmpty(vodYear))
+                        vodYear = text.replace("上映：", "").replace("上映:", "").trim();
+                    else if (text.contains("地区") && TextUtils.isEmpty(vodArea))
+                        vodArea = text.replace("地区：", "").replace("地区:", "").trim();
+                    else if (text.contains("语言") && TextUtils.isEmpty(vodLang))
+                        vodLang = text.replace("语言：", "").replace("语言:", "").trim();
+                    else if (text.contains("类型") && TextUtils.isEmpty(vodType))
+                        vodType = text.replace("类型：", "").replace("类型:", "").trim();
+                }
+            }
         }
 
-        vod.setVodName(vodName);
+        vod.setVodName(TextUtils.isEmpty(vodName) ? "未知" : vodName);
         vod.setVodPic(vodPic);
         vod.setVodYear(vodYear);
         vod.setVodArea(vodArea);
         vod.setVodContent(vodContent);
+        vod.setVodDirector(vodDirector);
+        vod.setVodActor(vodActor);
 
-        // 播放线路解析
+        // ── 播放线路：多线程并发，用数组保序，对齐 Python 版 ex.map 的有序性 ──
         Elements tabs = doc.select("#originTabs a");
-        List<String> fromList = new ArrayList<>();
-        List<String> urlList = new ArrayList<>();
+        int size = tabs.size();
+        if (size == 0) return Result.get().vod(vod).string();
 
-        ExecutorService executor = Executors.newFixedThreadPool(Math.min(8, tabs.size()));
-        for (Element tab : tabs) {
+        // 用固定大小数组保证线路顺序与 tab 顺序一致
+        final String[] fromArr = new String[size];
+        final String[] urlArr  = new String[size];
+        CountDownLatch latch = new CountDownLatch(size);
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(size, 8));
+
+        for (int i = 0; i < size; i++) {
+            final int idx = i;
+            final Element tab = tabs.get(i);
             executor.execute(() -> {
                 try {
                     Map<String, String> line = parseLine(tab);
                     if (line != null && !TextUtils.isEmpty(line.get("url"))) {
-                        synchronized (fromList) {
-                            fromList.add(line.get("from"));
-                            urlList.add(line.get("url"));
-                        }
+                        fromArr[idx] = line.get("from");
+                        urlArr[idx]  = line.get("url");
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                } finally {
+                    latch.countDown();
+                }
             });
         }
+        latch.await();
         executor.shutdown();
-        try {
-            executor.awaitTermination(12, TimeUnit.SECONDS);
-        } catch (Exception ignored) {}
+
+        // 过滤掉空位，按顺序拼接
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList  = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            if (!TextUtils.isEmpty(fromArr[i]) && !TextUtils.isEmpty(urlArr[i])) {
+                fromList.add(fromArr[i]);
+                urlList.add(urlArr[i]);
+            }
+        }
 
         vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
         vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
@@ -322,63 +397,110 @@ public class Dyrs extends Spider {
             Element btn = tab.selectFirst("button");
             String fromName = btn != null ? btn.attr("data-origin") : tab.text().trim();
 
-            String lineUrl = host + tab.attr("href");
+            String lineUrl = tab.attr("href");
+            if (!lineUrl.startsWith("http")) lineUrl = host + lineUrl;
             String respHtml = OkHttp.string(lineUrl, headers);
 
-            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\('(.*?)'\\);", Pattern.DOTALL);
+            // 提取 JSON 数据
+            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\('(.*?)'\);", Pattern.DOTALL);
             Matcher matcher = pattern.matcher(respHtml);
             if (!matcher.find()) return null;
 
+            // 处理 unicode_escape 编码（对齐 Python 版两步解码）
             String raw = matcher.group(1).replace("\\/", "/");
+            // Java 中处理 \uXXXX 转义
+            raw = unescapeUnicode(raw);
+
             JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
 
             List<String> urls = new ArrayList<>();
             for (JsonElement e : epData) {
                 JsonObject ep = e.getAsJsonObject();
                 String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
-                String url = ep.has("url") ? ep.get("url").getAsString() : "";
+                String url   = ep.has("url")   ? ep.get("url").getAsString()   : "";
 
                 if (!url.startsWith("http")) {
-                    if (url.startsWith("//")) url = "https:" + url;
+                    if (url.startsWith("//"))     url = "https:" + url;
                     else if (url.startsWith("/")) url = host + url;
-                    else url = host + "/" + url;
+                    else                          url = host + "/" + url;
                 }
                 urls.add(title + "$" + url);
             }
-            return Map.of("from", fromName, "url", TextUtils.join("#", urls));
+
+            Map<String, String> result = new HashMap<>();
+            result.put("from", fromName);
+            result.put("url", TextUtils.join("#", urls));
+            return result;
         } catch (Exception e) {
             return null;
         }
     }
 
+    /** 处理 \\uXXXX 形式的 unicode 转义，对齐 Python 的 unicode_escape 解码 */
+    private String unescapeUnicode(String s) {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            if (i + 5 < s.length() && s.charAt(i) == '\\' && s.charAt(i + 1) == 'u') {
+                try {
+                    int code = Integer.parseInt(s.substring(i + 2, i + 6), 16);
+                    sb.append((char) code);
+                    i += 6;
+                    continue;
+                } catch (NumberFormatException ignored) {}
+            }
+            sb.append(s.charAt(i));
+            i++;
+        }
+        return sb.toString();
+    }
+
+    // ── 播放器 ───────────────────────────────────────────────────
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         return Result.get().url(id).parse(0).header(headers).string();
     }
 
+    // ── 搜索 ──────────────────────────────────────────────────────
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        ensureHost();
-        String searchUrl = host + "/s.html?name=" + URLEncoder.encode(key, "UTF-8");
-        String html = OkHttp.string(searchUrl, headers);
-        Document doc = Jsoup.parse(html);
+        return search(key);
+    }
 
-        List<Vod> list = new ArrayList<>();
-        Element item = doc.selectFirst("div#image-grid div.group.relative");
-        if (item != null) {
-            Element a = item.selectFirst("a[title]");
-            if (a != null) {
+    @Override
+    public String searchContent(String key, boolean quick, String pg) throws Exception {
+        return search(key);
+    }
+
+    private String search(String key) {
+        try {
+            String url = host + "/s.html?name=" + URLEncoder.encode(key, "UTF-8");
+            String html = OkHttp.string(url, headers);
+            Document doc = Jsoup.parse(html);
+
+            List<Vod> list = new ArrayList<>();
+            // 修复：原来只取第一条，现在取全部
+            Element grid = doc.selectFirst("div#image-grid");
+            if (grid == null) return Result.string(list);
+
+            for (Element item : grid.select("div.group.relative")) {
+                Element a = item.selectFirst("a[title]");
+                if (a == null) continue;
+                Element img = item.selectFirst("img");
+                String pic = img != null
+                        ? (img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src"))
+                        : "";
                 Vod vod = new Vod();
                 vod.setVodId(a.attr("href"));
                 vod.setVodName(a.attr("title"));
-                Element img = item.selectFirst("img");
-                String pic = img != null ? (img.attr("data-src") != null ? img.attr("data-src") : img.attr("src")) : "";
                 vod.setVodPic(fixPic(pic));
                 Element remark = item.selectFirst("div.top-2");
                 vod.setVodRemarks(remark != null ? remark.text().trim() : "");
                 list.add(vod);
             }
+            return Result.string(list);
+        } catch (Exception e) {
+            return Result.string(new ArrayList<>());
         }
-        return Result.string(list);
     }
 }
