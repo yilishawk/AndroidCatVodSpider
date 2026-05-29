@@ -206,116 +206,101 @@ public class Tvbyun extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-        String html = OkHttp.string(detailUrl, getHeaders());
-        Document doc = Jsoup.parse(html);
+    String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
+    String html = OkHttp.string(detailUrl, getHeaders());
+    Document doc = Jsoup.parse(html);
 
-        Vod vod = new Vod();
-        vod.setVodId(ids.get(0));
+    Vod vod = new Vod();
+    vod.setVodId(ids.get(0));
 
+    // 1. 定位详情核心区域（减少全屏扫描）
+    Element detailBox = doc.selectFirst(".myui-content__detail");
+    if (detailBox == null) detailBox = doc.selectFirst(".stui-content__detail");
+
+    if (detailBox != null) {
         // 标题
-        String vodName = "";
-        Element titleElem = doc.selectFirst("h1.title");
-        if (titleElem != null) vodName = titleElem.text().trim();
-        if (TextUtils.isEmpty(vodName)) {
-            titleElem = doc.selectFirst(".stui-content__detail .title");
-            if (titleElem != null) vodName = titleElem.text().trim();
-        }
-        vod.setVodName(TextUtils.isEmpty(vodName) ? "未知标题" : vodName);
+        Element titleElem = detailBox.selectFirst(".title");
+        vod.setVodName(titleElem != null ? titleElem.text().trim() : "未知标题");
 
-        // 图片
-        String vodPic = "";
-        Element thumbImg = doc.selectFirst(".myui-content__thumb img");
-        if (thumbImg == null) thumbImg = doc.selectFirst(".stui-content__thumb img");
-        if (thumbImg != null) {
-            vodPic = thumbImg.attr("data-original");
-            if (TextUtils.isEmpty(vodPic)) vodPic = thumbImg.attr("src");
-        }
-        vod.setVodPic(vodPic);
-
-        vod.setVodYear(getInfo(doc, "年份"));
-        vod.setVodArea(getInfo(doc, "地區"));
-        vod.setVodDirector(getInfo(doc, "導演"));
-        vod.setVodRemarks(getInfo(doc, "更新"));
-
-        Elements actors = doc.select("p.data:contains(主演) a");
-        if (actors.isEmpty()) actors = doc.select(".stui-content__detail p.data:contains(主演) a");
-        List<String> actorList = new ArrayList<>();
-        for (Element a : actors) actorList.add(a.text().trim());
-        vod.setVodActor(TextUtils.join(", ", actorList));
-
-        Element desc = doc.selectFirst(".col-pd.text-collapse.content .data");
-        if (desc == null) desc = doc.selectFirst(".stui-content__desc");
-        if (desc == null) desc = doc.selectFirst(".sketch.content");
-        vod.setVodContent(desc != null ? desc.text().trim() : "");
-
-        // ── 修复：只选播放列表区域，跳过推荐/简介等无关 panel ──────────────
-        // 用更精准的选择器，直接找含有播放列表的 tab 内容区
-        List<String> fromList = new ArrayList<>();
-        List<String> urlList  = new ArrayList<>();
-
-        // myui 结构：.myui-panel 下的 .tab-content > .tab-pane，每个 pane 是一条线路
-        Elements panes = doc.select("#playlist .myui-content__list, .tab-content .tab-pane ul.myui-content__list, .tab-content .tab-pane ul.stui-content__playlist");
-
-        if (!panes.isEmpty()) {
-            // 取对应线路名：.nav-tabs 或 .myui-tab__head 里的 li
-            Elements tabs = doc.select(".myui-tab__head li a, .stui-pannel__head .nav-tabs li a, ul.nav-tabs li a");
-
-            for (int i = 0; i < panes.size(); i++) {
-                Element ul = panes.get(i);
-                Elements links = ul.select("a");
-                if (links.isEmpty()) continue;
-
-                // 线路名：尽量从 tab 标题取，取不到就用序号
-                String fromName = (i < tabs.size()) ? tabs.get(i).text().trim() : ("線路" + (i + 1));
-                if (fromName.isEmpty()) fromName = "線路" + (i + 1);
-
-                List<String> episodeList = new ArrayList<>();
-                int max = Math.min(links.size(), 150); // 电视端限制集数
-                for (int j = 0; j < max; j++) {
-                    Element a = links.get(j);
-                    String epName = a.text().trim();
-                    String epUrl  = a.attr("href");
-                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
-                    episodeList.add(epName + "$" + epUrl);
+        // 一次性循环解析所有 p.data 标签，彻底抛弃低效的 :contains() 和 getInfo 循环
+        Elements datas = detailBox.select("p.data");
+        for (Element p : datas) {
+            String text = p.text().trim();
+            if (text.startsWith("分类：")) {
+                // 如果需要分类可以解析
+            } else if (text.contains("地区：")) {
+                // 提取地区：由于有隐藏标签，直接拿对应 a 标签文本最快
+                Element areaA = p.selectFirst("a[href*=/area/]");
+                vod.setVodArea(areaA != null ? areaA.text().trim() : "");
+            } else if (text.contains("年份：")) {
+                Element yearA = p.selectFirst("a[href*=/year/]");
+                vod.setVodYear(yearA != null ? yearA.text().trim() : "");
+            } else if (text.startsWith("更新：")) {
+                vod.setVodRemarks(text.replace("更新：", "").trim());
+            } else if (text.startsWith("主演：")) {
+                List<String> actorList = new ArrayList<>();
+                for (Element a : p.select("a")) {
+                    String actorName = a.text().trim();
+                    if (!actorName.isEmpty()) actorList.add(actorName);
                 }
-
-                fromList.add(fromName);
-                urlList.add(TextUtils.join("#", episodeList));
+                vod.setVodActor(TextUtils.join(", ", actorList));
+            } else if (text.startsWith("导演：")) {
+                vod.setVodDirector(text.replace("导演：", "").trim());
             }
         }
-
-        // 降级回原逻辑（以防新选择器在该站失效）
-        if (fromList.isEmpty()) {
-            Elements panels = doc.select(".myui-panel-bg .myui-panel__head h3.title, .stui-pannel .stui-pannel__head h3.title");
-            for (Element head : panels) {
-                String fromName = head.text().trim();
-                if (fromName.contains("劇情") || fromName.contains("猜你喜歡") || fromName.isEmpty()) continue;
-
-                Element ul = head.closest(".myui-panel-bg, .stui-pannel");
-                if (ul == null) continue;
-                Elements links = ul.select("ul.myui-content__list a, ul.stui-content__playlist a");
-                if (links.isEmpty()) continue;
-
-                List<String> episodeList = new ArrayList<>();
-                int max = Math.min(links.size(), 150);
-                for (int j = 0; j < max; j++) {
-                    Element a = links.get(j);
-                    String epName = a.text().trim();
-                    String epUrl  = a.attr("href");
-                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
-                    episodeList.add(epName + "$" + epUrl);
-                }
-                fromList.add(fromName);
-                urlList.add(TextUtils.join("#", episodeList));
-            }
-        }
-
-        vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
-        vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
-
-        return Result.get().vod(vod).string();
+    } else {
+        vod.setVodName("未知标题");
     }
+
+    // 2. 图片提取
+    Element thumbImg = doc.selectFirst(".myui-content__thumb img, .stui-content__thumb img");
+    if (thumbImg != null) {
+        String vodPic = thumbImg.hasAttr("data-original") ? thumbImg.attr("data-original") : thumbImg.attr("src");
+        vod.setVodPic(vodPic);
+    }
+
+    // 3. 简介提取
+    Element desc = doc.selectFirst("#desc .col-pd .data p"); // 精准定位隐藏的高清完整简介
+    if (desc == null) desc = doc.selectFirst("#desc .sketch.content");
+    vod.setVodContent(desc != null ? desc.text().trim() : "");
+
+    // 4. 播放线路与列表解析（基于你提供的源码极致优化）
+    List<String> fromList = new ArrayList<>();
+    List<String> urlList  = new ArrayList<>();
+
+    // 根据源码，每一个播放列表都是一个单独的 .myui-panel，里面包含 h3.title 和 ul.myui-content__list
+    Elements playlistPanels = doc.select(".myui-panel");
+    for (Element panel : playlistPanels) {
+        Element headTitle = panel.selectFirst(".myui-panel__head h3.title");
+        if (headTitle == null) continue;
+
+        String fromName = headTitle.text().trim();
+        // 过滤非播放列表区域
+        if (fromName.contains("剧情") || fromName.contains("猜你") || fromName.isEmpty()) continue;
+
+        Elements links = panel.select("ul.myui-content__list a");
+        if (links.isEmpty()) continue;
+
+        List<String> episodeList = new ArrayList<>();
+        int max = Math.min(links.size(), 150); // 电视端限制集数防止内存溢出
+        for (int j = 0; j < max; j++) {
+            Element a = links.get(j);
+            String epName = a.text().trim();
+            String epUrl  = a.attr("href");
+            if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+            episodeList.add(epName + "$" + epUrl);
+        }
+
+        fromList.add(fromName);
+        urlList.add(TextUtils.join("#", episodeList));
+    }
+
+    vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
+    vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
+
+    return Result.get().vod(vod).string();
+}
+
 
     private String getInfo(Document doc, String key) {
         Element el = doc.selectFirst("p.data:contains(" + key + ")");
