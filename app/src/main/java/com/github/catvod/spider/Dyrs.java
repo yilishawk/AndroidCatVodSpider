@@ -39,8 +39,9 @@ public class Dyrs extends Spider {
     private final AtomicBoolean backupFetched = new AtomicBoolean(false);
 
     public Dyrs() {
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36");
         headers.put("Referer", host);
+        headers.put("Cookie", "ip_id=6a190f5dbbc12883f158ae2b45500338; attack_key=41002");
     }
 
     // ── 域名管理：只在 init 里调一次 ─────────────────────────────────
@@ -402,7 +403,7 @@ public class Dyrs extends Spider {
             String respHtml = OkHttp.string(lineUrl, headers);
 
             // 提取 JSON 数据
-            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON.parse\\('(.*?)'\\);", Pattern.DOTALL);
+            Pattern pattern = Pattern.compile("dyrs_vod_list\s*=\s*JSON\.parse\('(.*?)'\\);", Pattern.DOTALL);
             Matcher matcher = pattern.matcher(respHtml);
             if (!matcher.find()) return null;
 
