@@ -317,7 +317,7 @@ public class Tvbyun extends Spider {
     try {
         String html = OkHttp.string(playUrl, currentHeaders);
 
-        // 提取播放器配置 JSON 
+        // 提取播放器配置 JSON
         String marker = "var player_data=";
         int start = html.indexOf(marker) + marker.length();
         if (start < marker.length()) {
@@ -330,7 +330,11 @@ public class Tvbyun extends Spider {
         String rawUrl = playerData.get("url").getAsString();
         String from   = playerData.get("from").getAsString();
 
-        // 1. 如果有对应的解析接口，必须走解析去广告
+        // 准备一个干净的请求头，只给直链播放使用（不带 Referer）
+        Map<String, String> pureHeaders = new HashMap<>();
+        pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
+
+        // 1. 如果有对应的解析接口，走解析去广告
         if (jiexiUrlMap.containsKey(from)) {
             try {
                 String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
@@ -340,22 +344,21 @@ public class Tvbyun extends Spider {
                     if (resJson.has("code") && resJson.get("code").getAsInt() == 200) {
                         String realUrl = resJson.get("url").getAsString();
                         if (realUrl != null && !realUrl.isEmpty() && realUrl.startsWith("http")) {
-                            Map<String, String> pureHeaders = new HashMap<>();
-                            pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
-                            // 解析成功，直接推送解析后的直链 (parse(0))
+                            // 解析成功，推送直链，使用不含 Referer 的 pureHeaders
                             return Result.get().url(realUrl).parse(0).header(pureHeaders).string();
                         }
                     }
                 }
             } catch (Exception ignored) {}
             
-            // 如果该线路有解析接口但因网络等原因解析失败了，降级交给壳子嗅探播放
+            // 解析接口请求失败，降级给壳子嗅探
             return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
         }
 
-        // 2. 如果没有对应的解析接口，直接把提取出来的原始直链推给壳子播放
+        // 2. 如果没有对应的解析接口，直接把原始直链推给壳子
         if (rawUrl.startsWith("http")) {
-            return Result.get().url(rawUrl).parse(0).header(currentHeaders).string();
+            // 直接推送原始直链，同样使用不含 Referer 的 pureHeaders
+            return Result.get().url(rawUrl).parse(0).header(pureHeaders).string();
         }
 
         // 兜底逻辑
@@ -365,6 +368,7 @@ public class Tvbyun extends Spider {
         return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
     }
 }
+
 
 
     @Override
