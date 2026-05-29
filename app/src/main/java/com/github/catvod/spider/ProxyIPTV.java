@@ -1,7 +1,7 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import com.github.catvod.bean.Class; // 确保导入正确的包
+import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -28,11 +28,13 @@ public class ProxyIPTV extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        // 注意：根据你上传的 Class.java，构造函数为 (String typeId, String typeName)
+        // 根据 Class.java: 构造函数为 (String typeId, String typeName)
         classes.add(new Class("cctv", "央视"));
         classes.add(new Class("sat", "卫视"));
         classes.add(new Class("other", "其他"));
-        return Result.string(classes, null); // 使用 Result 提供的静态方法
+        
+        // 显式使用实例方法链，避免静态方法歧义
+        return Result.get().classes(classes).string();
     }
 
     @Override
@@ -47,11 +49,12 @@ public class ProxyIPTV extends Spider {
         for (String line : channels) {
             String[] split = line.split("\\$");
             if (split.length < 2) continue;
-            // 使用 Vod 的构造函数 (String id, String name, String pic, String remarks)
+            // 根据 Vod.java: 构造函数 (String id, String name, String pic, String remarks)
             list.add(new Vod(line, split[0], "https://epg.112114.xyz/logo/" + split[0] + ".png", "直播源"));
         }
 
-        return Result.string(list); //
+        // 显式使用实例方法链
+        return Result.get().vod(list).string();
     }
 
     @Override
@@ -65,12 +68,12 @@ public class ProxyIPTV extends Spider {
         vod.setVodPlayFrom("在线直播");
         vod.setVodPlayUrl(split[0] + "$" + split[1]);
 
-        return Result.string(vod); //
+        return Result.get().vod(vod).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 根据 Result.java，使用 Result.get().url().parse(0) 返回不需解析的直链
+        // 直播源 parse(0) 代表直接播放
         return Result.get().url(id).parse(0).string();
     }
 
@@ -82,7 +85,7 @@ public class ProxyIPTV extends Spider {
         String[] sources = {"iptvhotelx.php", "iptvproxy.php"};
         for (String php : sources) {
             try {
-                // 使用你提供的 OkHttp.string 方法
+                // 使用 OkHttp.java 中的静态方法
                 String html = OkHttp.string(HOST + "/" + php);
                 Document doc = Jsoup.parse(html);
                 int count = 0;
