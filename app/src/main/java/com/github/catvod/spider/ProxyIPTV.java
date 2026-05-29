@@ -1,416 +1,160 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
-
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-
+import org.jsoup.select.Elements;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ProxyIPTV extends Spider {
 
-    // Tonkiang
     private static final String HOST = "https://tonkiang.us";
-
-    // 每个列表页最多抓几个IP
-    private static final int MAX_IP_PER_PAGE = 2;
-
-    // 缓存
-    private static boolean hasCrawled = false;
+    private static final int MAX_IP_PER_PAGE = 2; // 每个来源抓2个IP
     private static String cachedM3u = "";
+    private static final AtomicBoolean isCrawling = new AtomicBoolean(false);
 
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
-
-        // 首次同步抓取
-        if (!hasCrawled) {
-            crawlIPTV();
-        }
+        // 不再在init里执行耗时操作
     }
 
-    // =====================================================
-    // 本地代理入口
-    // 使用:
-    // proxy://do=iptv
-    // =====================================================
+    /**
+     * 本地代理访问入口
+     * 访问地址示例: proxy://do=proxy&site=ProxyIPTV&doType=iptv
+     */
     @Override
     public Object[] proxyLocal(Map<String, String> params) {
-
         try {
-
-            String doType = params.get("do");
-
-            if ("iptv".equals(doType)) {
-
-                // 缓存为空重新抓
-                if (cachedM3u.isEmpty()) {
-                    crawlIPTV();
+            String type = params.get("doType");
+            if ("iptv".equals(type)) {
+                // 如果没有缓存且没在抓取，则发起抓取
+                if (cachedM3u.isEmpty() && isCrawling.compareAndSet(false, true)) {
+                    try {
+                        crawlIPTV();
+                    } finally {
+                        isCrawling.set(false);
+                    }
                 }
 
-                String result = cachedM3u;
-
-                if (result == null || result.isEmpty()) {
-                    result = "#EXTM3U\n# 暂无数据";
-                }
-
-                return new Object[]{
-                        200,
-                        "application/vnd.apple.mpegurl",
-                        result
-                };
+                String result = cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新" : cachedM3u;
+                return new Object[]{200, "application/vnd.apple.mpegurl", result};
             }
-
         } catch (Exception e) {
             log("proxyLocal error: " + e.getMessage());
         }
-
         return null;
     }
 
-    // =====================================================
-    // 开始抓取
-    // =====================================================
-    private synchronized void crawlIPTV() {
-
-        if (hasCrawled && !cachedM3u.isEmpty()) {
-            return;
-        }
-
-        hasCrawled = true;
-
+    private void crawlIPTV() {
         log("开始抓取 IPTV...");
-
         try {
-
-            String[] sources = {
-                    "iptvhotelx.php",
-                    "iptvproxy.php"
-            };
-
+            String[] sources = {"iptvhotelx.php", "iptvproxy.php"};
             List<String> lines = new ArrayList<>();
-
             for (String php : sources) {
                 crawlOneSource(php, lines);
             }
-
             if (!lines.isEmpty()) {
-
                 cachedM3u = buildM3u(lines);
-
-                log("抓取完成: " + lines.size() + " 行");
-
+                log("抓取完成，共 " + lines.size() + " 行");
             } else {
-
-                cachedM3u = "#EXTM3U\n# 无可用数据";
-
-                log("未抓到任何频道");
+                cachedM3u = "#EXTM3U\n# 未抓取到有效源";
             }
-
         } catch (Exception e) {
-
-            cachedM3u = "#EXTM3U\n# 抓取失败";
-
-            log("crawlIPTV error: " + e.getMessage());
+            cachedM3u = "#EXTM3U\n# 抓取过程出错";
         }
     }
 
-    // =====================================================
-    // 抓单个列表
-    // =====================================================
     private void crawlOneSource(String listPhp, List<String> allLines) {
-
         try {
-
             String url = HOST + "/" + listPhp;
-
-            log("抓列表: " + url);
-
             String html = fetch(url, HOST + "/");
+            if (html.isEmpty()) return;
 
-            if (html == null || html.isEmpty()) {
-                log("列表为空");
-                return;
-            }
+            Document doc = Jsoup.parse(html);
+            Elements results = doc.select("div.result");
+            int count = 0;
 
-            List<Map<String, String>> ips = parseIpList(html);
+            for (Element div : results) {
+                if (count >= MAX_IP_PER_PAGE) break;
+                if (div.text().contains("暂时失效")) continue;
 
-            if (ips.isEmpty()) {
-                log("未解析到IP");
-                return;
-            }
+                Element a = div.selectFirst("a[href*=channellist.html?ip=]");
+                if (a == null) continue;
 
-            int max = Math.min(MAX_IP_PER_PAGE, ips.size());
+                Map<String, String> query = parseQuery(a.attr("href"));
+                String ip = query.get("ip");
+                String tk = query.get("tk");
+                String region = div.selectFirst("i") != null ? div.selectFirst("i").text().trim() : "未知";
 
-            for (int i = 0; i < max; i++) {
+                // 详情页请求
+                String detailUrl = HOST + "/getall26.php?ip=" + ip + "&tk=" + tk + "&p=1";
+                String detailHtml = fetch(detailUrl, HOST + "/channellist.html?ip=" + ip);
 
-                Map<String, String> ipInfo = ips.get(i);
-
-                String ip = ipInfo.get("ip");
-                String tk = ipInfo.get("tk");
-                String p = ipInfo.get("p");
-
-                String detailUrl =
-                        HOST + "/getall26.php?ip=" + ip +
-                                "&tk=" + tk +
-                                "&p=" + p;
-
-                log("抓频道: " + detailUrl);
-
-                String detailHtml = fetch(
-                        detailUrl,
-                        HOST + "/channellist.html?ip=" + ip
-                );
-
-                if (detailHtml == null || detailHtml.isEmpty()) {
-                    log("频道页为空");
-                    continue;
-                }
-
-                List<Map<String, String>> channels =
-                        parseChannels(detailHtml);
-
-                if (!channels.isEmpty()) {
-
-                    allLines.add(
-                            ipInfo.get("region_isp") + ",#genre#"
-                    );
-
-                    for (Map<String, String> ch : channels) {
-
-                        String name = ch.get("name");
-                        String playUrl = ch.get("url");
-
-                        allLines.add(name + "," + playUrl);
+                if (!detailHtml.isEmpty()) {
+                    List<String> chList = parseDetail(detailHtml);
+                    if (!chList.isEmpty()) {
+                        allLines.add(region + ",#genre#");
+                        allLines.addAll(chList);
+                        count++;
                     }
-
-                    log("频道数: " + channels.size());
-
-                } else {
-
-                    log("未解析到频道");
                 }
             }
-
-        } catch (Exception e) {
-
-            log("crawlOneSource error: " + e.getMessage());
-        }
+        } catch (Exception ignored) {}
     }
 
-    // =====================================================
-    // HTTP
-    // =====================================================
+    private List<String> parseDetail(String html) {
+        List<String> list = new ArrayList<>();
+        Document doc = Jsoup.parse(html);
+        for (Element div : doc.select("div.result")) {
+            String name = div.selectFirst("div.tip") != null ? div.selectFirst("div.tip").text().trim() : "未知频道";
+            Element m3u8Td = div.selectFirst("div.m3u8 td");
+            if (m3u8Td != null && m3u8Td.text().startsWith("http")) {
+                list.add(name + "," + m3u8Td.text().trim());
+            }
+        }
+        return list;
+    }
+
     private String fetch(String url, String referer) {
-
         try {
-
             Map<String, String> headers = new HashMap<>();
-
-            headers.put(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
-            );
-
+            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
             headers.put("Referer", referer);
-
-            headers.put(
-                    "Accept",
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-            );
-
-            headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-
             OkResult result = OkHttp.get(url, null, headers);
-
-            if (result == null) {
-                return "";
-            }
-
-            String body = result.getBody();
-
-            if (body == null) {
-                return "";
-            }
-
-            return body;
-
+            return result != null ? result.getBody() : "";
         } catch (Exception e) {
-
-            log("fetch error: " + e.getMessage());
-
             return "";
         }
     }
 
-    // =====================================================
-    // 解析IP列表
-    // =====================================================
-    private List<Map<String, String>> parseIpList(String html) {
-
-        List<Map<String, String>> list = new ArrayList<>();
-
-        try {
-
-            Document doc = Jsoup.parse(html);
-
-            for (Element div : doc.select("div.result")) {
-
-                if (div.text().contains("暂时失效")) {
-                    continue;
-                }
-
-                Element a =
-                        div.selectFirst("a[href*=channellist.html?ip=]");
-
-                if (a == null) {
-                    continue;
-                }
-
-                String href = a.attr("href");
-
-                Map<String, String> query = parseQuery(href);
-
-                String ip = query.get("ip");
-                String tk = query.get("tk");
-
-                if (ip == null || tk == null) {
-                    continue;
-                }
-
-                String region = "未知地区";
-
-                Element i = div.selectFirst("i");
-
-                if (i != null) {
-                    region = i.text().trim();
-                }
-
-                Map<String, String> item = new HashMap<>();
-
-                item.put("ip", ip);
-                item.put("tk", tk);
-                item.put("p", query.getOrDefault("p", "1"));
-                item.put("region_isp", region);
-
-                list.add(item);
-            }
-
-        } catch (Exception e) {
-
-            log("parseIpList error: " + e.getMessage());
-        }
-
-        return list;
-    }
-
-    // =====================================================
-    // 解析频道
-    // =====================================================
-    private List<Map<String, String>> parseChannels(String html) {
-
-        List<Map<String, String>> channels = new ArrayList<>();
-
-        try {
-
-            Document doc = Jsoup.parse(html);
-
-            for (Element div : doc.select("div.result")) {
-
-                String name = "未知频道";
-
-                Element tip = div.selectFirst("div.tip");
-
-                if (tip != null) {
-                    name = tip.text().trim();
-                }
-
-                for (Element td : div.select("div.m3u8 td")) {
-
-                    String url = td.text().trim();
-
-                    if (url.startsWith("http")) {
-
-                        Map<String, String> ch = new HashMap<>();
-
-                        ch.put("name", name);
-                        ch.put("url", url);
-
-                        channels.add(ch);
-
-                        break;
-                    }
-                }
-            }
-
-        } catch (Exception e) {
-
-            log("parseChannels error: " + e.getMessage());
-        }
-
-        return channels;
-    }
-
-    // =====================================================
-    // Query解析
-    // =====================================================
     private Map<String, String> parseQuery(String url) {
-
         Map<String, String> map = new HashMap<>();
-
-        try {
-
-            String query = "";
-
-            if (url.contains("?")) {
-                query = url.substring(url.indexOf("?") + 1);
-            }
-
-            String[] arr = query.split("&");
-
+        if (url.contains("?")) {
+            String[] arr = url.substring(url.indexOf("?") + 1).split("&");
             for (String s : arr) {
-
                 String[] kv = s.split("=", 2);
-
-                if (kv.length == 2) {
-                    map.put(kv[0], kv[1]);
-                }
+                if (kv.length == 2) map.put(kv[0], kv[1]);
             }
-
-        } catch (Exception ignored) {
         }
-
         return map;
     }
 
-    // =====================================================
-    // M3U生成
-    // =====================================================
     private String buildM3u(List<String> lines) {
-
-        StringBuilder sb = new StringBuilder();
-
-        sb.append("#EXTM3U\n");
-
-        for (String line : lines) {
-            sb.append(line).append("\n");
-        }
-
+        StringBuilder sb = new StringBuilder("#EXTM3U\n");
+        for (String line : lines) sb.append(line).append("\n");
         return sb.toString();
     }
 
-    // =====================================================
-    // LOG
-    // =====================================================
     private void log(String msg) {
-        Proxy.log("[ProxyIPTV] " + msg);
+        // 这里的Proxy.log需要根据你壳子的实际Log类修改
     }
 }
