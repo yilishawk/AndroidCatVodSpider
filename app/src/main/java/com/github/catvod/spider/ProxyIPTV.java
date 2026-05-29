@@ -33,26 +33,31 @@ public class ProxyIPTV extends Spider {
      */
     @Override
     public Object[] proxyLocal(Map<String, String> params) {
-        try {
-            String type = params.get("doType");
-            if ("iptv".equals(type)) {
-                // 如果没有缓存且没在抓取，则发起抓取
-                if (cachedM3u.isEmpty() && isCrawling.compareAndSet(false, true)) {
-                    try {
-                        crawlIPTV();
-                    } finally {
-                        isCrawling.set(false);
-                    }
+    try {
+        String type = params.get("doType");
+        if ("iptv".equals(type)) {
+            // 1. 同步抓取（FongMi建议在代理请求时完成，以保证返回实时性）
+            synchronized (ProxyIPTV.class) {
+                if (cachedM3u.isEmpty()) {
+                    crawlIPTV();
                 }
-
-                String result = cachedM3u.isEmpty() ? "#EXTM3U\n# 正在抓取中，请稍后刷新" : cachedM3u;
-                return new Object[]{200, "application/vnd.apple.mpegurl", result};
             }
-        } catch (Exception e) {
-            log("proxyLocal error: " + e.getMessage());
+
+            // 2. 准备返回内容
+            String result = cachedM3u.isEmpty() ? "#EXTM3U\n# 抓取失败" : cachedM3u;
+
+            // 3. 【关键】按照文档返回 200 状态码和内容字符串
+            // 数组长度必须为 2
+            return new Object[]{ 200, result };
         }
-        return null;
+    } catch (Exception e) {
+        log("proxyLocal error: " + e.getMessage());
     }
+
+    // 默认返回 404
+    return new Object[]{ 404, "Not Found" };
+}
+
 
     private void crawlIPTV() {
         log("开始抓取 IPTV...");
