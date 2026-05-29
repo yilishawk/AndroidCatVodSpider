@@ -311,48 +311,61 @@ public class Tvbyun extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : host + id;
-        HashMap<String, String> currentHeaders = getHeaders();
+    String playUrl = id.startsWith("http") ? id : host + id;
+    HashMap<String, String> currentHeaders = getHeaders();
 
-        try {
-            String html = OkHttp.string(playUrl, currentHeaders);
+    try {
+        String html = OkHttp.string(playUrl, currentHeaders);
 
-            String marker = "var player_data=";
-            int start = html.indexOf(marker) + marker.length();
-            if (start < marker.length()) {
-                return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
-            }
-
-            int end = html.indexOf("</script>", start);
-            String jsonStr = html.substring(start, end).trim();
-            JsonObject playerData = JsonParser.parseString(jsonStr).getAsJsonObject();
-            String rawUrl = playerData.get("url").getAsString();
-            String from   = playerData.get("from").getAsString();
-
-            if (jiexiUrlMap.containsKey(from)) {
-                try {
-                    String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
-                    String apiResponse = OkHttp.string(fullApiUrl, currentHeaders);
-                    if (apiResponse != null && !apiResponse.trim().isEmpty()) {
-                        JsonObject resJson = JsonParser.parseString(apiResponse).getAsJsonObject();
-                        if (resJson.has("code") && resJson.get("code").getAsInt() == 200) {
-                            String realUrl = resJson.get("url").getAsString();
-                            if (realUrl != null && !realUrl.isEmpty() && realUrl.startsWith("http")) {
-                                Map<String, String> pureHeaders = new HashMap<>();
-                                pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
-                                return Result.get().url(realUrl).parse(0).header(pureHeaders).string();
-                            }
-                        }
-                    }
-                } catch (Exception ignored) {}
-            }
-
-            return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
-
-        } catch (Exception e) {
+        // 提取播放器配置 JSON 
+        String marker = "var player_data=";
+        int start = html.indexOf(marker) + marker.length();
+        if (start < marker.length()) {
             return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
         }
+
+        int end = html.indexOf("</script>", start);
+        String jsonStr = html.substring(start, end).trim();
+        JsonObject playerData = JsonParser.parseString(jsonStr).getAsJsonObject();
+        String rawUrl = playerData.get("url").getAsString();
+        String from   = playerData.get("from").getAsString();
+
+        // 1. 如果有对应的解析接口，必须走解析去广告
+        if (jiexiUrlMap.containsKey(from)) {
+            try {
+                String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
+                String apiResponse = OkHttp.string(fullApiUrl, currentHeaders);
+                if (apiResponse != null && !apiResponse.trim().isEmpty()) {
+                    JsonObject resJson = JsonParser.parseString(apiResponse).getAsJsonObject();
+                    if (resJson.has("code") && resJson.get("code").getAsInt() == 200) {
+                        String realUrl = resJson.get("url").getAsString();
+                        if (realUrl != null && !realUrl.isEmpty() && realUrl.startsWith("http")) {
+                            Map<String, String> pureHeaders = new HashMap<>();
+                            pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
+                            // 解析成功，直接推送解析后的直链 (parse(0))
+                            return Result.get().url(realUrl).parse(0).header(pureHeaders).string();
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+            
+            // 如果该线路有解析接口但因网络等原因解析失败了，降级交给壳子嗅探播放
+            return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+        }
+
+        // 2. 如果没有对应的解析接口，直接把提取出来的原始直链推给壳子播放
+        if (rawUrl.startsWith("http")) {
+            return Result.get().url(rawUrl).parse(0).header(currentHeaders).string();
+        }
+
+        // 兜底逻辑
+        return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+
+    } catch (Exception e) {
+        return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
     }
+}
+
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
