@@ -395,7 +395,6 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab) {
     try {
-        // 1. 获取线路名称（从 <a> 内的 <button data-origin> 取）
         Element btn = tab.selectFirst("button");
         String fromName = "";
         if (btn != null) {
@@ -406,33 +405,37 @@ public class Dyrs extends Spider {
         if (TextUtils.isEmpty(fromName)) fromName = tab.text().trim();
         if (TextUtils.isEmpty(fromName)) fromName = "未知线路";
 
-        // 2. 获取线路页面 URL
         String lineUrl = tab.attr("href");
         if (TextUtils.isEmpty(lineUrl)) lineUrl = tab.attr("data-href");
-        if (TextUtils.isEmpty(lineUrl)) return null;
-
+        if (TextUtils.isEmpty(lineUrl)) {
+            android.util.Log.e("Dyrs", "[" + fromName + "] lineUrl 为空，跳过");
+            return null;
+        }
         if (!lineUrl.startsWith("http")) {
             lineUrl = host + (lineUrl.startsWith("/") ? lineUrl : "/" + lineUrl);
         }
 
-        // 3. 请求线路页面
+        android.util.Log.d("Dyrs", "[" + fromName + "] 请求: " + lineUrl);
         String respHtml = OkHttp.string(lineUrl, headers);
+        android.util.Log.d("Dyrs", "[" + fromName + "] HTML长度: " + (respHtml == null ? "null" : respHtml.length()));
 
-        // 4. 提取 JSON 字符串（保持原始转义，交给 JsonParser 处理）
         String jsonStr = extractJsonStr(respHtml);
+        android.util.Log.d("Dyrs", "[" + fromName + "] jsonStr: " + (jsonStr == null ? "null" : jsonStr.substring(0, Math.min(80, jsonStr.length()))));
+
         if (TextUtils.isEmpty(jsonStr)) return null;
+
         String raw = jsonStr.replace("\\/", "/");
+        android.util.Log.d("Dyrs", "[" + fromName + "] raw前80: " + raw.substring(0, Math.min(80, raw.length())));
 
         JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
+        android.util.Log.d("Dyrs", "[" + fromName + "] 集数: " + epData.size());
 
-        // 5. 组装播放列表
         List<String> urls = new ArrayList<>();
         for (JsonElement e : epData) {
             JsonObject ep = e.getAsJsonObject();
             String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
             String url   = ep.has("url")   ? ep.get("url").getAsString()   : "";
             if (TextUtils.isEmpty(url)) continue;
-
             if (!url.startsWith("http")) {
                 if (url.startsWith("//"))     url = "https:" + url;
                 else if (url.startsWith("/")) url = host + url;
@@ -449,6 +452,7 @@ public class Dyrs extends Spider {
         return result;
 
     } catch (Exception e) {
+        android.util.Log.e("Dyrs", "parseLine 异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
         return null;
     }
 }
