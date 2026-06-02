@@ -396,50 +396,47 @@ public class Dyrs extends Spider {
     private Map<String, String> parseLine(Element tab) {
     try {
         Element btn = tab.selectFirst("button");
-        String fromName = "";
-        if (btn != null) {
-            fromName = btn.attr("data-origin");
-            if (TextUtils.isEmpty(fromName)) fromName = btn.text().trim();
-        }
-        if (TextUtils.isEmpty(fromName)) fromName = tab.attr("data-origin");
-        if (TextUtils.isEmpty(fromName)) fromName = tab.text().trim();
-        if (TextUtils.isEmpty(fromName)) fromName = "未知线路";
-
+        String fromName = btn != null ? btn.attr("data-origin") : tab.text().trim();
         String lineUrl = tab.attr("href");
-        if (TextUtils.isEmpty(lineUrl)) lineUrl = tab.attr("data-href");
-        if (TextUtils.isEmpty(lineUrl)) {
-            android.util.Log.e("Dyrs", "[" + fromName + "] lineUrl 为空，跳过");
-            return null;
-        }
-        if (!lineUrl.startsWith("http")) {
-            lineUrl = host + (lineUrl.startsWith("/") ? lineUrl : "/" + lineUrl);
-        }
+        if (!lineUrl.startsWith("http")) lineUrl = host + lineUrl;
 
-        android.util.Log.d("Dyrs", "[" + fromName + "] 请求: " + lineUrl);
-        String respHtml = OkHttp.string(lineUrl, headers);
-        android.util.Log.d("Dyrs", "[" + fromName + "] HTML长度: " + (respHtml == null ? "null" : respHtml.length()));
+        // 每次请求带上 Referer，防止部分线路防盗链
+        HashMap<String, String> lineHeaders = new HashMap<>(headers);
+        lineHeaders.put("Referer", lineUrl);
+        String respHtml = OkHttp.string(lineUrl, lineHeaders);
 
-        String jsonStr = extractJsonStr(respHtml);
-        android.util.Log.d("Dyrs", "[" + fromName + "] jsonStr: " + (jsonStr == null ? "null" : jsonStr.substring(0, Math.min(80, jsonStr.length()))));
+        // 1. 增强正则：匹配包含 Unicode 转义内容的 JSON 字符串
+        // 兼容单引号和双引号，同时支持 dyrs_vod_list 或 vod_list
+        Pattern pattern = Pattern.compile("(?:dyrs_vod_list|vod_list)\\s*=\\s*JSON.parse\\(['\"](.*?)['\"]\\);", Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(respHtml);
+        
+        if (!matcher.find()) return null;
 
-        if (TextUtils.isEmpty(jsonStr)) return null;
+        String raw = matcher.group(1);
+        
+        // 2. 核心修复：必须先还原 Unicode (处理 \u0022 -> ")
+        raw = unescapeUnicode(raw);
+        
+        // 3. 处理普通转义 (处理 \/ -> /)
+        raw = raw.replace("\\/", "/");
 
-        String raw = jsonStr.replace("\\/", "/");
-        android.util.Log.d("Dyrs", "[" + fromName + "] raw前80: " + raw.substring(0, Math.min(80, raw.length())));
-
+        // 4. 解析 JSON 数组
         JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
-        android.util.Log.d("Dyrs", "[" + fromName + "] 集数: " + epData.size());
-
         List<String> urls = new ArrayList<>();
+        
         for (JsonElement e : epData) {
             JsonObject ep = e.getAsJsonObject();
+            // 兼容性取值：优先取 title，如果没有尝试 name
             String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
-            String url   = ep.has("url")   ? ep.get("url").getAsString()   : "";
-            if (TextUtils.isEmpty(url)) continue;
+            String url = ep.has("url") ? ep.get("url").getAsString() : "";
+            
+            if (url.isEmpty()) continue;
+            
+            // 修复相对路径
             if (!url.startsWith("http")) {
-                if (url.startsWith("//"))     url = "https:" + url;
+                if (url.startsWith("//")) url = "https:" + url;
                 else if (url.startsWith("/")) url = host + url;
-                else                          url = host + "/" + url;
+                else url = host + "/" + url;
             }
             urls.add(title + "$" + url);
         }
@@ -450,23 +447,30 @@ public class Dyrs extends Spider {
         result.put("from", fromName);
         result.put("url", TextUtils.join("#", urls));
         return result;
-
     } catch (Exception e) {
-        android.util.Log.e("Dyrs", "parseLine 异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
-        return null;
+        return null; // 这里可以改为 e.printStackTrace() 方便在 Pydroid 3 或 Logcat 中查看具体报错
     }
 }
 
-    private String extractJsonStr(String html) {
-    if (TextUtils.isEmpty(html)) return null;
-    Pattern p = Pattern.compile(
-        "dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*\\)",
-        Pattern.DOTALL
-    );
-    Matcher m = p.matcher(html);
-    if (m.find()) return m.group(1);
-    return null;
-}
+    /** 处理 \\uXXXX 形式的 unicode 转义，对齐 Python 的 unicode_escape 解码 */
+    private String unescapeUnicode(String s) {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            if (i + 5 < s.length() && s.charAt(i) == '\\' && s.charAt(i + 1) == 'u') {
+                try {
+                    int code = Integer.parseInt(s.substring(i + 2, i + 6), 16);
+                    sb.append((char) code);
+                    i += 6;
+                    continue;
+                } catch (NumberFormatException ignored) {}
+            }
+            sb.append(s.charAt(i));
+            i++;
+        }
+        return sb.toString();
+    }
+
     // ── 播放器 ───────────────────────────────────────────────────
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
