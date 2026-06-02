@@ -421,8 +421,6 @@ public class Dyrs extends Spider {
         // 4. 提取 JSON 字符串（保持原始转义，交给 JsonParser 处理）
         String jsonStr = extractJsonStr(respHtml);
         if (TextUtils.isEmpty(jsonStr)) return null;
-
-        // 只还原 \/ -> /，其余 \uXXXX 由 JsonParser 自行解析
         String raw = jsonStr.replace("\\/", "/");
 
         JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
