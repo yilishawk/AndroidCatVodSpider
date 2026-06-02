@@ -395,44 +395,68 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab) {
     try {
+        // 1. 获取线路名称：优先从 data-origin 获取，这是最干净的
         Element btn = tab.selectFirst("button");
-        String fromName = btn != null ? btn.attr("data-origin") : tab.text().trim();
-        String lineUrl = tab.attr("href");
-        if (!lineUrl.startsWith("http")) lineUrl = host + lineUrl;
+        String fromName = "";
+        if (btn != null && !btn.attr("data-origin").isEmpty()) {
+            fromName = btn.attr("data-origin");
+        } else {
+            // 保底方案：取按钮文本并去掉末尾的数字角标（如 "41"）
+            String rawText = (btn != null) ? btn.text() : tab.text();
+            fromName = rawText.replaceAll("\\d+$", "").trim();
+        }
 
-        // 每次请求带上 Referer，防止部分线路防盗链
+        // 2. 处理 URL：Jsoup 的 attr("href") 会自动处理基础转义
+        String lineUrl = tab.attr("href");
+        if (TextUtils.isEmpty(lineUrl)) return null;
+        
+        if (!lineUrl.startsWith("http")) {
+            lineUrl = host + (lineUrl.startsWith("/") ? "" : "/") + lineUrl;
+        }
+
+        // 3. 发起请求：重点在于 Referer 必须与该线路 URL 一致
         HashMap<String, String> lineHeaders = new HashMap<>(headers);
         lineHeaders.put("Referer", lineUrl);
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
 
-        // 1. 增强正则：匹配包含 Unicode 转义内容的 JSON 字符串
-        // 兼容单引号和双引号，同时支持 dyrs_vod_list 或 vod_list
-        Pattern pattern = Pattern.compile("(?:dyrs_vod_list|vod_list)\\s*=\\s*JSON.parse\\(['\"](.*?)['\"]\\);", Pattern.DOTALL);
+        if (TextUtils.isEmpty(respHtml)) return null;
+
+        // 4. 提取数据：使用更宽泛的正则，匹配任何包含 vod 的 JSON.parse 变量
+        // 兼容 dyrs_vod_list, vod_list, vodList, play_vod_list 等
+        Pattern pattern = Pattern.compile("[a-zA-Z_0-9]*?vod[a-zA-Z_0-9]*?\\s*=\\s*JSON.parse\\(['\"](.*?)['\"]\\);", Pattern.DOTALL);
         Matcher matcher = pattern.matcher(respHtml);
         
-        if (!matcher.find()) return null;
+        String rawJson = "";
+        if (matcher.find()) {
+            rawJson = matcher.group(1);
+        } else {
+            // 二次保底：直接查找符合 JSON 数组格式的 parse 内容
+            Pattern backupPattern = Pattern.compile("JSON.parse\\(['\"](\\[\\{.*?\\}\\])['\"]\\)", Pattern.DOTALL);
+            Matcher backupMatcher = backupPattern.matcher(respHtml);
+            if (backupMatcher.find()) {
+                rawJson = backupMatcher.group(1);
+            }
+        }
 
-        String raw = matcher.group(1);
-        
-        // 2. 核心修复：必须先还原 Unicode (处理 \u0022 -> ")
-        raw = unescapeUnicode(raw);
-        
-        // 3. 处理普通转义 (处理 \/ -> /)
-        raw = raw.replace("\\/", "/");
+        if (rawJson.isEmpty()) return null;
 
-        // 4. 解析 JSON 数组
-        JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
+        // 5. 还原数据：处理 Unicode (\u0022) 和 斜杠 (\/)
+        rawJson = unescapeUnicode(rawJson).replace("\\/", "/");
+
+        // 6. 解析剧集列表
+        JsonArray epData = JsonParser.parseString(rawJson).getAsJsonArray();
         List<String> urls = new ArrayList<>();
         
         for (JsonElement e : epData) {
             JsonObject ep = e.getAsJsonObject();
-            // 兼容性取值：优先取 title，如果没有尝试 name
-            String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
+            // 兼容 title 或 name 字段
+            String title = ep.has("title") ? ep.get("title").getAsString() : 
+                          (ep.has("name") ? ep.get("name").getAsString() : "正片");
             String url = ep.has("url") ? ep.get("url").getAsString() : "";
             
             if (url.isEmpty()) continue;
             
-            // 修复相对路径
+            // 修复播放地址的相对路径
             if (!url.startsWith("http")) {
                 if (url.startsWith("//")) url = "https:" + url;
                 else if (url.startsWith("/")) url = host + url;
@@ -447,8 +471,10 @@ public class Dyrs extends Spider {
         result.put("from", fromName);
         result.put("url", TextUtils.join("#", urls));
         return result;
+
     } catch (Exception e) {
-        return null; // 这里可以改为 e.printStackTrace() 方便在 Pydroid 3 或 Logcat 中查看具体报错
+        // 调试建议：如果还是抓不到，可以在这里打印 e.getMessage()
+        return null;
     }
 }
 
