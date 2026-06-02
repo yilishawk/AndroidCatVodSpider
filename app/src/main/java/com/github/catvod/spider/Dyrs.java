@@ -395,53 +395,52 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab) {
     try {
-        // 1. 获取线路名称
+        // 1. 获取线路名称（从 <a> 内的 <button data-origin> 取）
         Element btn = tab.selectFirst("button");
         String fromName = "";
         if (btn != null) {
             fromName = btn.attr("data-origin");
-            if (TextUtils.isEmpty(fromName)) {
-                fromName = btn.text().trim();
-            }
-        } else {
-            fromName = tab.text().trim();
+            if (TextUtils.isEmpty(fromName)) fromName = btn.text().trim();
         }
+        if (TextUtils.isEmpty(fromName)) fromName = tab.attr("data-origin");
+        if (TextUtils.isEmpty(fromName)) fromName = tab.text().trim();
         if (TextUtils.isEmpty(fromName)) fromName = "未知线路";
 
-        // 2. 获取线路URL
+        // 2. 获取线路页面 URL
         String lineUrl = tab.attr("href");
         if (TextUtils.isEmpty(lineUrl)) lineUrl = tab.attr("data-href");
+        if (TextUtils.isEmpty(lineUrl)) return null;
+
         if (!lineUrl.startsWith("http")) {
             lineUrl = host + (lineUrl.startsWith("/") ? lineUrl : "/" + lineUrl);
         }
 
+        // 3. 请求线路页面
         String respHtml = OkHttp.string(lineUrl, headers);
 
-        // 增强提取 JSON
+        // 4. 提取 JSON 字符串（保持原始转义，交给 JsonParser 处理）
         String jsonStr = extractJsonStr(respHtml);
-        if (TextUtils.isEmpty(jsonStr)) {
-            return null;
-        }
+        if (TextUtils.isEmpty(jsonStr)) return null;
 
+        // 只还原 \/ → /，其余 \uXXXX 由 JsonParser 自行解析
         String raw = jsonStr.replace("\\/", "/");
-        raw = unescapeUnicodeEnhanced(raw);
 
         JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
 
+        // 5. 组装播放列表
         List<String> urls = new ArrayList<>();
         for (JsonElement e : epData) {
             JsonObject ep = e.getAsJsonObject();
             String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
-            String url = ep.has("url") ? ep.get("url").getAsString() : "";
+            String url   = ep.has("url")   ? ep.get("url").getAsString()   : "";
+            if (TextUtils.isEmpty(url)) continue;
 
-            if (!TextUtils.isEmpty(url)) {
-                if (!url.startsWith("http")) {
-                    if (url.startsWith("//")) url = "https:" + url;
-                    else if (url.startsWith("/")) url = host + url;
-                    else url = host + "/" + url;
-                }
-                urls.add(title + "$" + url);
+            if (!url.startsWith("http")) {
+                if (url.startsWith("//"))     url = "https:" + url;
+                else if (url.startsWith("/")) url = host + url;
+                else                          url = host + "/" + url;
             }
+            urls.add(title + "$" + url);
         }
 
         if (urls.isEmpty()) return null;
@@ -455,58 +454,18 @@ public class Dyrs extends Spider {
         return null;
     }
 }
-    /** 增强提取 JSON 字符串 */
+
     private String extractJsonStr(String html) {
     if (TextUtils.isEmpty(html)) return null;
-
-    // 方式1：宽松匹配
-    Pattern p1 = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*['\"](.*?)['\"]\\s*\\)", Pattern.DOTALL);
-    Matcher m1 = p1.matcher(html);
-    if (m1.find()) return m1.group(1);
-
-    // 方式2：更宽松备用
-    Pattern p2 = Pattern.compile("dyrs_vod_list\\s*[=:]\\s*JSON\\.parse\\s*\\(\\s*['\"]([\\s\\S]*?)['\"]\\s*\\)", Pattern.DOTALL);
-    Matcher m2 = p2.matcher(html);
-    if (m2.find()) return m2.group(1);
-
+    // 用排除法匹配单引号内容，正确处理 \' 和 \\ 转义，不会被内部 \uXXXX 截断
+    Pattern p = Pattern.compile(
+        "dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*\\)",
+        Pattern.DOTALL
+    );
+    Matcher m = p.matcher(html);
+    if (m.find()) return m.group(1);
     return null;
 }
-
-/** 增强版 Unicode 解码 */
-private String unescapeUnicodeEnhanced(String s) {
-    if (TextUtils.isEmpty(s)) return s;
-
-    String result = s
-            .replace("\\u0022", "\"")
-            .replace("\\u0027", "'")
-            .replace("\\u0026", "&")
-            .replace("\\u003C", "<")
-            .replace("\\u003E", ">")
-            .replace("\\u005C", "\\");
-
-    // 调用你原来的解码方法处理剩余情况
-    result = unescapeUnicode(result);
-
-    return result;
-}
-    private String unescapeUnicode(String s) {
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        while (i < s.length()) {
-            if (i + 5 < s.length() && s.charAt(i) == '\\' && s.charAt(i + 1) == 'u') {
-                try {
-                    int code = Integer.parseInt(s.substring(i + 2, i + 6), 16);
-                    sb.append((char) code);
-                    i += 6;
-                    continue;
-                } catch (NumberFormatException ignored) {}
-            }
-            sb.append(s.charAt(i));
-            i++;
-        }
-        return sb.toString();
-    }
-
     // ── 播放器 ───────────────────────────────────────────────────
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
