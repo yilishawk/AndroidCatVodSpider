@@ -455,7 +455,6 @@ public class Dyrs extends Spider {
 
     private String extractJsonStr(String html) {
     if (TextUtils.isEmpty(html)) return null;
-    // 用排除法匹配单引号内容，正确处理 \' 和 \\ 转义，不会被内部 \uXXXX 截断
     Pattern p = Pattern.compile(
         "dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*\\)",
         Pattern.DOTALL
