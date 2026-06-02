@@ -395,7 +395,7 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab) {
     try {
-        // 1. 获取线路名称（更健壮）
+        // 1. 获取线路名称
         Element btn = tab.selectFirst("button");
         String fromName = "";
         if (btn != null) {
@@ -406,32 +406,25 @@ public class Dyrs extends Spider {
         } else {
             fromName = tab.text().trim();
         }
-        if (TextUtils.isEmpty(fromName)) {
-            fromName = "未知线路";
-        }
+        if (TextUtils.isEmpty(fromName)) fromName = "未知线路";
 
         // 2. 获取线路URL
         String lineUrl = tab.attr("href");
-        if (TextUtils.isEmpty(lineUrl)) {
-            lineUrl = tab.attr("data-href");
-        }
+        if (TextUtils.isEmpty(lineUrl)) lineUrl = tab.attr("data-href");
         if (!lineUrl.startsWith("http")) {
             lineUrl = host + (lineUrl.startsWith("/") ? lineUrl : "/" + lineUrl);
         }
 
         String respHtml = OkHttp.string(lineUrl, headers);
 
-        // ==================== 增强提取 JSON 字符串 ====================
+        // 增强提取 JSON
         String jsonStr = extractJsonStr(respHtml);
-
         if (TextUtils.isEmpty(jsonStr)) {
-            // System.out.println("[Dyrs] 未找到 dyrs_vod_list: " + fromName); // 调试时打开
             return null;
         }
 
-        // ==================== 处理转义 ====================
         String raw = jsonStr.replace("\\/", "/");
-        raw = unescapeUnicodeEnhanced(raw);   // 使用增强版解码
+        raw = unescapeUnicodeEnhanced(raw);
 
         JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
 
@@ -459,48 +452,43 @@ public class Dyrs extends Spider {
         return result;
 
     } catch (Exception e) {
-        // e.printStackTrace(); // 调试时打开
         return null;
     }
 }
-    /** 增强版提取 JSON 字符串 */
+    /** 增强提取 JSON 字符串 */
     private String extractJsonStr(String html) {
     if (TextUtils.isEmpty(html)) return null;
 
-    // 方式1：最宽松正则（推荐）
+    // 方式1：宽松匹配
     Pattern p1 = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*['\"](.*?)['\"]\\s*\\)", Pattern.DOTALL);
     Matcher m1 = p1.matcher(html);
-    if (m1.find()) {
-        return m1.group(1);
-    }
+    if (m1.find()) return m1.group(1);
 
-    // 方式2：备用（如果JSON被压缩成一行）
+    // 方式2：更宽松备用
     Pattern p2 = Pattern.compile("dyrs_vod_list\\s*[=:]\\s*JSON\\.parse\\s*\\(\\s*['\"]([\\s\\S]*?)['\"]\\s*\\)", Pattern.DOTALL);
     Matcher m2 = p2.matcher(html);
-    if (m2.find()) {
-        return m2.group(1);
-    }
+    if (m2.find()) return m2.group(1);
 
     return null;
 }
 
-    /** 增强版 Unicode 解码（处理多次转义） */
-    private String unescapeUnicodeEnhanced(String s) {
+/** 增强版 Unicode 解码 */
+private String unescapeUnicodeEnhanced(String s) {
     if (TextUtils.isEmpty(s)) return s;
 
-    // 先处理常见的 \\u0022 等
-    String result = s.replace("\\u0022", "\"")
-                     .replace("\\u0027", "'")
-                     .replace("\\u0026", "&")
-                     .replace("\\u003C", "<")
-                     .replace("\\u003E", ">");
+    String result = s
+            .replace("\\u0022", "\"")
+            .replace("\\u0027", "'")
+            .replace("\\u0026", "&")
+            .replace("\\u003C", "<")
+            .replace("\\u003E", ">")
+            .replace("\\u005C", "\\");
 
-    // 再用你原来的方法处理剩余的 \uXXXX
+    // 调用你原来的解码方法处理剩余情况
     result = unescapeUnicode(result);
 
     return result;
 }
-    /** 处理 \\uXXXX 形式的 unicode 转义，对齐 Python 的 unicode_escape 解码 */
     private String unescapeUnicode(String s) {
         StringBuilder sb = new StringBuilder();
         int i = 0;
