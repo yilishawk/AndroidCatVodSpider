@@ -394,49 +394,112 @@ public class Dyrs extends Spider {
     }
 
     private Map<String, String> parseLine(Element tab) {
-        try {
-            Element btn = tab.selectFirst("button");
-            String fromName = btn != null ? btn.attr("data-origin") : tab.text().trim();
+    try {
+        // 1. 获取线路名称（更健壮）
+        Element btn = tab.selectFirst("button");
+        String fromName = "";
+        if (btn != null) {
+            fromName = btn.attr("data-origin");
+            if (TextUtils.isEmpty(fromName)) {
+                fromName = btn.text().trim();
+            }
+        } else {
+            fromName = tab.text().trim();
+        }
+        if (TextUtils.isEmpty(fromName)) {
+            fromName = "未知线路";
+        }
 
-            String lineUrl = tab.attr("href");
-            if (!lineUrl.startsWith("http")) lineUrl = host + lineUrl;
-            String respHtml = OkHttp.string(lineUrl, headers);
+        // 2. 获取线路URL
+        String lineUrl = tab.attr("href");
+        if (TextUtils.isEmpty(lineUrl)) {
+            lineUrl = tab.attr("data-href");
+        }
+        if (!lineUrl.startsWith("http")) {
+            lineUrl = host + (lineUrl.startsWith("/") ? lineUrl : "/" + lineUrl);
+        }
 
-            // 提取 JSON 数据
-            Pattern pattern = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON.parse\\('(.*?)'\\);", Pattern.DOTALL);
-            Matcher matcher = pattern.matcher(respHtml);
-            if (!matcher.find()) return null;
+        String respHtml = OkHttp.string(lineUrl, headers);
 
-            // 处理 unicode_escape 编码（对齐 Python 版两步解码）
-            String raw = matcher.group(1).replace("\\/", "/");
-            // Java 中处理 \\uXXXX 转义
-            raw = unescapeUnicode(raw);
+        // ==================== 增强提取 JSON 字符串 ====================
+        String jsonStr = extractJsonStr(respHtml);
 
-            JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
+        if (TextUtils.isEmpty(jsonStr)) {
+            // System.out.println("[Dyrs] 未找到 dyrs_vod_list: " + fromName); // 调试时打开
+            return null;
+        }
 
-            List<String> urls = new ArrayList<>();
-            for (JsonElement e : epData) {
-                JsonObject ep = e.getAsJsonObject();
-                String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
-                String url   = ep.has("url")   ? ep.get("url").getAsString()   : "";
+        // ==================== 处理转义 ====================
+        String raw = jsonStr.replace("\\/", "/");
+        raw = unescapeUnicodeEnhanced(raw);   // 使用增强版解码
 
+        JsonArray epData = JsonParser.parseString(raw).getAsJsonArray();
+
+        List<String> urls = new ArrayList<>();
+        for (JsonElement e : epData) {
+            JsonObject ep = e.getAsJsonObject();
+            String title = ep.has("title") ? ep.get("title").getAsString() : "正片";
+            String url = ep.has("url") ? ep.get("url").getAsString() : "";
+
+            if (!TextUtils.isEmpty(url)) {
                 if (!url.startsWith("http")) {
-                    if (url.startsWith("//"))     url = "https:" + url;
+                    if (url.startsWith("//")) url = "https:" + url;
                     else if (url.startsWith("/")) url = host + url;
-                    else                          url = host + "/" + url;
+                    else url = host + "/" + url;
                 }
                 urls.add(title + "$" + url);
             }
-
-            Map<String, String> result = new HashMap<>();
-            result.put("from", fromName);
-            result.put("url", TextUtils.join("#", urls));
-            return result;
-        } catch (Exception e) {
-            return null;
         }
+
+        if (urls.isEmpty()) return null;
+
+        Map<String, String> result = new HashMap<>();
+        result.put("from", fromName);
+        result.put("url", TextUtils.join("#", urls));
+        return result;
+
+    } catch (Exception e) {
+        // e.printStackTrace(); // 调试时打开
+        return null;
+    }
+}
+    /** 增强版提取 JSON 字符串 */
+    private String extractJsonStr(String html) {
+    if (TextUtils.isEmpty(html)) return null;
+
+    // 方式1：最宽松正则（推荐）
+    Pattern p1 = Pattern.compile("dyrs_vod_list\\s*=\\s*JSON\\.parse\\(\\s*['\"](.*?)['\"]\\s*\\)", Pattern.DOTALL);
+    Matcher m1 = p1.matcher(html);
+    if (m1.find()) {
+        return m1.group(1);
     }
 
+    // 方式2：备用（如果JSON被压缩成一行）
+    Pattern p2 = Pattern.compile("dyrs_vod_list\\s*[=:]\\s*JSON\\.parse\\s*\\(\\s*['\"]([\\s\\S]*?)['\"]\\s*\\)", Pattern.DOTALL);
+    Matcher m2 = p2.matcher(html);
+    if (m2.find()) {
+        return m2.group(1);
+    }
+
+    return null;
+}
+
+    /** 增强版 Unicode 解码（处理多次转义） */
+    private String unescapeUnicodeEnhanced(String s) {
+    if (TextUtils.isEmpty(s)) return s;
+
+    // 先处理常见的 \\u0022 等
+    String result = s.replace("\\u0022", "\"")
+                     .replace("\\u0027", "'")
+                     .replace("\\u0026", "&")
+                     .replace("\\u003C", "<")
+                     .replace("\\u003E", ">");
+
+    // 再用你原来的方法处理剩余的 \uXXXX
+    result = unescapeUnicode(result);
+
+    return result;
+}
     /** 处理 \\uXXXX 形式的 unicode 转义，对齐 Python 的 unicode_escape 解码 */
     private String unescapeUnicode(String s) {
         StringBuilder sb = new StringBuilder();
