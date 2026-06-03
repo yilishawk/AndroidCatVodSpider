@@ -363,7 +363,7 @@ public class Dyrs extends Spider {
             final Element tab = tabs.get(i);
             executor.execute(() -> {
                 try {
-                    Map<String, String> line = parseLine(tab);
+                    Map<String, String> line = parseLine(tab, detailUrl);
                     if (line != null && !TextUtils.isEmpty(line.get("url"))) {
                         fromArr[idx] = line.get("from");
                         urlArr[idx]  = line.get("url");
@@ -393,7 +393,7 @@ public class Dyrs extends Spider {
         return Result.string(vod);
     }
 
-    private Map<String, String> parseLine(Element tab) {
+    private Map<String, String> parseLine(Element tab, String detailUrl) {
     try {
         // 1. 获取线路名称：优先从 data-origin 获取，这是最干净的
         Element btn = tab.selectFirst("button");
@@ -416,27 +416,33 @@ public class Dyrs extends Spider {
 
         // 3. 发起请求：重点在于 Referer 必须与该线路 URL 一致
         HashMap<String, String> lineHeaders = new HashMap<>(headers);
-        lineHeaders.put("Referer", lineUrl);
+        lineHeaders.put("Referer", detailUrl);
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
 
         if (TextUtils.isEmpty(respHtml)) return null;
 
         // 4. 提取数据：使用更宽泛的正则，匹配任何包含 vod 的 JSON.parse 变量
         // 兼容 dyrs_vod_list, vod_list, vodList, play_vod_list 等
-        Pattern pattern = Pattern.compile("[a-zA-Z_0-9]*?vod[a-zA-Z_0-9]*?\\s*=\\s*JSON.parse\\(['\"](.*?)['\"]\\);", Pattern.DOTALL);
+        Pattern pattern = Pattern.compile(
+            "var\\s+([a-zA-Z_$][\\w$]*)\\s*=\\s*JSON\\.parse\\(" +
+            "(['\"`])((?:[^\\\\]|\\\\.)*?)\\2\\);",
+            Pattern.DOTALL
+        );
         Matcher matcher = pattern.matcher(respHtml);
-        
-        String rawJson = "";
-        if (matcher.find()) {
-            rawJson = matcher.group(1);
-        } else {
-            // 二次保底：直接查找符合 JSON 数组格式的 parse 内容
-            Pattern backupPattern = Pattern.compile("JSON.parse\\(['\"](\\[\\{.*?\\}\\])['\"]\\)", Pattern.DOTALL);
-            Matcher backupMatcher = backupPattern.matcher(respHtml);
-            if (backupMatcher.find()) {
-                rawJson = backupMatcher.group(1);
+        String rawJson = null;
+
+        while (matcher.find()) {
+            String jsonStr = matcher.group(3);
+            if (jsonStr.trim().startsWith("[")) {
+                rawJson = jsonStr;
+                break;
             }
         }
+
+// 保底：响应直接就是 JSON 数组
+if (rawJson == null && respHtml.trim().startsWith("[")) {
+    rawJson = respHtml.trim();
+}
 
         if (rawJson.isEmpty()) return null;
 
