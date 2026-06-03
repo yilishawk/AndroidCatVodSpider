@@ -395,42 +395,37 @@ public class Dyrs extends Spider {
 
     private Map<String, String> parseLine(Element tab, String detailUrl) {
     try {
-        // 1. 获取线路名称：优先从 data-origin 获取，这是最干净的
+        // 1. 获取线路名称
         Element btn = tab.selectFirst("button");
         String fromName = "";
         if (btn != null && !btn.attr("data-origin").isEmpty()) {
             fromName = btn.attr("data-origin");
         } else {
-            // 保底方案：取按钮文本并去掉末尾的数字角标（如 "41"）
             String rawText = (btn != null) ? btn.text() : tab.text();
             fromName = rawText.replaceAll("\\d+$", "").trim();
         }
 
-        // 2. 处理 URL：Jsoup 的 attr("href") 会自动处理基础转义
+        // 2. 处理 URL
         String lineUrl = tab.attr("href");
         if (TextUtils.isEmpty(lineUrl)) return null;
-        
         if (!lineUrl.startsWith("http")) {
             lineUrl = host + (lineUrl.startsWith("/") ? "" : "/") + lineUrl;
         }
 
-        // 3. 发起请求：重点在于 Referer 必须与该线路 URL 一致
+        // 3. 发起请求
         HashMap<String, String> lineHeaders = new HashMap<>(headers);
-        lineHeaders.put("Referer", lineUrl);   // 恢复原样
+        lineHeaders.put("Referer", lineUrl);
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
-
         if (TextUtils.isEmpty(respHtml)) return null;
 
-        // 4. 提取数据：使用更宽泛的正则，匹配任何包含 vod 的 JSON.parse 变量
-        // 兼容 dyrs_vod_list, vod_list, vodList, play_vod_list 等
+        // 4. 提取 JSON 数据
         Pattern pattern = Pattern.compile(
-            "var\\s+([a-zA-Z_$][\\w$]*)\\s*=\\s*JSON\\.parse\\(" +
+            "([a-zA-Z_$][\\w$]*vod[\\w$]*)\\s*=\\s*JSON\\.parse\\(" +
             "(['\"`])((?:[^\\\\]|\\\\.)*?)\\2\\);",
             Pattern.DOTALL
         );
         Matcher matcher = pattern.matcher(respHtml);
         String rawJson = null;
-
         while (matcher.find()) {
             String jsonStr = matcher.group(3);
             if (jsonStr.trim().startsWith("[")) {
@@ -438,48 +433,52 @@ public class Dyrs extends Spider {
                 break;
             }
         }
+        if (rawJson == null && respHtml.trim().startsWith("[")) {
+            rawJson = respHtml.trim();
+        }
+        if (rawJson == null || rawJson.isEmpty()) return null;
 
-// 保底：响应直接就是 JSON 数组
-if (rawJson == null && respHtml.trim().startsWith("[")) {
-    rawJson = respHtml.trim();
-}
+        // 5. 解析 JSON（兼容 \u0022、\/ 等转义）
+        JsonArray epData = null;
+        try {
+            // 先替换 \/ 为普通斜杠，再利用 Gson 自动处理 \u0022
+            String fixedJson = rawJson.replace("\\/", "/");
+            epData = JsonParser.parseString(fixedJson).getAsJsonArray();
+        } catch (Exception e1) {
+            // 降级：手动转换 \uXXXX
+            try {
+                String unescaped = unescapeUnicode(rawJson).replace("\\/", "/");
+                epData = JsonParser.parseString(unescaped).getAsJsonArray();
+            } catch (Exception e2) {
+                return null;
+            }
+        }
 
-        if (rawJson.isEmpty()) return null;
-
-        // 5. 还原数据：处理 Unicode (\u0022) 和 斜杠 (\/)
-        rawJson = unescapeUnicode(rawJson).replace("\\/", "/");
-
-        // 6. 解析剧集列表
-        JsonArray epData = JsonParser.parseString(rawJson).getAsJsonArray();
+        // 6. 生成剧集列表
         List<String> urls = new ArrayList<>();
-        
         for (JsonElement e : epData) {
             JsonObject ep = e.getAsJsonObject();
-            // 兼容 title 或 name 字段
-            String title = ep.has("title") ? ep.get("title").getAsString() : 
+            String title = ep.has("title") ? ep.get("title").getAsString() :
                           (ep.has("name") ? ep.get("name").getAsString() : "正片");
             String url = ep.has("url") ? ep.get("url").getAsString() : "";
-            
             if (url.isEmpty()) continue;
-            
-            // 修复播放地址的相对路径
+
             if (!url.startsWith("http")) {
                 if (url.startsWith("//")) url = "https:" + url;
                 else if (url.startsWith("/")) url = host + url;
                 else url = host + "/" + url;
             }
+            // 修正双重转义：\\u0026 -> &
+            url = url.replace("\\u0026", "&");
             urls.add(title + "$" + url);
         }
-
         if (urls.isEmpty()) return null;
 
         Map<String, String> result = new HashMap<>();
         result.put("from", fromName);
         result.put("url", TextUtils.join("#", urls));
         return result;
-
     } catch (Exception e) {
-        // 调试建议：如果还是抓不到，可以在这里打印 e.getMessage()
         return null;
     }
 }
