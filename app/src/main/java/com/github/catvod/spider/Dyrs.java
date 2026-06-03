@@ -445,7 +445,7 @@ public class Dyrs extends Spider {
             String fixedJson = rawJson.replace("\\/", "/");
             epData = JsonParser.parseString(fixedJson).getAsJsonArray();
         } catch (Exception e1) {
-            // 降级：手动转换 \uXXXX
+            // 降级：手动转换 \\uXXXX
             try {
                 String unescaped = unescapeUnicode(rawJson).replace("\\/", "/");
                 epData = JsonParser.parseString(unescaped).getAsJsonArray();
