@@ -416,7 +416,7 @@ public class Dyrs extends Spider {
 
         // 3. 发起请求：重点在于 Referer 必须与该线路 URL 一致
         HashMap<String, String> lineHeaders = new HashMap<>(headers);
-        lineHeaders.put("Referer", detailUrl);
+        lineHeaders.put("Referer", lineUrl);   // 恢复原样
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
 
         if (TextUtils.isEmpty(respHtml)) return null;
