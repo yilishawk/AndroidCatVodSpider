@@ -27,7 +27,7 @@ import java.util.regex.*;
 
 public class Czzyv extends Spider {
 
-    private static final String HOST = "https://czzyv.com";
+    private static final String HOST = "https://czzy.top";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     // 分类映射（国产剧排第一）
