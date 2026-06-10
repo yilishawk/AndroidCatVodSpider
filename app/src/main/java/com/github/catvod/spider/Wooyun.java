@@ -198,12 +198,29 @@ public class Wooyun extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
+        // 跟随 302 拿真实地址
+        String realUrl = id;
+        try {
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
-            return Result.get().url(id).header(headers).string();
-        } catch (Exception e) {
-            logger("playerContent 异常: " + e.getMessage());
-            return Result.get().parse(1).url(id).string();
-        }
+            String location = OkHttp.getLocation(id, headers);
+            if (!TextUtils.isEmpty(location)) {
+                // location 是相对路径，拼上 cloudfront 域名
+                if (location.startsWith("/")) {
+                    java.net.URL u = new java.net.URL(id);
+                    realUrl = u.getProtocol() + "://" + u.getHost() + location;
+                } else {
+                    realUrl = location;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", UA);
+        return Result.get().url(realUrl).header(headers).string();
+    } catch (Exception e) {
+        logger("playerContent 异常: " + e.getMessage());
+        return Result.get().parse(1).url(id).string();
     }
+}
 }
