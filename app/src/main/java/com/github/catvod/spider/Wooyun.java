@@ -115,7 +115,7 @@ public class Wooyun extends Spider {
             classes.add(new Class("variety",       "综艺"));
 
             // 所有分类使用相同筛选
-            Map<String, List<Filter>> filterMap = new HashMap<>();
+            LinkedHashMap<String, List<Filter>> filterMap = new LinkedHashMap<>();
             List<Filter> filters = buildFilters();
             for (Class c : classes) filterMap.put(c.getTypeId(), filters);
 
