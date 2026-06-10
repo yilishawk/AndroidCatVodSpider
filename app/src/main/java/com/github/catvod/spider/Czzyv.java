@@ -448,7 +448,7 @@ public class Czzyv extends Spider {
             
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
-            headers.put("Referer", HOST + "/");
+            //headers.put("Referer", HOST + "/");
             headers.put("Origin", HOST);
             
             return Result.get().url(videoUrl).header(headers).string();
