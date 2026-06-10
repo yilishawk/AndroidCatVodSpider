@@ -75,7 +75,7 @@ public class Wooyun extends Spider {
         try {
             int page = Integer.parseInt(pg);
             String body = buildListBody(tid, page, 24, "");
-            String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search", body, getHeaders());
+            String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search", body, getHeaders()).getBody();
             JSONObject js = new JSONObject(res);
             JSONArray records = js.getJSONObject("data").getJSONArray("records");
 
@@ -171,7 +171,7 @@ public class Wooyun extends Spider {
     public String searchContent(String key, boolean quick) {
         try {
             String body = buildListBody("", 1, 10, key);
-            String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search", body, getHeaders());
+            String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search", body, getHeaders()).getBody();
             JSONArray records = new JSONObject(res).getJSONObject("data").getJSONArray("records");
 
             List<Vod> list = new ArrayList<>();
