@@ -1,7 +1,6 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.text.TextUtils;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -20,14 +19,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class FkTv extends Spider {
 
     private final String siteUrl = "https://fktv.me";
-    private final String imageSearchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=";
 
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
     private final String COOKIE = "_did=wEdXiQxa07zJ15hm0AsNjxsc4rZRSKzb; _device=pc";
@@ -44,28 +39,9 @@ public class FkTv extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
     }
-    private String getBetterImage(String title) {
-        if (TextUtils.isEmpty(title)) return "";
-        try {
-            String url = imageSearchUrl + URLEncoder.encode(title, "UTF-8");
-            String json = OkHttp.string(url);
-            JSONObject obj = new JSONObject(json);
-            JSONArray arr = obj.optJSONArray("list");
-            if (arr != null && arr.length() > 0) {
-                String pic = arr.getJSONObject(0).optString("pic");
-                if (pic.startsWith("http")) return pic;
-            }
-        } catch (Exception ignored) {}
-        return "";
-    }
 
-
-    // ── 列表解析：多线程并发补图，所有图片同时取，最慢的那张决定总耗时 ──
     private List<Vod> parseList(String html) {
-        // 用 Map 把 vod 和 name 配对，方便后面 lambda 直接用 name
         List<Vod> list = new ArrayList<>();
-        Map<Vod, String> nameMap = new HashMap<>();
-
         Document doc = Jsoup.parse(html);
         Elements items = doc.select("div.item-wrap.vertical");
 
@@ -82,33 +58,13 @@ public class FkTv extends Spider {
             vod.setVodId(href);
             vod.setVodName(name);
             vod.setVodRemarks(remark);
+
+            // 本地代理图片（异步，不影响加载速度）
+            String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
+            vod.setVodPic(proxyPic);
+
             list.add(vod);
-            nameMap.put(vod, name);
         }
-
-        if (!list.isEmpty()) {
-            // 所有条目并发取图，用 CountDownLatch 等全部完成再返回
-            ExecutorService executor = Executors.newFixedThreadPool(Math.min(list.size(), 8));
-            CountDownLatch latch = new CountDownLatch(list.size());
-            for (Map.Entry<Vod, String> entry : nameMap.entrySet()) {
-                final Vod vod = entry.getKey();
-                final String name = entry.getValue();
-                executor.execute(() -> {
-                    try {
-                        String pic = getBetterImage(name);
-                        if (!TextUtils.isEmpty(pic)) vod.setVodPic(pic);
-                    } catch (Exception ignored) {
-                    } finally {
-                        latch.countDown();
-                    }
-                });
-            }
-            try {
-                latch.await(); // 等所有线程完成
-            } catch (InterruptedException ignored) {}
-            executor.shutdown();
-        }
-
         return list;
     }
 
@@ -143,7 +99,6 @@ public class FkTv extends Spider {
         }
     }
 
-    // ── 详情页：一次请求搞定，图片直接从页面取，不再搜图 ────────────
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : siteUrl + ids.get(0);
@@ -159,15 +114,11 @@ public class FkTv extends Spider {
         Element desc = doc.selectFirst(".desc");
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
-        // 详情页不补图，列表页已经有图了
-
-        // 提取所有集数 linkId
         List<String> linkIds = extractLinkIds(html);
         if (linkIds.isEmpty()) {
             return Result.get().vod(vod).string();
         }
 
-        // 只用第一个 linkId 请求一次，拿到所有线路名
         List<String> playLines = getPlayUrls(detailUrl, linkIds.get(0));
         if (playLines.isEmpty()) {
             return Result.get().vod(vod).string();
@@ -180,14 +131,12 @@ public class FkTv extends Spider {
             String[] parts = line.split("\\$", 2);
             if (parts.length != 2) continue;
 
-            fromList.add(parts[0]); // 线路名
+            fromList.add(parts[0]);
 
-            // 集数列表：playId 直接存 m3u8 地址，playerContent 无需再请求
             List<String> episodes = new ArrayList<>();
             int limit = Math.min(linkIds.size(), 120);
             for (int i = 0; i < limit; i++) {
                 String episodeName = "第" + (i + 1) + "集";
-                // 把 detailUrl + linkId 存进来，playerContent 按线路索引取对应 url
                 episodes.add(episodeName + "$" + detailUrl + "|" + linkIds.get(i) + "|" + playLines.indexOf(line));
             }
             urlList.add(String.join("#", episodes));
@@ -199,8 +148,6 @@ public class FkTv extends Spider {
         return Result.get().vod(vod).string();
     }
 
-    // ── playerContent：直接发请求拿当前集+当前线路的 m3u8 ─────────────
-    // id 格式：detailUrl|linkId|lineIndex
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (id.contains("|")) {
@@ -214,19 +161,16 @@ public class FkTv extends Spider {
                 List<String> playList = getPlayUrls(detailUrl, linkId);
                 if (lineIndex < playList.size()) {
                     String[] arr = playList.get(lineIndex).split("\\$", 2);
-                    if (arr.length == 2) return Result.get().url(arr[1]).string();
-                }
-                // 降级：用第一条线路
-                if (!playList.isEmpty()) {
-                    String[] arr = playList.get(0).split("\\$", 2);
-                    if (arr.length == 2) return Result.get().url(arr[1]).string();
+                    if (arr.length == 2) {
+                        String m3u8Url = arr[1];
+                        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + URLEncoder.encode(m3u8Url, "UTF-8");
+                        return Result.get().url(proxyUrl).string();
+                    }
                 }
             }
         }
         return Result.get().url(id).string();
     }
-
-    // ── 工具方法 ──────────────────────────────────────────────────
 
     private List<String> extractLinkIds(String html) {
         List<String> linkIds = new ArrayList<>();
