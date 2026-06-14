@@ -59,13 +59,22 @@ public class FkTv extends Spider {
             vod.setVodName(name);
             vod.setVodRemarks(remark);
 
-            // 本地代理图片（异步，不影响加载速度）
-            String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
+            // 本地代理图片（使用 10086 端口）
+            String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + encodeUrl(name);
             vod.setVodPic(proxyPic);
 
             list.add(vod);
         }
         return list;
+    }
+
+    // 封装 URLEncoder，避免异常
+    private String encodeUrl(String str) {
+        try {
+            return URLEncoder.encode(str, "UTF-8");
+        } catch (Exception e) {
+            return str.replace(" ", "%20"); // 简单 fallback
+        }
     }
 
     @Override
@@ -91,7 +100,7 @@ public class FkTv extends Spider {
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         try {
-            String url = siteUrl + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
+            String url = siteUrl + "/channel?keywords=" + encodeUrl(key);
             String html = OkHttp.string(url, getHeader());
             return Result.string(parseList(html));
         } catch (Exception e) {
@@ -163,7 +172,7 @@ public class FkTv extends Spider {
                     String[] arr = playList.get(lineIndex).split("\\$", 2);
                     if (arr.length == 2) {
                         String m3u8Url = arr[1];
-                        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + URLEncoder.encode(m3u8Url, "UTF-8");
+                        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + encodeUrl(m3u8Url);
                         return Result.get().url(proxyUrl).string();
                     }
                 }
@@ -172,6 +181,7 @@ public class FkTv extends Spider {
         return Result.get().url(id).string();
     }
 
+    // ==================== 工具方法 ====================
     private List<String> extractLinkIds(String html) {
         List<String> linkIds = new ArrayList<>();
         Elements scripts = Jsoup.parse(html).select("script");
