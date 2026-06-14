@@ -23,7 +23,6 @@ import java.util.Map;
 public class FkTv extends Spider {
 
     private final String siteUrl = "https://fktv.me";
-
     private final String UA = "Mozilla/5.0 (Linux; Android 15; 23054RA19C Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.137 Mobile Safari/537.36";
     private final String COOKIE = "_did=wEdXiQxa07zJ15hm0AsNjxsc4rZRSKzb; _device=pc";
 
@@ -49,8 +48,8 @@ public class FkTv extends Spider {
             Element a = item.selectFirst("a[href^=/movie/detail]");
             if (a == null) continue;
 
-            String href   = siteUrl + a.attr("href");
-            String name   = a.attr("title");
+            String href = siteUrl + a.attr("href");
+            String name = a.attr("title");
             String remark = item.selectFirst(".category") != null
                     ? item.selectFirst(".category").text() : "";
 
@@ -59,7 +58,7 @@ public class FkTv extends Spider {
             vod.setVodName(name);
             vod.setVodRemarks(remark);
 
-            // 本地代理图片（使用 10086 端口）
+            // 只使用本地代理图片
             String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + encodeUrl(name);
             vod.setVodPic(proxyPic);
 
@@ -73,7 +72,7 @@ public class FkTv extends Spider {
         try {
             return URLEncoder.encode(str, "UTF-8");
         } catch (Exception e) {
-            return str.replace(" ", "%20"); // 简单 fallback
+            return str.replace(" ", "%20");
         }
     }
 
@@ -134,7 +133,7 @@ public class FkTv extends Spider {
         }
 
         List<String> fromList = new ArrayList<>();
-        List<String> urlList  = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
 
         for (String line : playLines) {
             String[] parts = line.split("\\$", 2);
@@ -159,21 +158,20 @@ public class FkTv extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // FkTv 只做图片代理，播放直接返回原始地址
         if (id.contains("|")) {
             String[] parts = id.split("\\|");
             if (parts.length >= 3) {
                 String detailUrl = parts[0];
-                String linkId    = parts[1];
-                int lineIndex    = 0;
+                String linkId = parts[1];
+                int lineIndex = 0;
                 try { lineIndex = Integer.parseInt(parts[2]); } catch (Exception ignored) {}
 
                 List<String> playList = getPlayUrls(detailUrl, linkId);
                 if (lineIndex < playList.size()) {
                     String[] arr = playList.get(lineIndex).split("\\$", 2);
                     if (arr.length == 2) {
-                        String m3u8Url = arr[1];
-                        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + encodeUrl(m3u8Url);
-                        return Result.get().url(proxyUrl).string();
+                        return Result.get().url(arr[1]).string();
                     }
                 }
             }
