@@ -12,6 +12,8 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Proxy extends Spider {
 
@@ -155,14 +157,14 @@ public class Proxy extends Spider {
         return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
     }
 
-    // ====================== M3U8 TS 域名替换（支持 ppnix） ======================
+    // ====================== M3U8 TS 域名替换 ======================
     private Object[] handleProxyM3u8(Map<String, String> params) {
         String url = params.get("url");
         if (url == null) return errorResponse(400, "Missing url");
 
         try {
             String content = OkHttp.string(url);
-            content = replacePpnixDomain(content);   // 执行随机替换
+            content = replacePpnixDomain(content);
 
             byte[] bytes = content.getBytes("UTF-8");
             return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
@@ -172,18 +174,24 @@ public class Proxy extends Spider {
         }
     }
 
+    // 修复后的替换方法（兼容 Java 版本）
     private String replacePpnixDomain(String m3u8Content) {
         if (m3u8Content == null || !m3u8Content.contains("ipfs.ppnix.com")) {
             return m3u8Content;
         }
 
-        return m3u8Content.replaceAll(
-            "(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)",
-            (match) -> {
-                int randomNum = (int) (Math.random() * 16) + 1;
-                return match.group(1) + randomNum + ".ppnix.com" + match.group(2);
-            }
-        );
+        Pattern pattern = Pattern.compile("(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)");
+        Matcher matcher = pattern.matcher(m3u8Content);
+        StringBuffer sb = new StringBuffer();
+
+        while (matcher.find()) {
+            int randomNum = (int) (Math.random() * 16) + 1;
+            String replacement = matcher.group(1) + randomNum + ".ppnix.com" + matcher.group(2);
+            matcher.appendReplacement(sb, replacement);
+        }
+        matcher.appendTail(sb);
+
+        return sb.toString();
     }
 
     // ====================== 弹幕 ======================
