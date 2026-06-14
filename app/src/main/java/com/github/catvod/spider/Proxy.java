@@ -1,6 +1,8 @@
 package com.github.catvod.spider;
 
+import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -8,6 +10,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -16,8 +19,8 @@ public class Proxy extends Spider {
     private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
     
-    private static final int PROXY_PORT = 10086;   // ← 你要求的主端口
-    private static final int OLD_PORT = 9978;      // 保留 9978（不使用，仅作记录）
+    private static final int PROXY_PORT = 10086;   // 主代理端口（图片 + M3U8）
+    private static final int OLD_PORT = 9978;      // 保留记录
 
     public static int getPort() { return PROXY_PORT; }
     public static String getUrl() { 
@@ -36,7 +39,7 @@ public class Proxy extends Spider {
     private static void startLegacyServer() {
         if (isServerRunning) return;
         new Thread(() -> {
-            try (ServerSocket server = new ServerSocket(PROXY_PORT)) {  // 使用 10086
+            try (ServerSocket server = new ServerSocket(PROXY_PORT)) {
                 server.setReuseAddress(true);
                 isServerRunning = true;
                 while (true) {
@@ -138,7 +141,8 @@ public class Proxy extends Spider {
             if (list != null && list.length() > 0) {
                 String pic = list.getJSONObject(0).optString("pic");
                 if (pic.startsWith("http")) {
-                    byte[] data = OkHttp.get(pic).getBodyBytes();
+                    OkResult result = OkHttp.get(pic, null, null);  // 兼容项目 OkHttp
+                    byte[] data = result.getBodyBytes();
                     return new Object[]{200, "image/jpeg", new ByteArrayInputStream(data)};
                 }
             }
@@ -160,7 +164,7 @@ public class Proxy extends Spider {
         try {
             String content = OkHttp.string(url);
 
-            // 在此处添加 TS 域名替换逻辑
+            // 在此处添加 TS 域名替换
             // content = content.replace("https://旧域名.com", "https://新域名.com");
 
             byte[] bytes = content.getBytes("UTF-8");
