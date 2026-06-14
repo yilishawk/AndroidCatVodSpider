@@ -2,7 +2,6 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -19,7 +18,7 @@ public class Proxy extends Spider {
     private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
     
-    private static final int PROXY_PORT = 10086;   // 主代理端口（图片 + M3U8）
+    private static final int PROXY_PORT = 10086;   // 主代理端口
     private static final int OLD_PORT = 9978;      // 保留记录
 
     public static int getPort() { return PROXY_PORT; }
@@ -141,9 +140,8 @@ public class Proxy extends Spider {
             if (list != null && list.length() > 0) {
                 String pic = list.getJSONObject(0).optString("pic");
                 if (pic.startsWith("http")) {
-                    // 正确获取图片字节
-                    String imageData = OkHttp.string(pic);   // 先取字符串（兼容）
-                    byte[] data = imageData.getBytes("ISO-8859-1"); // 二进制安全方式
+                    String imageData = OkHttp.string(pic);
+                    byte[] data = imageData.getBytes("ISO-8859-1");
                     return new Object[]{200, "image/jpeg", new ByteArrayInputStream(data)};
                 }
             }
@@ -157,16 +155,14 @@ public class Proxy extends Spider {
         return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
     }
 
-    // ====================== M3U8 TS 域名替换 ======================
+    // ====================== M3U8 TS 域名替换（支持 ppnix） ======================
     private Object[] handleProxyM3u8(Map<String, String> params) {
         String url = params.get("url");
         if (url == null) return errorResponse(400, "Missing url");
 
         try {
             String content = OkHttp.string(url);
-
-            // === TS 域名替换（在这里添加）===
-            // content = content.replace("https://旧域名.com", "https://新域名.com");
+            content = replacePpnixDomain(content);   // 执行随机替换
 
             byte[] bytes = content.getBytes("UTF-8");
             return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
@@ -174,6 +170,20 @@ public class Proxy extends Spider {
             log("❌ proxyM3u8 失败: " + e.getMessage());
             return errorResponse(500, e.getMessage());
         }
+    }
+
+    private String replacePpnixDomain(String m3u8Content) {
+        if (m3u8Content == null || !m3u8Content.contains("ipfs.ppnix.com")) {
+            return m3u8Content;
+        }
+
+        return m3u8Content.replaceAll(
+            "(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)",
+            (match) -> {
+                int randomNum = (int) (Math.random() * 16) + 1;
+                return match.group(1) + randomNum + ".ppnix.com" + match.group(2);
+            }
+        );
     }
 
     // ====================== 弹幕 ======================
