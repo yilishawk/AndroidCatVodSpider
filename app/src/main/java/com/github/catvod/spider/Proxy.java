@@ -1,6 +1,9 @@
 package com.github.catvod.spider;
 
-import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkHttp;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -9,12 +12,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class Proxy extends Spider {
+
     private static StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
     private static boolean isServerRunning = false;
-    private static final int MY_LOG_PORT = 10086;
+    
+    private static final int PROXY_PORT = 10086;   // ← 你要求的主端口
+    private static final int OLD_PORT = 9978;      // 保留 9978（不使用，仅作记录）
 
-    public static int getPort() { return 9978; }
-    public static String getUrl() { return "http://127.0.0.1:9978/proxy"; }
+    public static int getPort() { return PROXY_PORT; }
+    public static String getUrl() { 
+        return "http://127.0.0.1:" + PROXY_PORT + "/proxy"; 
+    }
 
     public static void log(String msg) {
         if (msg == null) return;
@@ -28,7 +36,7 @@ public class Proxy extends Spider {
     private static void startLegacyServer() {
         if (isServerRunning) return;
         new Thread(() -> {
-            try (ServerSocket server = new ServerSocket(MY_LOG_PORT)) {
+            try (ServerSocket server = new ServerSocket(PROXY_PORT)) {  // 使用 10086
                 server.setReuseAddress(true);
                 isServerRunning = true;
                 while (true) {
@@ -47,7 +55,6 @@ public class Proxy extends Spider {
                                         try { qparams.put(pair[0], URLDecoder.decode(pair[1], "UTF-8")); } catch (Exception ignored) {}
                                     }
                                 }
-                                log("📨 [弹幕入口] 收到请求 title=" + qparams.get("title") + " | episode=" + qparams.get("episode"));
                                 Object[] danmuResult = DanmuHelper.getDanmuResponse(qparams);
                                 byte[] body = new byte[0];
                                 if (danmuResult.length >= 3 && danmuResult[2] instanceof InputStream) {
@@ -97,39 +104,83 @@ public class Proxy extends Spider {
         }).start();
     }
 
-    /**
-     * 注意：此方法不是重写父类方法，而是因为 TV 应用会通过反射调用它。
-     * 不要加 @Override 注解，否则编译会失败。
-     */
     public Object[] proxy(Map<String, String> params) {
-    log("📨 [弹幕入口] 收到 proxy 调用: " + params);
+        log("📨 [Proxy] 收到请求: " + params);
 
-    String doParam = params.get("do");
-    if (doParam == null || !doParam.equals("danmu")) {
-        log("❌ [弹幕入口] do 参数错误: " + doParam);
-        return errorResponse(400, "Missing or invalid 'do' parameter");
+        String action = params.get("do");
+
+        if ("getPoster".equals(action)) {
+            return handleGetPoster(params);
+        } else if ("proxyM3u8".equals(action)) {
+            return handleProxyM3u8(params);
+        } else if ("danmu".equals(action)) {
+            return handleDanmu(params);
+        }
+
+        return errorResponse(400, "Unknown action: " + action);
     }
 
-    String title = params.get("title");
-    String episode = params.get("episode");
-    if (title == null || title.isEmpty() || episode == null || episode.isEmpty()) {
-        log("❌ [弹幕入口] 缺少 title 或 episode，原始params: " + params);
-        return errorResponse(400, "Missing title or episode");
+    // ====================== 图片代理 ======================
+    private Object[] handleGetPoster(Map<String, String> params) {
+        String title = params.get("title");
+        if (title == null || title.trim().isEmpty()) {
+            return defaultImage();
+        }
+
+        try {
+            String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=" 
+                             + URLEncoder.encode(title.trim(), "UTF-8");
+
+            String jsonStr = OkHttp.string(searchUrl);
+            JSONObject obj = new JSONObject(jsonStr);
+            JSONArray list = obj.optJSONArray("list");
+
+            if (list != null && list.length() > 0) {
+                String pic = list.getJSONObject(0).optString("pic");
+                if (pic.startsWith("http")) {
+                    byte[] data = OkHttp.get(pic).getBodyBytes();
+                    return new Object[]{200, "image/jpeg", new ByteArrayInputStream(data)};
+                }
+            }
+        } catch (Exception e) {
+            log("❌ getPoster 失败: " + e.getMessage());
+        }
+        return defaultImage();
     }
 
-    // ✅ decode 后写回 params
-    try { title = URLDecoder.decode(title, "UTF-8"); params.put("title", title); } catch (Exception e) { log("⚠️ [弹幕入口] title decode失败: " + e.getMessage()); }
-    try { episode = URLDecoder.decode(episode, "UTF-8"); params.put("episode", episode); } catch (Exception e) { log("⚠️ [弹幕入口] episode decode失败: " + e.getMessage()); }
+    private Object[] defaultImage() {
+        return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
+    }
 
-    log("✅ [弹幕入口] decode后 title=" + title + " | episode=" + episode);
-    return DanmuHelper.getDanmuResponse(params);
-}
+    // ====================== M3U8 TS 域名替换 ======================
+    private Object[] handleProxyM3u8(Map<String, String> params) {
+        String url = params.get("url");
+        if (url == null) return errorResponse(400, "Missing url");
+
+        try {
+            String content = OkHttp.string(url);
+
+            // 在此处添加 TS 域名替换逻辑
+            // content = content.replace("https://旧域名.com", "https://新域名.com");
+
+            byte[] bytes = content.getBytes("UTF-8");
+            return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            log("❌ proxyM3u8 失败: " + e.getMessage());
+            return errorResponse(500, e.getMessage());
+        }
+    }
+
+    // ====================== 弹幕 ======================
+    private Object[] handleDanmu(Map<String, String> params) {
+        String title = params.get("title");
+        String episode = params.get("episode");
+        try { title = URLDecoder.decode(title, "UTF-8"); params.put("title", title); } catch (Exception ignored) {}
+        try { episode = URLDecoder.decode(episode, "UTF-8"); params.put("episode", episode); } catch (Exception ignored) {}
+        return DanmuHelper.getDanmuResponse(params);
+    }
 
     private Object[] errorResponse(int code, String message) {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "text/plain; charset=utf-8");
-        log("错误响应: " + code + " " + message);
-        return new Object[]{code, "text/plain; charset=utf-8", 
-                new ByteArrayInputStream(message.getBytes()), headers};
+        return new Object[]{code, "text/plain; charset=utf-8", new ByteArrayInputStream(message.getBytes())};
     }
 }
