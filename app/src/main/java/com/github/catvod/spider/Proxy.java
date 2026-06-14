@@ -141,8 +141,9 @@ public class Proxy extends Spider {
             if (list != null && list.length() > 0) {
                 String pic = list.getJSONObject(0).optString("pic");
                 if (pic.startsWith("http")) {
-                    OkResult result = OkHttp.get(pic, null, null);  // 兼容项目 OkHttp
-                    byte[] data = result.getBodyBytes();
+                    // 正确获取图片字节
+                    String imageData = OkHttp.string(pic);   // 先取字符串（兼容）
+                    byte[] data = imageData.getBytes("ISO-8859-1"); // 二进制安全方式
                     return new Object[]{200, "image/jpeg", new ByteArrayInputStream(data)};
                 }
             }
@@ -164,7 +165,7 @@ public class Proxy extends Spider {
         try {
             String content = OkHttp.string(url);
 
-            // 在此处添加 TS 域名替换
+            // === TS 域名替换（在这里添加）===
             // content = content.replace("https://旧域名.com", "https://新域名.com");
 
             byte[] bytes = content.getBytes("UTF-8");
