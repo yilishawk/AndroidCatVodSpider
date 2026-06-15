@@ -65,7 +65,7 @@ public class Proxy {
 
         try {
             String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
-                    + URLEncoder.encode(title.trim(), "UTF-8");
+                + URLEncoder.encode(title.trim(), "UTF-8");
 
             String jsonStr = OkHttp.string(searchUrl);
             JSONObject obj = new JSONObject(jsonStr);
@@ -74,16 +74,16 @@ public class Proxy {
             if (list != null && list.length() > 0) {
                 String pic = list.getJSONObject(0).optString("pic");
                 if (pic.startsWith("http")) {
-                    String imageData = OkHttp.string(pic);
-                    byte[] data = imageData.getBytes("ISO-8859-1");
-                    return new Object[]{200, "image/jpeg", new ByteArrayInputStream(data)};
-                }
+                    okhttp3.Response resp = OkHttp.newCall(pic, new HashMap<>());
+                    String contentType = resp.header("Content-Type", "image/jpeg");
+                    return new Object[]{200, contentType, resp.body().byteStream()};
             }
-        } catch (Exception e) {
-            log("❌ getPoster 失败: " + e.getMessage());
         }
-        return defaultImage();
+    } catch (Exception e) {
+        log("❌ getPoster 失败: " + e.getMessage());
     }
+    return defaultImage();
+}
 
     private static Object[] defaultImage() {
         return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
