@@ -42,18 +42,20 @@ public class Proxy {
     }
 
     // 必须是 static，签名 Object[] proxy(Map<String,String>)，框架靠反射 invoke(null, params) 调用
-    public static Object[] proxy(Map<String, String> params) {
-        log("📨 [Proxy] 收到请求: " + params);
+     public static Object[] proxy(Map<String, String> params) {
         String action = params.get("do");
+
+        // 日志面板自身轮询请求不记录，避免刷屏
+        if ("logs".equals(action) || "kaige_debug".equals(action)) return handleLogsPage();
+        if ("get_logs".equals(action)) return handleGetLogs();
+        if ("clean".equals(action)) return handleClean();
+
+        log("📨 [Proxy] 收到请求: " + params);
 
         if ("getPoster".equals(action)) return handleGetPoster(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
-        if ("logs".equals(action)) return handleLogsPage();
-        if ("kaige_debug".equals(action)) return handleLogsPage();
-        if ("get_logs".equals(action)) return handleGetLogs();
-        if ("clean".equals(action)) return handleClean();
 
         return errorResponse(400, "Unknown action: " + action);
     }
