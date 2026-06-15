@@ -27,6 +27,9 @@ public class Wsyzy extends Spider {
     // 主接口：负责分类 + 列表 + 详情主线路
     private static final String MAIN_API = "https://api.wsyzy.net/api.php/provide/vod";
 
+    // 新增：专门用于全新搜索接口的地址
+    private static final String SEARCH_API = "https://api.wsyzy.net/index.php/ajax/suggest.html?mid=1";
+
     // 副接口：按标题并发搜索补充线路，方便以后追加
     private static final String[] EXTRA_APIS = {
             "https://caiji.xgzyapi.com/api.php/provide/vod",
@@ -35,9 +38,6 @@ public class Wsyzy extends Spider {
 
     // 主接口里这几个父分类查不到数据，homeContent 里过滤掉
     private static final Set<String> HIDE_TYPES = new HashSet<>(Arrays.asList("1", "2", "3", "4"));
-
-    // 每个副接口的超时时间（秒）
-    private static final int EXTRA_TIMEOUT = 3;
 
     @Override
     public String homeContent(boolean filter) throws Exception {
@@ -56,7 +56,6 @@ public class Wsyzy extends Spider {
             }
         }
 
-        // 修复：对齐新版 Result 链式调用
         return Result.get().classes(classes).string();
     }
 
@@ -72,12 +71,11 @@ public class Wsyzy extends Spider {
             }
         }
 
-        // 修复：对齐新版分页与列表链式调用
         return Result.get()
                 .page(
                     root.optInt("page", 1),
                     root.optInt("pagecount", 1),
-                    root.optInt("limit", 20), // 内部需要 int，转为 optInt 传递
+                    root.optInt("limit", 20),
                     root.optInt("total", vods.size())
                 )
                 .vod(vods)
@@ -122,12 +120,11 @@ public class Wsyzy extends Spider {
 
         for (Future<List<String[]>> f : futures) {
             try {
-                for (String[] pair : f.get(EXTRA_TIMEOUT, TimeUnit.SECONDS)) {
+                for (String[] pair : f.get(3, TimeUnit.SECONDS)) {
                     fromList.add(pair[0]);
                     urlList.add(pair[1]);
                 }
             } catch (Exception e) {
-                // 如果本地没有 Proxy.log 模块报错，可以换成 System.out.println
                 System.out.println("⚠️ [多源] 副接口超时/失败: " + e.getMessage());
             }
         }
@@ -139,7 +136,6 @@ public class Wsyzy extends Spider {
         List<Vod> resultVods = new ArrayList<>();
         resultVods.add(vod);
 
-        // 修复：对齐 .vod() 并直接转为 JSON 字符串返回
         return Result.get().vod(resultVods).string();
     }
 
@@ -148,7 +144,7 @@ public class Wsyzy extends Spider {
         String encodeKey = URLEncoder.encode(key, "UTF-8");
         List<Vod> vods = new ArrayList<>();
 
-        // 1. 尝试使用主接口进行搜索
+        // 1. 优先采用新搜索接口
         try {
             String url = SEARCH_API + "&wd=" + encodeKey;
             JSONObject root = new JSONObject(OkHttp.string(url));
@@ -163,10 +159,9 @@ public class Wsyzy extends Spider {
             System.out.println("⚠️ [主接口] 搜索失败或超时，准备启用副接口补救: " + e.getMessage());
         }
 
-        // 2. 判断：如果主接口失败或没搜到任何数据，则启用第一个副接口（EXTRA_APIS[0]）
+        // 2. 备用：主搜索如果什么都没拿到，换用第一个备用采集站接口搜
         if (vods.isEmpty() && EXTRA_APIS.length > 0) {
             try {
-                // 副接口通常是标准的采集口
                 String url = EXTRA_APIS[0] + "?ac=videolist&wd=" + encodeKey;
                 JSONObject root = new JSONObject(OkHttp.string(url));
                 JSONArray list = root.optJSONArray("list");
@@ -181,14 +176,11 @@ public class Wsyzy extends Spider {
             }
         }
 
-        // 3. 返回最终的搜索结果（可能是主接口的，也可能是副接口的）
         return Result.get().vod(vods).string();
     }
 
-
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 修复：对齐链式调用。旧版有 setPlayUrl，新版统一对齐成 .url(id) 即可
         return Result.get()
                 .parse(0)
                 .url(id)
@@ -197,6 +189,7 @@ public class Wsyzy extends Spider {
 
     // ====================== 内部辅助方法 ======================
 
+    // 转换普通采集格式的数据（含有 vod_id, vod_name 字段）
     private static Vod toVod(JSONObject item) {
         Vod vod = new Vod();
         vod.setVodId(item.optString("vod_id"));
@@ -206,7 +199,17 @@ public class Wsyzy extends Spider {
         return vod;
     }
 
-    // 拆分 vod_play_from / vod_play_url，过滤空项，可加前缀区分来源
+    // 新增：转换新搜索接口格式的数据（含有 id, name, pic 字段）
+    private static Vod searchToVod(JSONObject item) {
+        Vod vod = new Vod();
+        vod.setVodId(item.optString("id")); 
+        vod.setVodName(item.optString("name"));
+        vod.setVodPic(item.optString("pic"));
+        vod.setVodRemarks(""); 
+        return vod;
+    }
+
+    // 拆分 play_from 与 play_url
     private static void splitPlay(String playFrom, String playUrl, List<String> fromOut, List<String> urlOut, String prefix) {
         if (playFrom == null || playUrl == null) return;
 
@@ -223,7 +226,6 @@ public class Wsyzy extends Spider {
         }
     }
 
-    // 标题标准化：去空格、去掉末尾 (年份) 之类括号注释、转小写
     private static String normalize(String name) {
         if (name == null) return "";
         String s = name.trim();
@@ -232,7 +234,6 @@ public class Wsyzy extends Spider {
         return s.toLowerCase();
     }
 
-    // 在第 idx 个副接口里按标题精确匹配，命中后取其播放线路（带 [备N] 前缀）
     private static List<String[]> searchExtra(int idx, String title) {
         List<String[]> out = new ArrayList<>();
         try {
