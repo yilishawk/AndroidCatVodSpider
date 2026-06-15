@@ -1,6 +1,12 @@
 package com.github.catvod.spider;
 
+import android.util.Base64;
+
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Json;
+import com.github.catvod.utils.ProxyVideo;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -8,6 +14,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -42,7 +49,9 @@ public class Proxy {
         if ("getPoster".equals(action)) return handleGetPoster(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("danmu".equals(action)) return handleDanmu(params);
+        if ("proxy".equals(action)) return handleCommonProxy(params);
         if ("logs".equals(action)) return handleLogsPage();
+        if ("kaige_debug".equals(action)) return handleLogsPage();
         if ("get_logs".equals(action)) return handleGetLogs();
         if ("clean".equals(action)) return handleClean();
 
@@ -112,6 +121,26 @@ public class Proxy {
         matcher.appendTail(out);
 
         return out.toString();
+    }
+
+    // ====================== 通用带Header视频代理（ProxyVideo.buildCommonProxyUrl 用）======================
+    private static Object[] handleCommonProxy(Map<String, String> params) {
+        try {
+            String url = new String(Base64.decode(params.get("url"), Base64.DEFAULT), "UTF-8");
+            Map<String, String> headers = new HashMap<>();
+            String headerParam = params.get("header");
+            if (headerParam != null && !headerParam.isEmpty()) {
+                String headerJson = new String(Base64.decode(headerParam, Base64.DEFAULT), "UTF-8");
+                JsonObject obj = Json.safeObject(headerJson);
+                for (Map.Entry<String, JsonElement> e : obj.entrySet()) {
+                    headers.put(e.getKey(), e.getValue().getAsString());
+                }
+            }
+            return ProxyVideo.proxy(url, headers);
+        } catch (Exception e) {
+            log("❌ [proxy] 失败: " + e.getMessage());
+            return errorResponse(500, e.getMessage());
+        }
     }
 
     // ====================== 弹幕 ======================
