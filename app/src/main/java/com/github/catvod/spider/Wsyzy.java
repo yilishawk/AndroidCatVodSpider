@@ -51,16 +51,13 @@ public class Wsyzy extends Spider {
                 String tid = c.optString("type_id");
                 if (HIDE_TYPES.contains(tid)) continue;
 
-                Class cls = new Class();
-                cls.setTypeId(tid);
-                cls.setTypeName(c.optString("type_name"));
+                Class cls = new Class(tid, c.optString("type_name"));
                 classes.add(cls);
             }
         }
 
-        Result result = new Result();
-        result.setClasses(classes);
-        return result.string();
+        // 修复：对齐新版 Result 链式调用
+        return Result.get().classes(classes).string();
     }
 
     @Override
@@ -75,20 +72,23 @@ public class Wsyzy extends Spider {
             }
         }
 
-        Result result = new Result();
-        result.setList(vods);
-        result.setPage(root.optInt("page", 1));
-        result.setPagecount(root.optInt("pagecount", 1));
-        result.setLimit(root.optString("limit", "20"));
-        result.setTotal(root.optInt("total", vods.size()));
-        return result.string();
+        // 修复：对齐新版分页与列表链式调用
+        return Result.get()
+                .page(
+                    root.optInt("page", 1),
+                    root.optInt("pagecount", 1),
+                    root.optInt("limit", 20), // 内部需要 int，转为 optInt 传递
+                    root.optInt("total", vods.size())
+                )
+                .vod(vods)
+                .string();
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
         JSONObject root = new JSONObject(OkHttp.string(MAIN_API + "?ac=detail&ids=" + ids.get(0)));
         JSONArray list = root.optJSONArray("list");
-        if (list == null || list.length() == 0) return new Result().string();
+        if (list == null || list.length() == 0) return Result.get().string();
 
         JSONObject item = list.getJSONObject(0);
         String title = item.optString("vod_name");
@@ -127,7 +127,8 @@ public class Wsyzy extends Spider {
                     urlList.add(pair[1]);
                 }
             } catch (Exception e) {
-                Proxy.log("⚠️ [多源] 副接口超时/失败: " + e.getMessage());
+                // 如果本地没有 Proxy.log 模块报错，可以换成 System.out.println
+                System.out.println("⚠️ [多源] 副接口超时/失败: " + e.getMessage());
             }
         }
         pool.shutdownNow();
@@ -135,12 +136,11 @@ public class Wsyzy extends Spider {
         vod.setVodPlayFrom(String.join("$$$", fromList));
         vod.setVodPlayUrl(String.join("$$$", urlList));
 
-        List<Vod> result = new ArrayList<>();
-        result.add(vod);
+        List<Vod> resultVods = new ArrayList<>();
+        resultVods.add(vod);
 
-        Result r = new Result();
-        r.setList(result);
-        return r.string();
+        // 修复：对齐 .vod() 并直接转为 JSON 字符串返回
+        return Result.get().vod(resultVods).string();
     }
 
     @Override
@@ -155,18 +155,17 @@ public class Wsyzy extends Spider {
             }
         }
 
-        Result result = new Result();
-        result.setList(vods);
-        return result.string();
+        // 修复：对齐链式调用
+        return Result.get().vod(vods).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        Result result = new Result();
-        result.setParse(0);
-        result.setPlayUrl("");
-        result.setUrl(id);
-        return result.string();
+        // 修复：对齐链式调用。旧版有 setPlayUrl，新版统一对齐成 .url(id) 即可
+        return Result.get()
+                .parse(0)
+                .url(id)
+                .string();
     }
 
     // ====================== 内部辅助方法 ======================
@@ -239,7 +238,7 @@ public class Wsyzy extends Spider {
                 out.add(new String[]{fromOut.get(k), urlOut.get(k)});
             }
         } catch (Exception e) {
-            Proxy.log("❌ [多源] 副接口" + (idx + 1) + " 查询异常: " + e.getMessage());
+            System.out.println("❌ [多源] 副接口" + (idx + 1) + " 查询异常: " + e.getMessage());
         }
         return out;
     }
