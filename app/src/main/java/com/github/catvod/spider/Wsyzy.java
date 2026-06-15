@@ -145,19 +145,46 @@ public class Wsyzy extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        JSONObject root = new JSONObject(OkHttp.string(MAIN_API + "?ac=videolist&wd=" + URLEncoder.encode(key, "UTF-8")));
-        JSONArray list = root.optJSONArray("list");
-
+        String encodeKey = URLEncoder.encode(key, "UTF-8");
         List<Vod> vods = new ArrayList<>();
-        if (list != null) {
-            for (int i = 0; i < list.length(); i++) {
-                vods.add(toVod(list.getJSONObject(i)));
+
+        // 1. 尝试使用主接口进行搜索
+        try {
+            String url = SEARCH_API + "&wd=" + encodeKey;
+            JSONObject root = new JSONObject(OkHttp.string(url));
+            JSONArray list = root.optJSONArray("list");
+            
+            if (list != null && list.length() > 0) {
+                for (int i = 0; i < list.length(); i++) {
+                    vods.add(searchToVod(list.getJSONObject(i)));
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("⚠️ [主接口] 搜索失败或超时，准备启用副接口补救: " + e.getMessage());
+        }
+
+        // 2. 判断：如果主接口失败或没搜到任何数据，则启用第一个副接口（EXTRA_APIS[0]）
+        if (vods.isEmpty() && EXTRA_APIS.length > 0) {
+            try {
+                // 副接口通常是标准的采集口
+                String url = EXTRA_APIS[0] + "?ac=videolist&wd=" + encodeKey;
+                JSONObject root = new JSONObject(OkHttp.string(url));
+                JSONArray list = root.optJSONArray("list");
+                
+                if (list != null) {
+                    for (int i = 0; i < list.length(); i++) {
+                        vods.add(toVod(list.getJSONObject(i)));
+                    }
+                }
+            } catch (Exception e) {
+                System.out.println("❌ [备用副接口] 搜索也失败: " + e.getMessage());
             }
         }
 
-        // 修复：对齐链式调用
+        // 3. 返回最终的搜索结果（可能是主接口的，也可能是副接口的）
         return Result.get().vod(vods).string();
     }
+
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
