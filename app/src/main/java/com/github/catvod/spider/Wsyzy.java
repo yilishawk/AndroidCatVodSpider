@@ -1,3 +1,4 @@
+```java
 package com.github.catvod.spider;
 
 import com.github.catvod.bean.Class;
@@ -36,12 +37,12 @@ public class Wsyzy extends Spider {
 
     // 副接口列表：要加新源只需在这里追加一行
     // SearchMode.PROVIDE_VOD → ?ac=videolist&wd=  （标准苹果CMS采集接口）
-    // SearchMode.SUGGEST     → /index.php/ajax/suggest.html?mid=1&wd=  （suggest接口）
+    // SearchMode.SUGGEST     → /index.php/ajax/suggest.html?mid=1&wd=  （suggest接口，baseUrl填根域名）
     private static final ExtraSource[] SOURCES = {
-            new ExtraSource("备1", "https://caiji.xgzyapi.com/api.php/provide/vod",                    SearchMode.PROVIDE_VOD),
-            new ExtraSource("备2", "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8",     SearchMode.PROVIDE_VOD),
-            // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                           SearchMode.PROVIDE_VOD),
-            // new ExtraSource("备4", "https://yyy.com",                                               SearchMode.SUGGEST),
+            new ExtraSource("备1", "https://caiji.xgzyapi.com/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
+            new ExtraSource("备2", "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8", SearchMode.PROVIDE_VOD),
+            // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                       SearchMode.PROVIDE_VOD),
+            // new ExtraSource("备4", "https://yyy.com",                                           SearchMode.SUGGEST),
     };
 
     // 主接口父分类（无数据），homeContent 里过滤掉
@@ -63,17 +64,15 @@ public class Wsyzy extends Spider {
     // ==================== 配置区 结束 =======================
     // ========================================================
 
-    // 搜索模式枚举
     private enum SearchMode {
-        PROVIDE_VOD,  // 标准 ?ac=videolist&wd=
-        SUGGEST       // /index.php/ajax/suggest.html?mid=1&wd=
+        PROVIDE_VOD,
+        SUGGEST
     }
 
-    // 副接口配置类
     private static class ExtraSource {
-        final String label;    // 线路前缀，如 "备1"
-        final String baseUrl;  // 接口根地址
-        final SearchMode mode; // 搜索方式
+        final String label;
+        final String baseUrl;
+        final SearchMode mode;
 
         ExtraSource(String label, String baseUrl, SearchMode mode) {
             this.label = label;
@@ -114,9 +113,9 @@ public class Wsyzy extends Spider {
         List<Vod> vods = new ArrayList<>();
         if (list != null) {
             for (int i = 0; i < list.length(); i++) {
-                Vod v = toVod(list.getJSONObject(i));
-                if (isBlocked(v.getVodName())) continue;
-                vods.add(v);
+                JSONObject item = list.getJSONObject(i);
+                if (isBlocked(item.optString("vod_name"))) continue;
+                vods.add(toVod(item));
             }
         }
 
@@ -191,9 +190,9 @@ public class Wsyzy extends Spider {
             JSONArray list = root.optJSONArray("list");
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
-                    Vod v = searchToVod(list.getJSONObject(i));
-                    if (isBlocked(v.getVodName())) continue;
-                    vods.add(v);
+                    JSONObject it = list.getJSONObject(i);
+                    if (isBlocked(it.optString("name"))) continue;
+                    vods.add(searchToVod(it));
                 }
             }
         } catch (Exception e) {
@@ -207,9 +206,9 @@ public class Wsyzy extends Spider {
                 JSONArray list = root.optJSONArray("list");
                 if (list != null) {
                     for (int i = 0; i < list.length(); i++) {
-                        Vod v = toVod(list.getJSONObject(i));
-                        if (isBlocked(v.getVodName())) continue;
-                        vods.add(v);
+                        JSONObject it = list.getJSONObject(i);
+                        if (isBlocked(it.optString("vod_name"))) continue;
+                        vods.add(toVod(it));
                     }
                 }
             } catch (Exception e) {
@@ -229,7 +228,6 @@ public class Wsyzy extends Spider {
     // ==================== 内部辅助方法 ======================
     // ========================================================
 
-    // 检查名称是否含成人内容关键词
     private static boolean isBlocked(String name) {
         if (name == null || name.isEmpty()) return false;
         for (String kw : BLOCK_KEYWORDS) {
@@ -238,14 +236,12 @@ public class Wsyzy extends Spider {
         return false;
     }
 
-    // 检查单条播放 url 是否为直链（m3u8/mp4）
     private static boolean isDirectLink(String url) {
         if (url == null || url.isEmpty()) return false;
         String lower = url.toLowerCase();
         return lower.contains(".m3u8") || lower.contains(".mp4");
     }
 
-    // 拆分 play_from / play_url，按 BLOCK_CLOUD 过滤云播，可加前缀
     private static void splitPlay(String playFrom, String playUrl,
                                   List<String> fromOut, List<String> urlOut, String prefix) {
         if (playFrom == null || playUrl == null) return;
@@ -259,7 +255,6 @@ public class Wsyzy extends Spider {
             if (from.isEmpty() || episodes.isEmpty()) continue;
 
             if (BLOCK_CLOUD) {
-                // 过滤：该线路所有分集都不含直链则整条线路丢弃
                 String[] epArr = episodes.split("#");
                 boolean hasDirectEp = false;
                 for (String ep : epArr) {
@@ -275,7 +270,6 @@ public class Wsyzy extends Spider {
         }
     }
 
-    // 标准采集接口格式 → Vod
     private static Vod toVod(JSONObject item) {
         Vod vod = new Vod();
         vod.setVodId(item.optString("vod_id"));
@@ -285,7 +279,6 @@ public class Wsyzy extends Spider {
         return vod;
     }
 
-    // suggest 接口格式（id/name/pic）→ Vod
     private static Vod searchToVod(JSONObject item) {
         Vod vod = new Vod();
         vod.setVodId(item.optString("id"));
@@ -295,7 +288,6 @@ public class Wsyzy extends Spider {
         return vod;
     }
 
-    // 标题标准化：去空格、去末尾括号注释、转小写
     private static String normalize(String name) {
         if (name == null) return "";
         String s = name.trim().replaceAll("[\\s　]+", "");
@@ -303,7 +295,6 @@ public class Wsyzy extends Spider {
         return s.toLowerCase();
     }
 
-    // 在第 idx 个副接口里按标题匹配，返回 [from, url] 对列表
     private static List<String[]> searchExtra(int idx, String title) {
         List<String[]> out = new ArrayList<>();
         ExtraSource src = SOURCES[idx];
@@ -313,7 +304,6 @@ public class Wsyzy extends Spider {
             String matchId = null;
 
             if (src.mode == SearchMode.SUGGEST) {
-                // suggest 接口：baseUrl 本身就是完整根路径，拼 /index.php/ajax/suggest.html
                 String suggestUrl = src.baseUrl + "/index.php/ajax/suggest.html?mid=1&wd=" + wd;
                 JSONObject obj = new JSONObject(OkHttp.string(suggestUrl));
                 JSONArray list = obj.optJSONArray("list");
@@ -326,7 +316,6 @@ public class Wsyzy extends Spider {
                         }
                     }
                 }
-                // suggest 命中后，用该 CMS 的 provide/vod 拉详情
                 if (matchId != null) {
                     String detailBase = src.baseUrl + "/api.php/provide/vod";
                     JSONObject dObj = new JSONObject(OkHttp.string(detailBase + "?ac=detail&ids=" + matchId));
@@ -341,7 +330,6 @@ public class Wsyzy extends Spider {
                 }
 
             } else {
-                // PROVIDE_VOD：标准 ?ac=videolist&wd=
                 JSONObject obj = new JSONObject(OkHttp.string(src.baseUrl + "?ac=videolist&wd=" + wd));
                 JSONArray list = obj.optJSONArray("list");
                 if (list != null) {
@@ -371,3 +359,4 @@ public class Wsyzy extends Spider {
         return out;
     }
 }
+```
