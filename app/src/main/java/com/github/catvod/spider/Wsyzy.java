@@ -1,4 +1,3 @@
-```java
 package com.github.catvod.spider;
 
 import com.github.catvod.bean.Class;
@@ -359,4 +358,3 @@ public class Wsyzy extends Spider {
         return out;
     }
 }
-```
