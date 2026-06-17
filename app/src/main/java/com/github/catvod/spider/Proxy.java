@@ -21,7 +21,7 @@ import java.util.regex.Pattern;
 
 public class Proxy {
 
-    private static final int PROXY_PORT = 9978; // 框架本地服务器端口（绝大多数情况固定为9978）
+    private static final int PROXY_PORT = 9978;
 
     private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
@@ -41,11 +41,9 @@ public class Proxy {
           .append("<span class='msg'>").append(msg).append("</span></div>");
     }
 
-    // 必须是 static，签名 Object[] proxy(Map<String,String>)，框架靠反射 invoke(null, params) 调用
-     public static Object[] proxy(Map<String, String> params) {
+    public static Object[] proxy(Map<String, String> params) {
         String action = params.get("do");
 
-        // 日志面板自身轮询请求不记录，避免刷屏
         if ("logs".equals(action) || "kaige_debug".equals(action)) return handleLogsPage();
         if ("get_logs".equals(action)) return handleGetLogs();
         if ("clean".equals(action)) return handleClean();
@@ -60,14 +58,52 @@ public class Proxy {
         return errorResponse(400, "Unknown action: " + action);
     }
 
+    // ====================== 搜索词标准化 ======================
+
+    private static String normalizeSearchTitle(String title) {
+        if (title == null) return "";
+        String s = title.trim();
+
+        // 阿拉伯数字季 → 中文季，例：第3季 → 第三季
+        Pattern seasonPattern = Pattern.compile("第([0-9]+)季");
+        Matcher seasonMatcher = seasonPattern.matcher(s);
+        StringBuffer seasonBuf = new StringBuffer();
+        while (seasonMatcher.find()) {
+            int num = Integer.parseInt(seasonMatcher.group(1));
+            seasonMatcher.appendReplacement(seasonBuf, "第" + toChineseNum(num) + "季");
+        }
+        seasonMatcher.appendTail(seasonBuf);
+        s = seasonBuf.toString();
+
+        // 括号语言标注替换
+        s = s.replaceAll("[(（]粤[)）]", "粤语版");
+        s = s.replaceAll("[(（]国[)）]", "国语版");
+        s = s.replaceAll("[(（]英[)）]", "英语版");
+        s = s.replaceAll("[(（]日[)）]", "日语版");
+        s = s.replaceAll("[(（]韩[)）]", "韩语版");
+
+        return s;
+    }
+
+    private static String toChineseNum(int n) {
+        String[] chinese = {
+            "零","一","二","三","四","五","六","七","八","九","十",
+            "十一","十二","十三","十四","十五","十六","十七","十八","十九","二十"
+        };
+        if (n >= 0 && n < chinese.length) return chinese[n];
+        return String.valueOf(n);
+    }
+
     // ====================== 图片代理 ======================
+
     private static Object[] handleGetPoster(Map<String, String> params) {
         String title = params.get("title");
         if (title == null || title.trim().isEmpty()) return defaultImage();
+        title = normalizeSearchTitle(title);
 
         try {
             String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
-                + URLEncoder.encode(title.trim(), "UTF-8");
+                    + URLEncoder.encode(title.trim(), "UTF-8");
 
             String jsonStr = OkHttp.string(searchUrl);
             JSONObject obj = new JSONObject(jsonStr);
@@ -79,19 +115,20 @@ public class Proxy {
                     okhttp3.Response resp = OkHttp.newCall(pic, new HashMap<>());
                     String contentType = resp.header("Content-Type", "image/jpeg");
                     return new Object[]{200, contentType, resp.body().byteStream()};
+                }
             }
+        } catch (Exception e) {
+            log("❌ getPoster 失败: " + e.getMessage());
         }
-    } catch (Exception e) {
-        log("❌ getPoster 失败: " + e.getMessage());
+        return defaultImage();
     }
-    return defaultImage();
-}
 
     private static Object[] defaultImage() {
         return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
     }
 
     // ====================== M3U8 TS 域名替换 ======================
+
     private static Object[] handleProxyM3u8(Map<String, String> params) {
         String url = params.get("url");
         if (url == null) return errorResponse(400, "Missing url");
@@ -125,7 +162,8 @@ public class Proxy {
         return out.toString();
     }
 
-    // ====================== 通用带Header视频代理（ProxyVideo.buildCommonProxyUrl 用）======================
+    // ====================== 通用带Header视频代理 ======================
+
     private static Object[] handleCommonProxy(Map<String, String> params) {
         try {
             String url = new String(Base64.decode(params.get("url"), Base64.DEFAULT), "UTF-8");
@@ -146,6 +184,7 @@ public class Proxy {
     }
 
     // ====================== 弹幕 ======================
+
     private static Object[] handleDanmu(Map<String, String> params) {
         String title = params.get("title");
         String episode = params.get("episode");
@@ -154,7 +193,8 @@ public class Proxy {
         return DanmuHelper.getDanmuResponse(params);
     }
 
-    // ====================== 日志面板（浏览器访问 getUrl()+"?do=logs"） ======================
+    // ====================== 日志面板 ======================
+
     private static Object[] handleLogsPage() {
         String html = "<html><head><meta charset='utf-8'><style>" +
                 "body{background:#fff;color:#000;font-family:monospace;font-size:12px;margin:0;padding:10px;}" +
