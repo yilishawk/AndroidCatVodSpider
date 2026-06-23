@@ -222,29 +222,35 @@ public class AiGua extends Spider {
         return Result.get().vod(vod).string();
     }
 
-    // 超快线路域名缓存
-    private volatile String fastDomainCache = null;
-
     /**
-     * 从 refresh-cate 列表里取第一条有 resource_url["21"] 的域名。
-     * 例：https://cfav103.orangecloudapi.com/20260531/xxx/index.m3u8
-     *   → https://cfav103.orangecloudapi.com
+     * 访问 refresh-cate 第一页，遍历 list 找第一条 resource_url["21"] 非空的条目，
+     * 返回其域名部分（https://xxx.xxx.com），找不到返回 null。
+     *
+     * resource_url 结构示例：
+     *   { "1": "https://cf103.yfvodcdn.com/20260531/xxx/index.m3u8",
+     *     "21": "https://cfav103.orangecloudapi.com/20260531/xxx/index.m3u8" }
      */
-    private String getFastDomain() {
-        if (fastDomainCache != null) return fastDomainCache;
+    private String fetchFastDomain() {
         try {
             String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
-            JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
+            JSONObject root = new JSONObject(resp);
+            JSONArray  list = root.getJSONObject("data").getJSONArray("list");
             for (int i = 0; i < list.length(); i++) {
-                JSONObject resUrl = list.getJSONObject(i).optJSONObject("resource_url");
+                JSONObject item   = list.getJSONObject(i);
+                // resource_url 可能是 JSONObject 或已序列化的 String，两种都处理
+                JSONObject resUrl = null;
+                Object raw = item.opt("resource_url");
+                if (raw instanceof JSONObject) {
+                    resUrl = (JSONObject) raw;
+                } else if (raw instanceof String) {
+                    try { resUrl = new JSONObject((String) raw); } catch (Exception ignored) {}
+                }
                 if (resUrl == null) continue;
                 String url21 = resUrl.optString("21", "");
                 if (url21.isEmpty()) continue;
+                // 截取 "https://domain" 部分
                 int slash = url21.indexOf("/", 8);
-                if (slash > 0) {
-                    fastDomainCache = url21.substring(0, slash);
-                    return fastDomainCache;
-                }
+                if (slash > 0) return url21.substring(0, slash);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -254,8 +260,9 @@ public class AiGua extends Spider {
 
     /**
      * id 格式：videoId|chapterId
-     * 普快：直接用 play-url 返回的 resource_url
-     * 超快：普快路径 + refresh-cate 里的 "21" 域名拼合
+     * 普快：play-url sourceId=1 → 直接返回 resource_url
+     * 超快：play-url sourceId=1 拿路径，再从 refresh-cate 取 "21" 域名拼合；
+     *       若取域名失败则 fallback 直接用 play-url sourceId=21
      * 均添加 Referer: https://aigua8.com/
      */
     @Override
@@ -264,27 +271,44 @@ public class AiGua extends Spider {
         String   videoId   = parts[0];
         String   chapterId = parts[1];
 
-        // 始终用 sourceId=1 拿真实路径
+        boolean isFast = "超快线路".equals(flag);
+
+        // 普快：sourceId=1 直接用
         String apiUrl = API_PLAY
                 + "?citycode=AMS"
                 + "&page=detail"
                 + "&chapterId=" + chapterId
                 + "&videoId="   + videoId
                 + "&sourceId=1";
-
         String resp    = OkHttp.string(apiUrl, headers());
         String baseUrl = new JSONObject(resp)
                 .getJSONObject("data")
                 .getJSONObject("urlinfo")
                 .getString("resource_url");
-        // baseUrl 示例：https://cf103.yfvodcdn.com/20260531/7RA7ZBAT/index.m3u8
+        // 例：https://cf103.yfvodcdn.com/20260531/7RA7ZBAT/index.m3u8
 
         String finalUrl = baseUrl;
-        if ("超快线路".equals(flag)) {
-            String domain21 = getFastDomain();
+        if (isFast) {
+            String domain21 = fetchFastDomain();
             if (domain21 != null) {
+                // 只替换域名，保留路径不变
                 int pathStart = baseUrl.indexOf("/", 8);
-                if (pathStart > 0) finalUrl = domain21 + baseUrl.substring(pathStart);
+                if (pathStart > 0) {
+                    finalUrl = domain21 + baseUrl.substring(pathStart);
+                }
+            } else {
+                // fallback：直接用 sourceId=21 的 play-url
+                String apiUrl21 = API_PLAY
+                        + "?citycode=AMS"
+                        + "&page=detail"
+                        + "&chapterId=" + chapterId
+                        + "&videoId="   + videoId
+                        + "&sourceId=21";
+                String resp21 = OkHttp.string(apiUrl21, headers());
+                finalUrl = new JSONObject(resp21)
+                        .getJSONObject("data")
+                        .getJSONObject("urlinfo")
+                        .getString("resource_url");
             }
         }
 
@@ -293,13 +317,78 @@ public class AiGua extends Spider {
         return Result.get().url(finalUrl).header(referer).string();
     }
 
+    private static final String API_SEARCH = HOST + "/video/refresh-video";
+
+    /**
+     * 解析搜索结果 HTML，每条 .SSbox 对应一个视频。
+     * 封面用 img[originalSrc]（懒加载真实地址），标题从 .SSjgName a span 拼接，
+     * 备注用年份 + 主演首位。
+     */
+    private List<Vod> parseSearchHtml(String html) {
+        List<Vod> list = new ArrayList<>();
+        Document  doc  = Jsoup.parse(html);
+        for (Element box : doc.select(".SSbox")) {
+            // video_id
+            String href = box.select("a.SSjgImg").attr("href");
+            // href = "/video/detail?video_id=223864"
+            String videoId = "";
+            int idx = href.indexOf("video_id=");
+            if (idx >= 0) videoId = href.substring(idx + 9);
+            if (videoId.isEmpty()) continue;
+
+            // 封面（懒加载，真实 src 在 originalSrc）
+            String pic = box.select("img[originalSrc]").attr("originalSrc");
+
+            // 标题：.SSjgName a 下所有 span 的文字拼合（排除空 span）
+            StringBuilder title = new StringBuilder();
+            for (Element span : box.select(".SSjgName a span")) {
+                String t = span.text().trim();
+                if (!t.isEmpty()) title.append(t);
+            }
+
+            // 年份 + 主演首位 → 备注
+            String year    = "";
+            String actors  = "";
+            for (Element p : box.select(".SSjg > p")) {
+                String text = p.text().trim();
+                if (text.startsWith("年份")) year   = text.replaceFirst("年份：?\s*", "").trim();
+                if (text.startsWith("主演")) actors = p.select("span").first() != null
+                        ? p.select("span").first().text().trim() : "";
+            }
+            String remarks = year.isEmpty() ? actors : (actors.isEmpty() ? year : year + " " + actors);
+
+            Vod vod = new Vod();
+            vod.setVodId(videoId);
+            vod.setVodName(title.toString());
+            vod.setVodPic(pic);
+            vod.setVodRemarks(remarks);
+            list.add(vod);
+        }
+        return list;
+    }
+
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        return Result.get().vod(Collections.emptyList()).string();
+        return searchContent(key, quick, "1");
     }
 
     @Override
     public String searchContent(String key, boolean quick, String pg) throws Exception {
-        return Result.get().vod(Collections.emptyList()).string();
+        int page = pg == null || pg.isEmpty() ? 1 : Integer.parseInt(pg);
+        String url = API_SEARCH
+                + "?page_num="  + page
+                + "&sorttype=desc"
+                + "&page_size=24"
+                + "&tvNum=7"
+                + "&sort=new"
+                + "&keyword="   + java.net.URLEncoder.encode(key, "UTF-8");
+        String     html = OkHttp.string(url, headers());
+        List<Vod>  list = parseSearchHtml(html);
+        // 搜索结果 HTML 不提供总页数，有结果就允许翻页
+        int total = list.isEmpty() ? 0 : page * 24 + 1;
+        return Result.get()
+                .page(page, page + (list.isEmpty() ? 0 : 1), 24, total)
+                .vod(list)
+                .string();
     }
 }
