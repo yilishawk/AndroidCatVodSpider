@@ -351,7 +351,7 @@ public class AiGua extends Spider {
             String actors  = "";
             for (Element p : box.select(".SSjg > p")) {
                 String text = p.text().trim();
-                if (text.startsWith("年份")) year   = text.replaceFirst("年份：?\s*", "").trim();
+                if (text.startsWith("年份")) year   = text.replaceFirst("年份：?", "").trim();
                 if (text.startsWith("主演")) actors = p.select("span").first() != null
                         ? p.select("span").first().text().trim() : "";
             }
