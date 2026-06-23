@@ -43,6 +43,8 @@ public class AiGua extends Spider {
 
     // filters 必须是 LinkedHashMap 才能传给 Result.filters()
     private final LinkedHashMap<String, List<Filter>> filterCache = new LinkedHashMap<>();
+    // 超快线路 CDN 域名，homeContent 时缓存，playerContent 直接使用
+    private String fastDomain = null;
 
     // ------------------------------------------------------------------ 工具
 
@@ -164,8 +166,30 @@ public class AiGua extends Spider {
             exec.shutdown();
         }
 
-        String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
-        JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
+        String     resp     = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
+        JSONObject homeData = new JSONObject(resp).getJSONObject("data");
+        JSONArray  list     = homeData.getJSONArray("list");
+
+        // 顺手从同一个响应里提取超快域名并缓存
+        if (fastDomain == null) {
+            JSONArray homeList = homeData.getJSONArray("list");
+            outer:
+            for (int i = 0; i < homeList.length(); i++) {
+                JSONObject item = homeList.getJSONObject(i);
+                JSONObject resUrl = null;
+                Object raw = item.opt("resource_url");
+                if (raw instanceof JSONObject) {
+                    resUrl = (JSONObject) raw;
+                } else if (raw instanceof String) {
+                    try { resUrl = new JSONObject((String) raw); } catch (Exception ignored) {}
+                }
+                if (resUrl == null) continue;
+                String url21 = resUrl.optString("21", "");
+                if (url21.isEmpty()) continue;
+                int slash = url21.indexOf("/", 8);
+                if (slash > 0) { fastDomain = url21.substring(0, slash); break outer; }
+            }
+        }
 
         return Result.get()
                 .classes(classes)
@@ -223,46 +247,10 @@ public class AiGua extends Spider {
     }
 
     /**
-     * 访问 refresh-cate 第一页，遍历 list 找第一条 resource_url["21"] 非空的条目，
-     * 返回其域名部分（https://xxx.xxx.com），找不到返回 null。
-     *
-     * resource_url 结构示例：
-     *   { "1": "https://cf103.yfvodcdn.com/20260531/xxx/index.m3u8",
-     *     "21": "https://cfav103.orangecloudapi.com/20260531/xxx/index.m3u8" }
-     */
-    private String fetchFastDomain() {
-        try {
-            String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
-            JSONObject root = new JSONObject(resp);
-            JSONArray  list = root.getJSONObject("data").getJSONArray("list");
-            for (int i = 0; i < list.length(); i++) {
-                JSONObject item   = list.getJSONObject(i);
-                // resource_url 可能是 JSONObject 或已序列化的 String，两种都处理
-                JSONObject resUrl = null;
-                Object raw = item.opt("resource_url");
-                if (raw instanceof JSONObject) {
-                    resUrl = (JSONObject) raw;
-                } else if (raw instanceof String) {
-                    try { resUrl = new JSONObject((String) raw); } catch (Exception ignored) {}
-                }
-                if (resUrl == null) continue;
-                String url21 = resUrl.optString("21", "");
-                if (url21.isEmpty()) continue;
-                // 截取 "https://domain" 部分
-                int slash = url21.indexOf("/", 8);
-                if (slash > 0) return url21.substring(0, slash);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    /**
      * id 格式：videoId|chapterId
      * 普快：play-url sourceId=1 → 直接返回 resource_url
-     * 超快：play-url sourceId=1 拿路径，再从 refresh-cate 取 "21" 域名拼合；
-     *       若取域名失败则 fallback 直接用 play-url sourceId=21
+     * 超快：用 homeContent 缓存的 fastDomain 替换域名；
+     *       若 fastDomain 为空（未经过 home 页）则 fallback 用 sourceId=21 的 play-url
      * 均添加 Referer: https://aigua8.com/
      */
     @Override
@@ -273,7 +261,7 @@ public class AiGua extends Spider {
 
         boolean isFast = "超快线路".equals(flag);
 
-        // 普快：sourceId=1 直接用
+        // 始终先用 sourceId=1 拿真实路径
         String apiUrl = API_PLAY
                 + "?citycode=AMS"
                 + "&page=detail"
@@ -289,15 +277,12 @@ public class AiGua extends Spider {
 
         String finalUrl = baseUrl;
         if (isFast) {
-            String domain21 = fetchFastDomain();
-            if (domain21 != null) {
-                // 只替换域名，保留路径不变
+            if (fastDomain != null && !fastDomain.isEmpty()) {
+                // 只换域名，路径不变
                 int pathStart = baseUrl.indexOf("/", 8);
-                if (pathStart > 0) {
-                    finalUrl = domain21 + baseUrl.substring(pathStart);
-                }
+                if (pathStart > 0) finalUrl = fastDomain + baseUrl.substring(pathStart);
             } else {
-                // fallback：直接用 sourceId=21 的 play-url
+                // fastDomain 未缓存（跳过了 home 页直接播放），fallback 调 sourceId=21
                 String apiUrl21 = API_PLAY
                         + "?citycode=AMS"
                         + "&page=detail"
