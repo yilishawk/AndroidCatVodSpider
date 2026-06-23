@@ -81,7 +81,6 @@ public class AiGua extends Spider {
             vod.setVodName(o.optString("video_name"));
             vod.setVodPic(o.optString("cover"));
             vod.setVodRemarks(o.optString("flag"));
-            vod.setVodScore(o.optString("score"));
             list.add(vod);
         }
         return list;
