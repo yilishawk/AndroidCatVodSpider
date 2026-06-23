@@ -222,8 +222,41 @@ public class AiGua extends Spider {
         return Result.get().vod(vod).string();
     }
 
+    // 超快线路域名缓存
+    private volatile String fastDomainCache = null;
+
     /**
-     * flag：线路名 → sourceId；id：videoId|chapterId
+     * 从 refresh-cate 列表里取第一条有 resource_url["21"] 的域名。
+     * 例：https://cfav103.orangecloudapi.com/20260531/xxx/index.m3u8
+     *   → https://cfav103.orangecloudapi.com
+     */
+    private String getFastDomain() {
+        if (fastDomainCache != null) return fastDomainCache;
+        try {
+            String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
+            JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject resUrl = list.getJSONObject(i).optJSONObject("resource_url");
+                if (resUrl == null) continue;
+                String url21 = resUrl.optString("21", "");
+                if (url21.isEmpty()) continue;
+                int slash = url21.indexOf("/", 8);
+                if (slash > 0) {
+                    fastDomainCache = url21.substring(0, slash);
+                    return fastDomainCache;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * id 格式：videoId|chapterId
+     * 普快：直接用 play-url 返回的 resource_url
+     * 超快：普快路径 + refresh-cate 里的 "21" 域名拼合
+     * 均添加 Referer: https://aigua8.com/
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
@@ -231,25 +264,33 @@ public class AiGua extends Spider {
         String   videoId   = parts[0];
         String   chapterId = parts[1];
 
-        String sourceId = SOURCE_IDS[0];
-        for (int k = 0; k < SOURCE_NAMES.length; k++) {
-            if (SOURCE_NAMES[k].equals(flag)) { sourceId = SOURCE_IDS[k]; break; }
-        }
-
-        String url = API_PLAY
+        // 始终用 sourceId=1 拿真实路径
+        String apiUrl = API_PLAY
                 + "?citycode=AMS"
                 + "&page=detail"
                 + "&chapterId=" + chapterId
                 + "&videoId="   + videoId
-                + "&sourceId="  + sourceId;
+                + "&sourceId=1";
 
-        String resp        = OkHttp.string(url, headers());
-        String resourceUrl = new JSONObject(resp)
+        String resp    = OkHttp.string(apiUrl, headers());
+        String baseUrl = new JSONObject(resp)
                 .getJSONObject("data")
                 .getJSONObject("urlinfo")
                 .getString("resource_url");
+        // baseUrl 示例：https://cf103.yfvodcdn.com/20260531/7RA7ZBAT/index.m3u8
 
-        return Result.get().url(resourceUrl).string();
+        String finalUrl = baseUrl;
+        if ("超快线路".equals(flag)) {
+            String domain21 = getFastDomain();
+            if (domain21 != null) {
+                int pathStart = baseUrl.indexOf("/", 8);
+                if (pathStart > 0) finalUrl = domain21 + baseUrl.substring(pathStart);
+            }
+        }
+
+        Map<String, String> referer = new HashMap<>();
+        referer.put("Referer", HOST + "/");
+        return Result.get().url(finalUrl).header(referer).string();
     }
 
     @Override
