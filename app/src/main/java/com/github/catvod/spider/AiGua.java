@@ -43,8 +43,6 @@ public class AiGua extends Spider {
 
     // filters 必须是 LinkedHashMap 才能传给 Result.filters()
     private final LinkedHashMap<String, List<Filter>> filterCache = new LinkedHashMap<>();
-    // 超快线路 CDN 域名，homeContent 时缓存，playerContent 直接使用
-    private String fastDomain = null;
 
     // ------------------------------------------------------------------ 工具
 
@@ -166,30 +164,8 @@ public class AiGua extends Spider {
             exec.shutdown();
         }
 
-        String     resp     = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
-        JSONObject homeData = new JSONObject(resp).getJSONObject("data");
-        JSONArray  list     = homeData.getJSONArray("list");
-
-        // 顺手从同一个响应里提取超快域名并缓存
-        if (fastDomain == null) {
-            JSONArray homeList = homeData.getJSONArray("list");
-            outer:
-            for (int i = 0; i < homeList.length(); i++) {
-                JSONObject item = homeList.getJSONObject(i);
-                JSONObject resUrl = null;
-                Object raw = item.opt("resource_url");
-                if (raw instanceof JSONObject) {
-                    resUrl = (JSONObject) raw;
-                } else if (raw instanceof String) {
-                    try { resUrl = new JSONObject((String) raw); } catch (Exception ignored) {}
-                }
-                if (resUrl == null) continue;
-                String url21 = resUrl.optString("21", "");
-                if (url21.isEmpty()) continue;
-                int slash = url21.indexOf("/", 8);
-                if (slash > 0) { fastDomain = url21.substring(0, slash); break outer; }
-            }
-        }
+        String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
+        JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
 
         return Result.get()
                 .classes(classes)
@@ -248,9 +224,8 @@ public class AiGua extends Spider {
 
     /**
      * id 格式：videoId|chapterId
-     * 普快：play-url sourceId=1 → 直接返回 resource_url
-     * 超快：用 homeContent 缓存的 fastDomain 替换域名；
-     *       若 fastDomain 为空（未经过 home 页）则 fallback 用 sourceId=21 的 play-url
+     * flag = "普快线路" → sourceId=1；flag = "超快线路" → sourceId=21
+     * 直接用对应 sourceId 调 play-url，返回的 resource_url 就是正确 CDN 地址。
      * 均添加 Referer: https://aigua8.com/
      */
     @Override
@@ -259,43 +234,24 @@ public class AiGua extends Spider {
         String   videoId   = parts[0];
         String   chapterId = parts[1];
 
-        boolean isFast = "超快线路".equals(flag);
+        // flag → sourceId
+        String sourceId = "1";
+        for (int k = 0; k < SOURCE_NAMES.length; k++) {
+            if (SOURCE_NAMES[k].equals(flag)) { sourceId = SOURCE_IDS[k]; break; }
+        }
 
-        // 始终先用 sourceId=1 拿真实路径
         String apiUrl = API_PLAY
                 + "?citycode=AMS"
                 + "&page=detail"
                 + "&chapterId=" + chapterId
                 + "&videoId="   + videoId
-                + "&sourceId=1";
-        String resp    = OkHttp.string(apiUrl, headers());
-        String baseUrl = new JSONObject(resp)
+                + "&sourceId="  + sourceId;
+
+        String resp     = OkHttp.string(apiUrl, headers());
+        String finalUrl = new JSONObject(resp)
                 .getJSONObject("data")
                 .getJSONObject("urlinfo")
                 .getString("resource_url");
-        // 例：https://cf103.yfvodcdn.com/20260531/7RA7ZBAT/index.m3u8
-
-        String finalUrl = baseUrl;
-        if (isFast) {
-            if (fastDomain != null && !fastDomain.isEmpty()) {
-                // 只换域名，路径不变
-                int pathStart = baseUrl.indexOf("/", 8);
-                if (pathStart > 0) finalUrl = fastDomain + baseUrl.substring(pathStart);
-            } else {
-                // fastDomain 未缓存（跳过了 home 页直接播放），fallback 调 sourceId=21
-                String apiUrl21 = API_PLAY
-                        + "?citycode=AMS"
-                        + "&page=detail"
-                        + "&chapterId=" + chapterId
-                        + "&videoId="   + videoId
-                        + "&sourceId=21";
-                String resp21 = OkHttp.string(apiUrl21, headers());
-                finalUrl = new JSONObject(resp21)
-                        .getJSONObject("data")
-                        .getJSONObject("urlinfo")
-                        .getString("resource_url");
-            }
-        }
 
         Map<String, String> referer = new HashMap<>();
         referer.put("Referer", HOST + "/");
