@@ -418,12 +418,24 @@ public class Dyrs extends Spider {
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
         if (TextUtils.isEmpty(respHtml)) return null;
 
-        // 4. 直接在原始 HTML 上提取 data-title 和 currentUrl
+        // 4. 直接在原始 HTML 上提取集数名和 currentUrl
         // （避免 Jsoup 重排 DOM 导致 <script> 脱离 <a> 而定位失败）
         List<String> titles = new ArrayList<>();
+
+        // 格式1：<a data-title="第01集">
         Matcher titleMatcher = Pattern.compile("data-title=\"([^\"]+)\"").matcher(respHtml);
         while (titleMatcher.find()) {
             titles.add(titleMatcher.group(1));
+        }
+
+        // 格式2：<a class="episode-button"><button>第01集</button></a>
+        if (titles.isEmpty()) {
+            Matcher btnMatcher = Pattern.compile(
+                "class=\"episode-button[^\"]*\"[^>]*>[\\s\\S]*?<button[^>]*>\\s*([^<]+?)\\s*</button>"
+            ).matcher(respHtml);
+            while (btnMatcher.find()) {
+                titles.add(btnMatcher.group(1).trim());
+            }
         }
 
         List<String> epUrls = new ArrayList<>();
@@ -432,6 +444,17 @@ public class Dyrs extends Spider {
             String epUrl = unescapeUnicode(urlMatcher.group(1)).replace("\\/", "/");
             if (!epUrl.startsWith("http")) epUrl = host + epUrl;
             epUrls.add(epUrl);
+        }
+
+        // 格式2：没有 currentUrl，用 episode-button 的 href 作为播放 id
+        // playerContent 会访问该页面再提取真实播放地址
+        if (epUrls.isEmpty() && !titles.isEmpty()) {
+            Document lineDoc = Jsoup.parse(respHtml);
+            for (Element a : lineDoc.select("a.episode-button[href]")) {
+                String href = a.attr("href");
+                if (href.startsWith("/")) href = host + href;
+                epUrls.add(href);
+            }
         }
 
         if (titles.isEmpty() || epUrls.isEmpty()) return null;
@@ -475,7 +498,19 @@ public class Dyrs extends Spider {
     // ── 播放器 ───────────────────────────────────────────────────
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        return Result.get().url(id).parse(0).header(headers).string();
+        String playUrl = id;
+        // 格式2：id 是集数页面地址，访问后提取 currentUrl
+        if (!id.contains("/api/m3u8")) {
+            try {
+                String pageHtml = OkHttp.string(id, headers);
+                Matcher m = Pattern.compile("let currentUrl\\s*=\\s*\"([^\"]+)\"").matcher(pageHtml);
+                if (m.find()) {
+                    playUrl = unescapeUnicode(m.group(1)).replace("\\/", "/");
+                    if (!playUrl.startsWith("http")) playUrl = host + playUrl;
+                }
+            } catch (Exception ignored) {}
+        }
+        return Result.get().url(playUrl).parse(0).header(headers).string();
     }
 
     // ── 搜索 ──────────────────────────────────────────────────────
