@@ -418,29 +418,31 @@ public class Dyrs extends Spider {
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
         if (TextUtils.isEmpty(respHtml)) return null;
 
-        // 4. Jsoup 解析线路页，集数在 .seqlist a[data-title]
-        Document lineDoc = Jsoup.parse(respHtml);
-        Elements epLinks = lineDoc.select(".seqlist a[data-title]");
-        if (epLinks.isEmpty()) return null;
+        // 4. 直接在原始 HTML 上提取 data-title 和 currentUrl
+        // （避免 Jsoup 重排 DOM 导致 <script> 脱离 <a> 而定位失败）
+        List<String> titles = new ArrayList<>();
+        Matcher titleMatcher = Pattern.compile("data-title=\"([^\"]+)\"").matcher(respHtml);
+        while (titleMatcher.find()) {
+            titles.add(titleMatcher.group(1));
+        }
 
-        // 5. 提取集数名（data-title）和播放链接（内嵌 script 里的 currentUrl）
+        List<String> epUrls = new ArrayList<>();
+        Matcher urlMatcher = Pattern.compile("let currentUrl\s*=\s*\"([^\"]+)\"").matcher(respHtml);
+        while (urlMatcher.find()) {
+            String epUrl = urlMatcher.group(1)
+                                     .replace("\/", "/")
+                                     .replace("\u0026", "&");
+            if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+            epUrls.add(epUrl);
+        }
+
+        if (titles.isEmpty() || epUrls.isEmpty()) return null;
+
+        // 5. 按顺序拼集数
         List<String> urls = new ArrayList<>();
-        for (Element a : epLinks) {
-            String title = a.attr("data-title");
-            String epUrl = "";
-            Element script = a.selectFirst("script");
-            if (script != null) {
-                Matcher m = Pattern.compile("currentUrl\\s*=\\s*\"([^\"]+)\"")
-                                   .matcher(script.html());
-                if (m.find()) {
-                    epUrl = m.group(1)
-                             .replace("\\/", "/")
-                             .replace("\\u0026", "&");
-                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
-                }
-            }
-            if (epUrl.isEmpty()) continue;
-            urls.add(title + "$" + epUrl);
+        int count = Math.min(titles.size(), epUrls.size());
+        for (int i = 0; i < count; i++) {
+            urls.add(titles.get(i) + "$" + epUrls.get(i));
         }
         if (urls.isEmpty()) return null;
 
