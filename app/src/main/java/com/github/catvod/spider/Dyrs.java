@@ -418,59 +418,29 @@ public class Dyrs extends Spider {
         String respHtml = OkHttp.string(lineUrl, lineHeaders);
         if (TextUtils.isEmpty(respHtml)) return null;
 
-        // 4. 提取 JSON 数据
-        Pattern pattern = Pattern.compile(
-            "([a-zA-Z_$][\\w$]*vod[\\w$]*)\\s*=\\s*JSON\\.parse\\(" +
-            "(['\"`])((?:[^\\\\]|\\\\.)*?)\\2\\);",
-            Pattern.DOTALL
-        );
-        Matcher matcher = pattern.matcher(respHtml);
-        String rawJson = null;
-        while (matcher.find()) {
-            String jsonStr = matcher.group(3);
-            if (jsonStr.trim().startsWith("[")) {
-                rawJson = jsonStr;
-                break;
-            }
-        }
-        if (rawJson == null && respHtml.trim().startsWith("[")) {
-            rawJson = respHtml.trim();
-        }
-        if (rawJson == null || rawJson.isEmpty()) return null;
+        // 4. Jsoup 解析线路页，集数在 .seqlist a[data-title]
+        Document lineDoc = Jsoup.parse(respHtml);
+        Elements epLinks = lineDoc.select(".seqlist a[data-title]");
+        if (epLinks.isEmpty()) return null;
 
-        // 5. 解析 JSON（兼容 \u0022、\/ 等转义）
-        JsonArray epData = null;
-        try {
-            // 先替换 \/ 为普通斜杠，再利用 Gson 自动处理 \u0022
-            String fixedJson = rawJson.replace("\\/", "/");
-            epData = JsonParser.parseString(fixedJson).getAsJsonArray();
-        } catch (Exception e1) {
-            // 降级：手动转换 \\uXXXX
-            try {
-                String unescaped = unescapeUnicode(rawJson).replace("\\/", "/");
-                epData = JsonParser.parseString(unescaped).getAsJsonArray();
-            } catch (Exception e2) {
-                return null;
-            }
-        }
-
-        // 6. 生成剧集列表
+        // 5. 提取集数名（data-title）和播放链接（内嵌 script 里的 currentUrl）
         List<String> urls = new ArrayList<>();
-        for (JsonElement e : epData) {
-            JsonObject ep = e.getAsJsonObject();
-            String title = ep.has("title") ? ep.get("title").getAsString() :
-                          (ep.has("name") ? ep.get("name").getAsString() : "正片");
-            String url = ep.has("url") ? ep.get("url").getAsString() : "";
-            if (url.isEmpty()) continue;
-
-            if (!url.startsWith("http")) {
-                if (url.startsWith("//")) url = "https:" + url;
-                else if (url.startsWith("/")) url = host + url;
-                else url = host + "/" + url;
+        for (Element a : epLinks) {
+            String title = a.attr("data-title");
+            String epUrl = "";
+            Element script = a.selectFirst("script");
+            if (script != null) {
+                Matcher m = Pattern.compile("currentUrl\\s*=\\s*\"([^\"]+)\"")
+                                   .matcher(script.html());
+                if (m.find()) {
+                    epUrl = m.group(1)
+                             .replace("\\/", "/")
+                             .replace("\\u0026", "&");
+                    if (!epUrl.startsWith("http")) epUrl = host + epUrl;
+                }
             }
-            // 修正双重转义：\\u0026 -> &
-            url = url.replace("\\u0026", "&");
-            urls.add(title + "$" + url);
+            if (epUrl.isEmpty()) continue;
+            urls.add(title + "$" + epUrl);
         }
         if (urls.isEmpty()) return null;
 
