@@ -427,10 +427,10 @@ public class Dyrs extends Spider {
         }
 
         List<String> epUrls = new ArrayList<>();
-        Matcher urlMatcher = Pattern.compile("let currentUrl\s*=\s*\"([^\"]+)\"").matcher(respHtml);
+        Matcher urlMatcher = Pattern.compile("let currentUrl\\s*=\\s*\"([^\"]+)\"").matcher(respHtml);
         while (urlMatcher.find()) {
             String epUrl = urlMatcher.group(1)
-                                     .replace("\/", "/")
+                                     .replace("\\/", "/")
                                      .replace("\u0026", "&");
             if (!epUrl.startsWith("http")) epUrl = host + epUrl;
             epUrls.add(epUrl);
