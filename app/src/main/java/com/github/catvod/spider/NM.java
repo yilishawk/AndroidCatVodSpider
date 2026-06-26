@@ -1,6 +1,16 @@
 package com.github.catvod.spider;
 
+import android.app.AlertDialog;
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
+import android.widget.EditText;
+
 import com.github.catvod.crawler.Spider;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import com.github.catvod.crawler.SpiderDebug;
 
 import org.json.JSONArray;
@@ -34,6 +44,11 @@ public class NM extends Spider {
     private static final String siteUrl = "https://vip.wwgz.cn:5200";
     private static final String apiHost = "https://api.wwgz.cn:520";
 
+    // ── 密码保护 ──────────────────────────────────────────────
+    private Context mContext;
+    private String  correctPassword = "1234"; // 访问密码，直接在此修改
+    private boolean authenticated   = false; // 通过后不再重复弹窗
+
     private final OkHttpClient client = new OkHttpClient();
 
     private Headers getHeaders() {
@@ -60,7 +75,44 @@ public class NM extends Spider {
     }
 
     @Override
+    public void init(Context context, String extend) {
+        mContext = context;
+    }
+
+    /**
+     * 主线程弹密码输入框，阻塞爬虫线程等待结果（最长 60 秒）。
+     * 返回 true 表示验证通过。
+     */
+    private boolean showPasswordDialog() {
+        if (mContext == null) return false;
+        CountDownLatch latch  = new CountDownLatch(1);
+        boolean[]      ok     = {false};
+        new Handler(Looper.getMainLooper()).post(() -> {
+            EditText input = new EditText(mContext);
+            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            input.setHint("请输入访问密码");
+            new AlertDialog.Builder(mContext)
+                    .setTitle("访问验证")
+                    .setView(input)
+                    .setCancelable(false)
+                    .setPositiveButton("确定", (d, w) -> {
+                        ok[0] = correctPassword.equals(input.getText().toString().trim());
+                        latch.countDown();
+                    })
+                    .setNegativeButton("取消", (d, w) -> latch.countDown())
+                    .show();
+        });
+        try { latch.await(60, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        return ok[0];
+    }
+
+    @Override
     public String homeContent(boolean filter) {
+        // 密码保护：设置了密码且未验证时弹窗
+        if (correctPassword != null && !authenticated) {
+            if (!showPasswordDialog()) return errorMsg("密码错误或已取消");
+            authenticated = true;
+        }
         try {
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
