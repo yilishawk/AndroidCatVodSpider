@@ -40,20 +40,74 @@ public class FourKVM extends Spider {
         headers.put("Referer", host);
     }
 
+    private static final String PUBLISH_URL = "https://www.4kvm.site/";
+
+    /** 检测域名是否可达（HEAD 请求，3 秒超时） */
+    private boolean isHostAlive(String testHost) {
+        try {
+            okhttp3.Request req = new okhttp3.Request.Builder()
+                    .url(testHost)
+                    .head()
+                    .build();
+            okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .build();
+            try (okhttp3.Response resp = client.newCall(req).execute()) {
+                return resp.code() < 500;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 从发布页取第一个域名 */
+    private String fetchHostFromPublish() {
+        try {
+            String html = OkHttp.string(PUBLISH_URL, new HashMap<>());
+            Document doc = Jsoup.parse(html);
+            Element a = doc.selectFirst(".content ul li a[href]");
+            if (a != null) {
+                String h = a.attr("href").replaceAll("/+$", "");
+                if (h.startsWith("http")) return h;
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[4k影视] 获取发布页域名失败: " + e.getMessage());
+        }
+        return null;
+    }
+
     @Override
     public void init(Context context, String extend) {
+        // 1. extend 里有显式 host，直接用
         if (!TextUtils.isEmpty(extend)) {
             try {
                 JSONObject cfg = new JSONObject(extend);
                 if (cfg.has("host")) {
                     host = cfg.optString("host");
                     headers.put("Referer", host);
+                    SpiderDebug.log("[4k影视] 使用配置 host: " + host);
+                    return;
                 }
             } catch (Exception e) {
                 SpiderDebug.log("[4k影视] 解析扩展配置失败: " + e.getMessage());
             }
         }
-        SpiderDebug.log("[4k影视] 初始化完成，host: " + host);
+        // 2. 检测默认域名是否可达
+        if (isHostAlive(host)) {
+            SpiderDebug.log("[4k影视] 默认 host 可用: " + host);
+            return;
+        }
+        // 3. 默认域名不通，去发布页拿最新域名
+        SpiderDebug.log("[4k影视] 默认 host 不可达，尝试发布页...");
+        String newHost = fetchHostFromPublish();
+        if (!TextUtils.isEmpty(newHost)) {
+            host = newHost;
+            headers.put("Referer", host);
+            SpiderDebug.log("[4k影视] 从发布页获取 host: " + host);
+        } else {
+            SpiderDebug.log("[4k影视] 发布页也失败，保持默认 host: " + host);
+        }
     }
 
     private String fetch(String url) throws Exception {
