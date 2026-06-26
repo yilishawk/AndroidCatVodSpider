@@ -498,19 +498,22 @@ public class Dyrs extends Spider {
     // ── 播放器 ───────────────────────────────────────────────────
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id;
-        // 格式2：id 是集数页面地址，访问后提取 currentUrl
-        if (!id.contains("/api/m3u8")) {
-            try {
-                String pageHtml = OkHttp.string(id, headers);
-                Matcher m = Pattern.compile("let currentUrl\\s*=\\s*\"([^\"]+)\"").matcher(pageHtml);
-                if (m.find()) {
-                    playUrl = unescapeUnicode(m.group(1)).replace("\\/", "/");
-                    if (!playUrl.startsWith("http")) playUrl = host + playUrl;
-                }
-            } catch (Exception ignored) {}
+        // 格式1：id 已是 /api/m3u8 直接地址，直接推给壳子
+        if (id.contains("/api/m3u8")) {
+            return Result.get().url(id).parse(0).header(headers).string();
         }
-        return Result.get().url(playUrl).parse(0).header(headers).string();
+
+        // 格式2：id 是集数页面地址，访问后提取 currentUrl，parse(1) 让壳子嗅探
+        String playUrl = id;
+        try {
+            String pageHtml = OkHttp.string(id, headers);
+            Matcher m = Pattern.compile("let currentUrl\\s*=\\s*\"([^\"]+)\"").matcher(pageHtml);
+            if (m.find()) {
+                playUrl = unescapeUnicode(m.group(1)).replace("\\/", "/");
+                if (!playUrl.startsWith("http")) playUrl = host + playUrl;
+            }
+        } catch (Exception ignored) {}
+        return Result.get().url(playUrl).parse(1).header(headers).string();
     }
 
     // ── 搜索 ──────────────────────────────────────────────────────
