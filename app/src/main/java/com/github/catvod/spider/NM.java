@@ -1,6 +1,8 @@
 package com.github.catvod.spider;
 
+import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Application;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
@@ -45,7 +47,8 @@ public class NM extends Spider {
     private static final String apiHost = "https://api.wwgz.cn:520";
 
     // ── 密码保护 ──────────────────────────────────────────────
-    private Context mContext;
+    private Context  mContext         = null;
+    private Activity currentActivity  = null; // 由 ActivityLifecycleCallbacks 实时更新
     private String  correctPassword = "1234"; // 访问密码，直接在此修改
     private boolean authenticated   = false; // 通过后不再重复弹窗
 
@@ -77,32 +80,22 @@ public class NM extends Spider {
     @Override
     public void init(Context context, String extend) {
         mContext = context;
-    }
-
-    /**
-     * 通过反射获取当前前台 Activity（AlertDialog 必须用 Activity context，
-     * 不能用 Application context，否则抛 BadTokenException 崩溃）。
-     */
-    private Context getActivityContext() {
+        // 注册生命周期回调，实时追踪当前前台 Activity
+        // （比反射 ActivityThread 更稳定，FongMi 和 TVBox 均适用）
         try {
-            Class<?>  atClass = Class.forName("android.app.ActivityThread");
-            Object    thread  = atClass.getMethod("currentActivityThread").invoke(null);
-            java.lang.reflect.Field field = atClass.getDeclaredField("mActivities");
-            field.setAccessible(true);
-            Object map = field.get(thread);
-            java.util.Collection<?> records =
-                    (java.util.Collection<?>) map.getClass().getMethod("values").invoke(map);
-            for (Object record : records) {
-                java.lang.reflect.Field pausedF = record.getClass().getDeclaredField("paused");
-                pausedF.setAccessible(true);
-                if (pausedF.getBoolean(record)) continue;
-                java.lang.reflect.Field actF = record.getClass().getDeclaredField("activity");
-                actF.setAccessible(true);
-                android.app.Activity act = (android.app.Activity) actF.get(record);
-                if (act != null && !act.isFinishing()) return act;
-            }
-        } catch (Exception ignored) {}
-        return mContext; // 兜底，仍可能失败但不会空指针
+            Application app = (Application) context.getApplicationContext();
+            app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
+                @Override public void onActivityResumed(Activity a)  { currentActivity = a; }
+                @Override public void onActivityPaused(Activity a)   { if (currentActivity == a) currentActivity = null; }
+                @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
+                @Override public void onActivityStarted(Activity a)  {}
+                @Override public void onActivityStopped(Activity a)  {}
+                @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
+                @Override public void onActivityDestroyed(Activity a){}
+            });
+        } catch (Exception e) {
+            SpiderDebug.log("NM 注册 ActivityLifecycle 失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -110,7 +103,9 @@ public class NM extends Spider {
      * 返回 true 表示验证通过。
      */
     private boolean showPasswordDialog() {
-        Context actCtx = getActivityContext();
+        // currentActivity 由 ActivityLifecycleCallbacks 实时维护
+        Context actCtx = currentActivity;
+        if (actCtx == null) actCtx = mContext; // 兜底
         if (actCtx == null) return false;
         CountDownLatch latch = new CountDownLatch(1);
         boolean[]      ok    = {false};
