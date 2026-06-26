@@ -80,27 +80,59 @@ public class NM extends Spider {
     }
 
     /**
+     * 通过反射获取当前前台 Activity（AlertDialog 必须用 Activity context，
+     * 不能用 Application context，否则抛 BadTokenException 崩溃）。
+     */
+    private Context getActivityContext() {
+        try {
+            Class<?>  atClass = Class.forName("android.app.ActivityThread");
+            Object    thread  = atClass.getMethod("currentActivityThread").invoke(null);
+            java.lang.reflect.Field field = atClass.getDeclaredField("mActivities");
+            field.setAccessible(true);
+            Object map = field.get(thread);
+            java.util.Collection<?> records =
+                    (java.util.Collection<?>) map.getClass().getMethod("values").invoke(map);
+            for (Object record : records) {
+                java.lang.reflect.Field pausedF = record.getClass().getDeclaredField("paused");
+                pausedF.setAccessible(true);
+                if (pausedF.getBoolean(record)) continue;
+                java.lang.reflect.Field actF = record.getClass().getDeclaredField("activity");
+                actF.setAccessible(true);
+                android.app.Activity act = (android.app.Activity) actF.get(record);
+                if (act != null && !act.isFinishing()) return act;
+            }
+        } catch (Exception ignored) {}
+        return mContext; // 兜底，仍可能失败但不会空指针
+    }
+
+    /**
      * 主线程弹密码输入框，阻塞爬虫线程等待结果（最长 60 秒）。
      * 返回 true 表示验证通过。
      */
     private boolean showPasswordDialog() {
-        if (mContext == null) return false;
-        CountDownLatch latch  = new CountDownLatch(1);
-        boolean[]      ok     = {false};
+        Context actCtx = getActivityContext();
+        if (actCtx == null) return false;
+        CountDownLatch latch = new CountDownLatch(1);
+        boolean[]      ok    = {false};
         new Handler(Looper.getMainLooper()).post(() -> {
-            EditText input = new EditText(mContext);
-            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            input.setHint("请输入访问密码");
-            new AlertDialog.Builder(mContext)
-                    .setTitle("访问验证")
-                    .setView(input)
-                    .setCancelable(false)
-                    .setPositiveButton("确定", (d, w) -> {
-                        ok[0] = correctPassword.equals(input.getText().toString().trim());
-                        latch.countDown();
-                    })
-                    .setNegativeButton("取消", (d, w) -> latch.countDown())
-                    .show();
+            try {
+                EditText input = new EditText(actCtx);
+                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                input.setHint("请输入访问密码");
+                new AlertDialog.Builder(actCtx)
+                        .setTitle("访问验证")
+                        .setView(input)
+                        .setCancelable(false)
+                        .setPositiveButton("确定", (d, w) -> {
+                            ok[0] = correctPassword.equals(input.getText().toString().trim());
+                            latch.countDown();
+                        })
+                        .setNegativeButton("取消", (d, w) -> latch.countDown())
+                        .show();
+            } catch (Exception e) {
+                SpiderDebug.log("NM 密码弹窗失败: " + e.getMessage());
+                latch.countDown();
+            }
         });
         try { latch.await(60, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
         return ok[0];
