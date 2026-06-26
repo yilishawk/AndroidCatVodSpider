@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  */
 public class Bttw extends Spider {
 
-    private String host = "https://www.bttwo.me";
+    private String host = "https://www.bttwo.life";
     private Map<String, String> headers;
 
     public Bttw() {
