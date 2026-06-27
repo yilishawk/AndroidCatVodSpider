@@ -1,18 +1,6 @@
 package com.github.catvod.spider;
 
-import android.app.Activity;
-import android.app.AlertDialog;
-import android.app.Application;
-import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
-import android.text.InputType;
-import android.widget.EditText;
-
 import com.github.catvod.crawler.Spider;
-
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import com.github.catvod.crawler.SpiderDebug;
 
 import org.json.JSONArray;
@@ -46,12 +34,6 @@ public class NM extends Spider {
     private static final String siteUrl = "https://vip.wwgz.cn:5200";
     private static final String apiHost = "https://api.wwgz.cn:520";
 
-    // ── 密码保护 ──────────────────────────────────────────────
-    private Context  mContext         = null;
-    private Activity currentActivity  = null; // 由 ActivityLifecycleCallbacks 实时更新
-    private String  correctPassword = "1234"; // 访问密码，直接在此修改
-    private boolean authenticated   = false; // 通过后不再重复弹窗
-
     private final OkHttpClient client = new OkHttpClient();
 
     private Headers getHeaders() {
@@ -78,69 +60,7 @@ public class NM extends Spider {
     }
 
     @Override
-    public void init(Context context, String extend) {
-        mContext = context;
-        // 注册生命周期回调，实时追踪当前前台 Activity
-        // （比反射 ActivityThread 更稳定，FongMi 和 TVBox 均适用）
-        try {
-            Application app = (Application) context.getApplicationContext();
-            app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-                @Override public void onActivityResumed(Activity a)  { currentActivity = a; }
-                @Override public void onActivityPaused(Activity a)   { if (currentActivity == a) currentActivity = null; }
-                @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
-                @Override public void onActivityStarted(Activity a)  {}
-                @Override public void onActivityStopped(Activity a)  {}
-                @Override public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
-                @Override public void onActivityDestroyed(Activity a){}
-            });
-        } catch (Exception e) {
-            SpiderDebug.log("NM 注册 ActivityLifecycle 失败: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 主线程弹密码输入框，阻塞爬虫线程等待结果（最长 60 秒）。
-     * 返回 true 表示验证通过。
-     */
-    private boolean showPasswordDialog() {
-        // currentActivity 由 ActivityLifecycleCallbacks 实时维护
-        Context tmp = currentActivity;
-        if (tmp == null) tmp = mContext; // 兜底
-        if (tmp == null) return false;
-        final Context actCtx = tmp; // lambda 要求 effectively final
-        CountDownLatch latch = new CountDownLatch(1);
-        boolean[]      ok    = {false};
-        new Handler(Looper.getMainLooper()).post(() -> {
-            try {
-                EditText input = new EditText(actCtx);
-                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-                input.setHint("请输入访问密码");
-                new AlertDialog.Builder(actCtx)
-                        .setTitle("访问验证")
-                        .setView(input)
-                        .setCancelable(false)
-                        .setPositiveButton("确定", (d, w) -> {
-                            ok[0] = correctPassword.equals(input.getText().toString().trim());
-                            latch.countDown();
-                        })
-                        .setNegativeButton("取消", (d, w) -> latch.countDown())
-                        .show();
-            } catch (Exception e) {
-                SpiderDebug.log("NM 密码弹窗失败: " + e.getMessage());
-                latch.countDown();
-            }
-        });
-        try { latch.await(60, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-        return ok[0];
-    }
-
-    @Override
     public String homeContent(boolean filter) {
-        // 密码保护：设置了密码且未验证时弹窗
-        if (correctPassword != null && !authenticated) {
-            if (!showPasswordDialog()) return errorMsg("密码错误或已取消");
-            authenticated = true;
-        }
         try {
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
