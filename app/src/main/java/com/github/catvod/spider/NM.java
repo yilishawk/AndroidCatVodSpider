@@ -104,9 +104,10 @@ public class NM extends Spider {
      */
     private boolean showPasswordDialog() {
         // currentActivity 由 ActivityLifecycleCallbacks 实时维护
-        Context actCtx = currentActivity;
-        if (actCtx == null) actCtx = mContext; // 兜底
-        if (actCtx == null) return false;
+        Context tmp = currentActivity;
+        if (tmp == null) tmp = mContext; // 兜底
+        if (tmp == null) return false;
+        final Context actCtx = tmp; // lambda 要求 effectively final
         CountDownLatch latch = new CountDownLatch(1);
         boolean[]      ok    = {false};
         new Handler(Looper.getMainLooper()).post(() -> {
