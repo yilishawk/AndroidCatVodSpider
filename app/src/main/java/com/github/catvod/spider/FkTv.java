@@ -39,6 +39,17 @@ public class FkTv extends Spider {
     public void init(Context context, String extend) throws Exception {
     }
 
+    // 新增：根据分类ID获取中文名称
+    private String getCategoryName(String tid) {
+        switch (tid) {
+            case "6": return "电影";
+            case "5": return "电视剧";
+            case "4": return "综艺";
+            case "9": return "短剧";
+            default: return "";
+        }
+    }
+
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -78,20 +89,31 @@ public class FkTv extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
+        // 修改：分类ID更新为新格式
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("1", "电影"));
-        classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("3", "综艺"));
-        classes.add(new Class("8", "短剧"));
+        classes.add(new Class("6", "电影"));
+        classes.add(new Class("5", "电视剧"));
+        classes.add(new Class("4", "综艺"));
+        classes.add(new Class("9", "短剧"));
 
-        String html = OkHttp.string(siteUrl + "/channel?cat_id=1&page=1&page_size=32", getHeader());
+        // 修改：首页请求使用新分类链接（默认电影分类第一页）
+        String url = siteUrl + "/category/6/" + encodeUrl("电影") + "/page/1";
+        String html = OkHttp.string(url, getHeader());
         List<Vod> list = parseList(html);
         return Result.string(classes, list);
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
+        // 修改：构造新格式的分类链接
+        String catName = getCategoryName(tid);
+        if (catName.isEmpty()) {
+            // 如果tid未知，回退到旧链接（可选）
+            String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
+            String html = OkHttp.string(url, getHeader());
+            return Result.string(parseList(html));
+        }
+        String url = siteUrl + "/category/" + tid + "/" + encodeUrl(catName) + "/page/" + pg;
         String html = OkHttp.string(url, getHeader());
         return Result.string(parseList(html));
     }
