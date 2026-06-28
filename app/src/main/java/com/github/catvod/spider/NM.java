@@ -210,10 +210,7 @@ public class NM extends Spider {
             String year = extend.getOrDefault("year", "0");
             String area = extend.getOrDefault("area", "");
 
-            // 修正：class 参数始终为 0（网站实际格式）
             String classParam = "0";
-
-            // 确定 listId：如果有子分类则使用子分类 ID，否则使用主分类 ID
             String listId;
             if (!classId.equals("0")) {
                 listId = classId;
@@ -221,10 +218,7 @@ public class NM extends Spider {
                 listId = tid;
             }
 
-            // 年份
             String yearPart = year.equals("0") ? "--" : "-" + year;
-
-            // 地区必须 URL 编码
             String areaPart;
             if (area.isEmpty()) {
                 areaPart = "--";
@@ -232,7 +226,7 @@ public class NM extends Spider {
                 try {
                     areaPart = "-" + URLEncoder.encode(area, "UTF-8");
                 } catch (Exception e) {
-                    areaPart = "-" + area; // 降级
+                    areaPart = "-" + area;
                 }
             }
 
@@ -297,6 +291,7 @@ public class NM extends Spider {
         }
     }
 
+    // ==================== 修改点：详细内容（支持多线路） ====================
     @Override
     public String detailContent(List<String> ids) {
         try {
@@ -362,7 +357,7 @@ public class NM extends Spider {
             if (introEl == null) introEl = doc.selectFirst(".detail-con");
             String intro = introEl != null ? introEl.text().replaceAll("\\s+", " ").trim() : "";
 
-            // 播放列表
+            // ---------- 播放列表解析（支持多线路） ----------
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
 
@@ -370,31 +365,74 @@ public class NM extends Spider {
                 String playPageUrl = siteUrl + "/vod-play-id-" + detailId + "-src-1-num-1.html";
                 try {
                     String playHtml = fetch(playPageUrl);
-                    String lineName = "lzm3u8";
-                    Matcher macFromMatcher = Pattern.compile("mac_from\\s*=\\s*'([^']+)'").matcher(playHtml);
-                    if (macFromMatcher.find()) {
-                        lineName = macFromMatcher.group(1);
-                    }
-                    Matcher macUrlMatcher = Pattern.compile("mac_url\\s*=\\s*'([^']+)'").matcher(playHtml);
-                    if (macUrlMatcher.find()) {
-                        String macUrl = macUrlMatcher.group(1);
-                        String[] episodes = macUrl.split("#");
-                        List<String> epList = new ArrayList<>();
-                        for (String ep : episodes) {
-                            if (ep.trim().isEmpty()) continue;
-                            epList.add(ep.trim());
+
+                    // 获取 mac_from 和 mac_url
+                    Matcher fromMatcher = Pattern.compile("mac_from\\s*=\\s*'([^']+)'").matcher(playHtml);
+                    Matcher urlMatcher = Pattern.compile("mac_url\\s*=\\s*'([^']+)'").matcher(playHtml);
+
+                    if (fromMatcher.find() && urlMatcher.find()) {
+                        String macFrom = fromMatcher.group(1);
+                        String macUrl = urlMatcher.group(1);
+
+                        // 分割线路名
+                        String[] fromParts = macFrom.split("\\$\\$\\$");
+                        // 分割线路URL
+                        String[] urlParts = macUrl.split("\\$\\$\\$");
+
+                        // 确保线路数量一致
+                        int lineCount = Math.min(fromParts.length, urlParts.length);
+                        for (int i = 0; i < lineCount; i++) {
+                            String lineName = fromParts[i].trim();
+                            if (lineName.isEmpty()) lineName = "线路" + (i + 1);
+
+                            String lineEpisodes = urlParts[i];
+                            // 每个线路的剧集用 # 分隔
+                            String[] episodes = lineEpisodes.split("#");
+                            List<String> epList = new ArrayList<>();
+                            for (String ep : episodes) {
+                                if (ep.trim().isEmpty()) continue;
+                                epList.add(ep.trim());
+                            }
+
+                            // 按集数排序（可选）
+                            Collections.sort(epList, (o1, o2) -> {
+                                int n1 = extractEpisodeNumber(o1);
+                                int n2 = extractEpisodeNumber(o2);
+                                return Integer.compare(n1, n2);
+                            });
+
+                            if (!epList.isEmpty()) {
+                                playFromList.add(lineName);
+                                playUrlList.add(String.join("#", epList));
+                            }
                         }
-                        Collections.sort(epList, (o1, o2) -> {
-                            int n1 = extractEpisodeNumber(o1);
-                            int n2 = extractEpisodeNumber(o2);
-                            return Integer.compare(n1, n2);
-                        });
-                        if (!epList.isEmpty()) {
-                            playFromList.add(lineName);
-                            playUrlList.add(String.join("#", epList));
+                    } else {
+                        // 回退：尝试只解析单个线路（兼容旧版）
+                        Matcher singleFrom = Pattern.compile("mac_from\\s*=\\s*'([^']+)'").matcher(playHtml);
+                        Matcher singleUrl = Pattern.compile("mac_url\\s*=\\s*'([^']+)'").matcher(playHtml);
+                        if (singleFrom.find() && singleUrl.find()) {
+                            String lineName = singleFrom.group(1);
+                            String urlStr = singleUrl.group(1);
+                            String[] episodes = urlStr.split("#");
+                            List<String> epList = new ArrayList<>();
+                            for (String ep : episodes) {
+                                if (ep.trim().isEmpty()) continue;
+                                epList.add(ep.trim());
+                            }
+                            Collections.sort(epList, (o1, o2) -> {
+                                int n1 = extractEpisodeNumber(o1);
+                                int n2 = extractEpisodeNumber(o2);
+                                return Integer.compare(n1, n2);
+                            });
+                            if (!epList.isEmpty()) {
+                                playFromList.add(lineName);
+                                playUrlList.add(String.join("#", epList));
+                            }
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                    SpiderDebug.log(ignored);
+                }
             }
 
             JSONObject vod = new JSONObject();
@@ -524,18 +562,30 @@ public class NM extends Spider {
                 if (numMatcher.find()) currentNum = Integer.parseInt(numMatcher.group(1));
 
                 String targetEncrypted = null;
-                String[] parts = macUrl.split("#");
-                for (String part : parts) {
-                    Matcher m = Pattern.compile("第(\\d+)集\\$(.*)").matcher(part);
-                    if (m.find() && Integer.parseInt(m.group(1)) == currentNum) {
-                        targetEncrypted = m.group(2);
-                        break;
+                // 注意：此处 macUrl 可能包含多线路（$$$），但 player 只处理当前线路，需按顺序取第一个？实际 TVBox 传入的 id 是加密串，不会传线路分隔符。
+                // 因此我们尝试在所有线路中查找匹配集数的加密串。
+                String[] lines = macUrl.split("\\$\\$\\$");
+                for (String line : lines) {
+                    String[] parts = line.split("#");
+                    for (String part : parts) {
+                        Matcher m = Pattern.compile("第(\\d+)集\\$(.*)").matcher(part);
+                        if (m.find() && Integer.parseInt(m.group(1)) == currentNum) {
+                            targetEncrypted = m.group(2);
+                            break;
+                        }
                     }
+                    if (targetEncrypted != null) break;
                 }
                 if (targetEncrypted == null) {
+                    // 尝试用正则找当前集
                     Pattern p = Pattern.compile("第" + currentNum + "集\\$(.*?)(?=#|$)");
-                    Matcher m = p.matcher(macUrl);
-                    if (m.find()) targetEncrypted = m.group(1);
+                    for (String line : lines) {
+                        Matcher m = p.matcher(line);
+                        if (m.find()) {
+                            targetEncrypted = m.group(1);
+                            break;
+                        }
+                    }
                 }
 
                 if (targetEncrypted != null && !targetEncrypted.isEmpty()) {
