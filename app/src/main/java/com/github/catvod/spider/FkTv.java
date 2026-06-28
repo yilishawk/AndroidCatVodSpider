@@ -39,7 +39,7 @@ public class FkTv extends Spider {
     public void init(Context context, String extend) throws Exception {
     }
 
-    // 新增：根据分类ID获取中文名称
+    // 根据分类ID获取中文名称（用于构造新链接）
     private String getCategoryName(String tid) {
         switch (tid) {
             case "6": return "电影";
@@ -53,10 +53,11 @@ public class FkTv extends Spider {
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
+        // 修改选择器：匹配所有 /movie/ 开头的链接（包括 /movie/xxx）
         Elements items = doc.select("div.item-wrap.vertical");
 
         for (Element item : items) {
-            Element a = item.selectFirst("a[href^=/movie/detail]");
+            Element a = item.selectFirst("a[href^=/movie/]");
             if (a == null) continue;
 
             String href = siteUrl + a.attr("href");
@@ -89,14 +90,14 @@ public class FkTv extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        // 修改：分类ID更新为新格式
+        // 修改分类列表为新ID
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("6", "电影"));
         classes.add(new Class("5", "电视剧"));
         classes.add(new Class("4", "综艺"));
         classes.add(new Class("9", "短剧"));
 
-        // 修改：首页请求使用新分类链接（默认电影分类第一页）
+        // 首页默认加载电影分类第一页（新链接格式）
         String url = siteUrl + "/category/6/" + encodeUrl("电影") + "/page/1";
         String html = OkHttp.string(url, getHeader());
         List<Vod> list = parseList(html);
@@ -105,10 +106,10 @@ public class FkTv extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        // 修改：构造新格式的分类链接
+        // 构造新格式的分类链接
         String catName = getCategoryName(tid);
         if (catName.isEmpty()) {
-            // 如果tid未知，回退到旧链接（可选）
+            // 如果tid未知，回退到旧链接（兼容性处理）
             String url = siteUrl + "/channel?page=" + pg + "&cat_id=" + tid + "&tag_id=&order=new&page_size=32";
             String html = OkHttp.string(url, getHeader());
             return Result.string(parseList(html));
