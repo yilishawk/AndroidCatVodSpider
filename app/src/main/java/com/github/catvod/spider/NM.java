@@ -18,7 +18,6 @@ import okhttp3.Response;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -211,17 +210,30 @@ public class NM extends Spider {
             String year = extend.getOrDefault("year", "0");
             String area = extend.getOrDefault("area", "");
 
-            String yearPart = year.equals("0") ? "--" : "-" + year;
-            String areaPart = area.isEmpty() ? "--" : "-" + area;
+            // 修正：class 参数始终为 0（网站实际格式）
+            String classParam = "0";
 
+            // 确定 listId：如果有子分类则使用子分类 ID，否则使用主分类 ID
             String listId;
-            String classParam;
             if (!classId.equals("0")) {
                 listId = classId;
-                classParam = "--";
             } else {
                 listId = tid;
-                classParam = "0";
+            }
+
+            // 年份
+            String yearPart = year.equals("0") ? "--" : "-" + year;
+
+            // 地区必须 URL 编码
+            String areaPart;
+            if (area.isEmpty()) {
+                areaPart = "--";
+            } else {
+                try {
+                    areaPart = "-" + URLEncoder.encode(area, "UTF-8");
+                } catch (Exception e) {
+                    areaPart = "-" + area; // 降级
+                }
             }
 
             String url = siteUrl + String.format(
@@ -335,7 +347,7 @@ public class NM extends Spider {
             Element yearEl = doc.selectFirst(".desc_item:contains(年代:) a");
             String year = yearEl != null ? yearEl.text().trim() : "";
 
-            // 地区（尝试从分类信息或 desc_item 中提取）
+            // 地区
             String area = "";
             Element areaEl = doc.selectFirst(".desc_item:contains(地区:) a");
             if (areaEl != null) area = areaEl.text().trim();
@@ -372,7 +384,6 @@ public class NM extends Spider {
                             if (ep.trim().isEmpty()) continue;
                             epList.add(ep.trim());
                         }
-                        // 按集数排序
                         Collections.sort(epList, (o1, o2) -> {
                             int n1 = extractEpisodeNumber(o1);
                             int n2 = extractEpisodeNumber(o2);
@@ -419,7 +430,7 @@ public class NM extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
-            String pg = "1"; // 搜索接口不支持分页参数时固定为1
+            String pg = "1";
             String url = siteUrl + "/vod-search-pg-" + pg + "-wd-" + URLEncoder.encode(key, "UTF-8") + ".html";
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
@@ -488,7 +499,6 @@ public class NM extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            // 情形1: id 是加密 key（不含 http、$、?）
             if (id != null && !id.contains("http") && !id.contains("$") && !id.contains("?")) {
                 String apiUrl = apiHost + "/player/?url=" + id;
                 String res = fetch(apiUrl);
@@ -497,14 +507,11 @@ public class NM extends Spider {
                     String realUrl = urlMatcher.group(1).replace("\\u0026", "&");
                     return successPlayerResult(realUrl);
                 }
-                // 尝试 iframe
                 Matcher iframeMatcher = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"").matcher(res);
                 if (iframeMatcher.find()) {
                     return successPlayerResult(iframeMatcher.group(1));
                 }
-            }
-            // 情形2: id 是完整播放页 URL
-            else {
+            } else {
                 String playUrl = id.startsWith("http") ? id : siteUrl + id;
                 String html = fetch(playUrl);
                 Matcher macUrlMatcher = Pattern.compile("mac_url\\s*=\\s*'([^']+)'").matcher(html);
@@ -544,7 +551,6 @@ public class NM extends Spider {
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        // 所有解析失败，回退到壳嗅探
         return fallbackToParse(id);
     }
 
