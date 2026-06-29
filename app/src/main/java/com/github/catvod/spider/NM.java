@@ -468,7 +468,7 @@ public class NM extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
-            String pg = "1";
+            String pg = "1"; // 搜索接口不支持分页参数时固定为1
             String url = siteUrl + "/vod-search-pg-" + pg + "-wd-" + URLEncoder.encode(key, "UTF-8") + ".html";
             String html = fetch(url);
             Document doc = Jsoup.parse(html);
