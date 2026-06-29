@@ -123,45 +123,67 @@ public class FkTv extends Spider {
     }
 
     // ==================== 详情和播放（新加密 API） ====================
+    /**
+     * 页面采用 Next.js __next_f.push([1,"..."]) 格式注入数据。
+     * 数据藏在转义字符串里，需先提取参数、反转义，再解析 data 对象。
+     */
     private JSONObject extractDataJson(String html) {
-        Document doc = Jsoup.parse(html);
-        Elements scripts = doc.select("script");
-        String scriptContent = "";
-        for (Element s : scripts) {
-            String content = s.html();
-            if (content.contains("\"links\"") || content.contains("links")) {
-                scriptContent = content;
-                break;
-            }
-        }
-        if (scriptContent.isEmpty()) return null;
-
-        int dataIdx = scriptContent.indexOf("\"data\"");
-        if (dataIdx == -1) dataIdx = scriptContent.indexOf("data");
-        if (dataIdx == -1) return null;
-        int start = scriptContent.lastIndexOf("{", dataIdx);
-        if (start == -1) return null;
-
-        int braceCount = 0;
-        int end = start;
-        for (int i = start; i < scriptContent.length(); i++) {
-            char c = scriptContent.charAt(i);
-            if (c == '{') braceCount++;
-            else if (c == '}') {
-                braceCount--;
-                if (braceCount == 0) {
-                    end = i + 1;
+        String marker = "__next_f.push([1,\"";
+        int pos = 0;
+        while ((pos = html.indexOf(marker, pos)) >= 0) {
+            int strStart = pos + marker.length();
+            // 逐字符反转义，直到遇到未转义的 " 为止
+            StringBuilder sb = new StringBuilder();
+            int i = strStart;
+            while (i < html.length()) {
+                char c = html.charAt(i);
+                if (c == '\\' && i + 1 < html.length()) {
+                    char next = html.charAt(i + 1);
+                    switch (next) {
+                        case '"':  sb.append('"');  i += 2; break;
+                        case '\\': sb.append('\\'); i += 2; break;
+                        case 'n':  sb.append('\n'); i += 2; break;
+                        case 't':  sb.append('\t'); i += 2; break;
+                        case 'r':  sb.append('\r'); i += 2; break;
+                        case '/':  sb.append('/');  i += 2; break;
+                        default:   sb.append(c);    i++;    break;
+                    }
+                } else if (c == '"') {
                     break;
+                } else {
+                    sb.append(c);
+                    i++;
                 }
             }
-        }
-        if (end > start) {
-            String jsonStr = scriptContent.substring(start, end);
-            try {
-                return new JSONObject(jsonStr);
-            } catch (Exception e) {
-                e.printStackTrace();
+            String unescaped = sb.toString();
+            if (!unescaped.contains("\"links\"")) { pos = i; continue; }
+
+            // 定位 {"data":{ 对象
+            int dataPos = unescaped.indexOf(",{\"data\":{");
+            if (dataPos < 0) dataPos = unescaped.indexOf("{\"data\":{");
+            if (dataPos < 0) { pos = i; continue; }
+            if (unescaped.charAt(dataPos) == ',') dataPos++;
+
+            // 提取平衡括号的 JSON 对象
+            int braceCount = 0, end = dataPos;
+            for (int j = dataPos; j < unescaped.length(); j++) {
+                char ch = unescaped.charAt(j);
+                if (ch == '{') braceCount++;
+                else if (ch == '}') {
+                    braceCount--;
+                    if (braceCount == 0) { end = j + 1; break; }
+                }
             }
+            if (end > dataPos) {
+                try {
+                    JSONObject wrapper = new JSONObject(unescaped.substring(dataPos, end));
+                    JSONObject data = wrapper.optJSONObject("data");
+                    if (data != null) return data;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            pos = i;
         }
         return null;
     }
