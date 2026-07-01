@@ -69,9 +69,10 @@ public class FKTV extends Spider {
             filters.put("6", new ArrayList<>());
             filters.put("4", new ArrayList<>());
             filters.put("9", new ArrayList<>());
-            return Result.string(classes, filters);
+            return Result.string(classes, filters);   // 必须使用这个重载
         }
-        return Result.string(classes);
+        return Result.string(classes);  // 如果没有这个方法就用下面这行
+        // return Result.string(classes, new LinkedHashMap<>()); 
     }
 
     @Override
@@ -199,7 +200,6 @@ public class FKTV extends Spider {
         String vid = parts[0];
         String linkId = parts.length > 1 ? parts[1] : "";
 
-        // 第一集尝试直链
         if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
             String html = OkHttp.string(host + "/movie/" + vid, getHeader());
             String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
@@ -208,7 +208,6 @@ public class FKTV extends Spider {
             }
         }
 
-        // 加密接口
         try {
             JSONObject dataObj = new JSONObject();
             dataObj.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
@@ -244,7 +243,6 @@ public class FKTV extends Spider {
         return Result.get().url(host + "/movie/" + vid).parse(1).string();
     }
 
-    // ====================== 辅助方法 ======================
     private String getFixedPic(Element img) {
         if (img == null) return "";
         return getFixedPicStr(img.attr("src"));
