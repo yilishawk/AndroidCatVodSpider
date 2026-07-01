@@ -126,9 +126,7 @@ public class FKTV extends Spider {
             }
         }
 
-        if (TextUtils.isEmpty(name)) {
-            name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
-        }
+        if (TextUtils.isEmpty(name)) name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
         pic = getFixedPicStr(pic);
 
         Map<String, List<String>> playMap = new LinkedHashMap<>();
@@ -136,9 +134,7 @@ public class FKTV extends Spider {
         List<String> line2 = new ArrayList<>();
 
         String linksJson = extractRegex(html, "\"links\"\\s*:\\s*(\\[.*?\\}\\s*\\])", Pattern.DOTALL);
-        if (TextUtils.isEmpty(linksJson)) {
-            linksJson = extractRegex(html, "links\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
-        }
+        if (TextUtils.isEmpty(linksJson)) linksJson = extractRegex(html, "links\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
 
         if (!TextUtils.isEmpty(linksJson)) {
             try {
@@ -241,8 +237,8 @@ public class FKTV extends Spider {
             String encrypted = encryptHex(plainText);
 
             if (!TextUtils.isEmpty(encrypted)) {
-                // 关键修复：调用 .string()
-                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
+                // 最终修复：不调用 .string()，直接赋值
+                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
                 String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
                 if (!TextUtils.isEmpty(m3u8)) {
                     return Result.get().url(m3u8).string();
