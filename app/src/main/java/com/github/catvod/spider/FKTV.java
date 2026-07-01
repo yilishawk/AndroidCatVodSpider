@@ -69,10 +69,10 @@ public class FKTV extends Spider {
             filters.put("6", new ArrayList<>());
             filters.put("4", new ArrayList<>());
             filters.put("9", new ArrayList<>());
-            return Result.string(classes, filters);   // 必须使用这个重载
+            return Result.string(classes, filters);
         }
-        return Result.string(classes);  // 如果没有这个方法就用下面这行
-        // return Result.string(classes, new LinkedHashMap<>()); 
+        // 关键修复：使用兼容的重载
+        return Result.string(classes, new LinkedHashMap<String, List<Filter>>());
     }
 
     @Override
