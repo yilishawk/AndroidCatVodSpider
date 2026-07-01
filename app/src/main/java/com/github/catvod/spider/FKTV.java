@@ -29,13 +29,12 @@ public class FKTV extends Spider {
 
     private final String host = "https://fktv.me";
     private final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-    private final String AES_KEY = "39656431613636316136616237383761"; // hex key
+    private final String AES_HEX_KEY = "39656431613636316136616237383761"; // 16字节 hex key
 
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Referer", host);
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
         return headers;
     }
 
@@ -48,7 +47,6 @@ public class FKTV extends Spider {
         headers.put("version", "1.0");
         headers.put("origin", host);
         headers.put("channel", "");
-        headers.put("accept", "*/*");
         return headers;
     }
 
@@ -56,7 +54,6 @@ public class FKTV extends Spider {
     public void init(Context context, String extend) throws Exception {
     }
 
-    // ==================== 首页 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -76,7 +73,6 @@ public class FKTV extends Spider {
         return Result.string(classes);
     }
 
-    // ==================== 分类页 ====================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String url = host + "/category/" + tid + "/page/" + pg;
@@ -95,15 +91,7 @@ public class FKTV extends Spider {
             String vid = href.replace("/movie/", "").split("/")[0];
             String name = a.attr("title");
 
-            String pic = "";
-            Element img = item.selectFirst("img");
-            if (img != null) {
-                pic = img.attr("src");
-                if (pic.endsWith(".bnc")) pic = pic.replace(".bnc", ".jpg");
-                if (!pic.startsWith("http")) {
-                    pic = "https://cdn.g3ejjm8m.com" + (pic.startsWith("/") ? pic : "/" + pic);
-                }
-            }
+            String pic = getFixedPic(item.selectFirst("img"));
 
             String remark = item.selectFirst(".tag") != null ? item.selectFirst(".tag").text() : "";
 
@@ -117,7 +105,6 @@ public class FKTV extends Spider {
         return Result.string(list);
     }
 
-    // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String vid = ids.get(0);
@@ -128,11 +115,10 @@ public class FKTV extends Spider {
         Document doc = Jsoup.parse(html);
 
         String name = "", pic = "", content = "";
-        Elements scripts = doc.select("script[type=application/ld+json]");
-        for (Element s : scripts) {
-            if (s.html().contains("VideoObject")) {
+        for (Element script : doc.select("script[type=application/ld+json]")) {
+            if (script.html().contains("VideoObject")) {
                 try {
-                    JSONObject json = new JSONObject(s.html());
+                    JSONObject json = new JSONObject(script.html());
                     name = json.optString("name");
                     pic = json.optJSONArray("thumbnailUrl") != null ? json.optJSONArray("thumbnailUrl").optString(0) : "";
                     content = json.optString("description");
@@ -141,15 +127,11 @@ public class FKTV extends Spider {
             }
         }
 
-        if (TextUtils.isEmpty(name)) {
-            name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
-        }
+        if (TextUtils.isEmpty(name)) name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
 
-        // 图片修复
-        if (pic.endsWith(".bnc")) pic = pic.replace(".bnc", ".jpg");
-        if (!pic.startsWith("http")) pic = "https://cdn.g3ejjm8m.com" + (pic.startsWith("/") ? pic : "/" + pic);
+        pic = getFixedPicStr(pic);
 
-        // 提取剧集
+        // 剧集
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         List<String> line1 = new ArrayList<>();
         List<String> line2 = new ArrayList<>();
@@ -173,15 +155,6 @@ public class FKTV extends Spider {
         if (!line1.isEmpty()) {
             playMap.put("线路1", line1);
             playMap.put("线路2", line2);
-        } else {
-            // fallback
-            String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-            if (!TextUtils.isEmpty(m3u8)) {
-                line1.add("播放$" + m3u8);
-                line2.add("播放$" + m3u8);
-                playMap.put("线路1", line1);
-                playMap.put("线路2", line2);
-            }
         }
 
         Vod vod = new Vod();
@@ -195,7 +168,6 @@ public class FKTV extends Spider {
         return Result.string(vod);
     }
 
-    // ==================== 搜索 ====================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         String url = host + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
@@ -212,14 +184,7 @@ public class FKTV extends Spider {
             String href = a.attr("href");
             String vid = href.replace("/movie/", "").split("/")[0];
             String name = a.attr("title");
-
-            String pic = "";
-            Element img = item.selectFirst("img");
-            if (img != null) {
-                pic = img.attr("src");
-                if (pic.endsWith(".bnc")) pic = pic.replace(".bnc", ".jpg");
-                if (!pic.startsWith("http")) pic = "https://cdn.g3ejjm8m.com" + (pic.startsWith("/") ? pic : "/" + pic);
-            }
+            String pic = getFixedPic(item.selectFirst("img"));
 
             Vod vod = new Vod();
             vod.setVodId(vid);
@@ -230,24 +195,22 @@ public class FKTV extends Spider {
         return Result.string(list);
     }
 
-    // ==================== 播放解析 ====================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String[] parts = id.split("\\|");
         String vid = parts[0];
         String linkId = parts.length > 1 ? parts[1] : "";
-        String lineNum = parts.length > 2 ? parts[2] : "1";
 
         // 第一集尝试直链
-        if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
+        if (TextUtils.isEmpty(linkId) || linkId.equals("1")) {
             String html = OkHttp.string(host + "/movie/" + vid, getHeader());
-            String directM3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-            if (!TextUtils.isEmpty(directM3u8)) {
-                return Result.get().url(directM3u8).string();
+            String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
+            if (!TextUtils.isEmpty(m3u8)) {
+                return Result.get().url(m3u8).string();
             }
         }
 
-        // 其他集数走加密接口
+        // 走加密接口
         try {
             JSONObject dataObj = new JSONObject();
             dataObj.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
@@ -267,37 +230,67 @@ public class FKTV extends Spider {
 
             String plainText = dataObj.toString();
 
-            // 使用 AESEncryption 进行 ECB 加密
-            String encrypted = AESEncryption.encrypt(plainText, AES_KEY, "", AESEncryption.ECB_PKCS_7_PADDING);
+            // 关键修复：Hex Key 转字节
+            String encrypted = encryptWithHexKey(plainText);
 
-            if (TextUtils.isEmpty(encrypted)) {
-                throw new Exception("加密失败");
-            }
+            String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
 
-            String apiUrl = host + "/ysapi/movie/detail";
-            String resp = OkHttp.post(apiUrl, encrypted, getApiHeader());
-
-            if (!TextUtils.isEmpty(resp)) {
-                String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-                if (!TextUtils.isEmpty(m3u8)) {
-                    return Result.get().url(m3u8).string();
-                }
+            String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
+            if (!TextUtils.isEmpty(m3u8)) {
+                return Result.get().url(m3u8).string();
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
 
-        // 兜底嗅探
         return Result.get().url(host + "/movie/" + vid).parse(1).string();
     }
 
-    private String extractRegex(String text, String regex) {
-        return extractRegex(text, regex, 0);
+    // ====================== 辅助方法 ======================
+    private String getFixedPic(Element img) {
+        if (img == null) return "";
+        String pic = img.attr("src");
+        return getFixedPicStr(pic);
+    }
+
+    private String getFixedPicStr(String pic) {
+        if (TextUtils.isEmpty(pic)) return "";
+        if (pic.endsWith(".bnc")) pic = pic.replace(".bnc", ".jpg");
+        if (!pic.startsWith("http")) {
+            pic = "https://cdn.g3ejjm8m.com" + (pic.startsWith("/") ? pic : "/" + pic);
+        }
+        return pic;
+    }
+
+    private String encryptWithHexKey(String plain) {
+        try {
+            // 把 hex key 转为字节数组
+            byte[] keyBytes = hexToBytes(AES_HEX_KEY);
+            String keyStr = new String(keyBytes, "UTF-8"); // 工具类内部会再转，但兼容处理
+            return AESEncryption.encrypt(plain, keyStr, "", AESEncryption.ECB_PKCS_7_PADDING);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private byte[] hexToBytes(String hex) {
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return data;
     }
 
     private String extractRegex(String text, String regex, int flags) {
         if (TextUtils.isEmpty(text)) return "";
         Matcher m = Pattern.compile(regex, flags).matcher(text);
         return m.find() ? m.group(1) : "";
+    }
+
+    private String extractRegex(String text, String regex) {
+        return extractRegex(text, regex, 0);
     }
 }
