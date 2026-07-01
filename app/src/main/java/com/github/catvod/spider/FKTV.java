@@ -241,8 +241,8 @@ public class FKTV extends Spider {
             String encrypted = encryptHex(plainText);
 
             if (!TextUtils.isEmpty(encrypted)) {
-                // 修复：直接使用 OkHttp.post 返回 String
-                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
+                // 正确写法：OkHttp.post 返回 OkResult，需要调用 .string()
+                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
                 String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
                 if (!TextUtils.isEmpty(m3u8)) {
                     return Result.get().url(m3u8).string();
