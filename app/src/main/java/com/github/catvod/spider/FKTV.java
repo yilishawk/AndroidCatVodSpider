@@ -29,7 +29,7 @@ public class FKTV extends Spider {
 
     private final String host = "https://fktv.me";
     private final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-    private final String AES_HEX_KEY = "39656431613636316136616237383761"; // 16字节 hex key
+    private final String AES_HEX_KEY = "39656431613636316136616237383761";
 
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
@@ -92,7 +92,6 @@ public class FKTV extends Spider {
             String name = a.attr("title");
 
             String pic = getFixedPic(item.selectFirst("img"));
-
             String remark = item.selectFirst(".tag") != null ? item.selectFirst(".tag").text() : "";
 
             Vod vod = new Vod();
@@ -127,11 +126,11 @@ public class FKTV extends Spider {
             }
         }
 
-        if (TextUtils.isEmpty(name)) name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
-
+        if (TextUtils.isEmpty(name)) {
+            name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
+        }
         pic = getFixedPicStr(pic);
 
-        // 剧集
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         List<String> line1 = new ArrayList<>();
         List<String> line2 = new ArrayList<>();
@@ -147,9 +146,7 @@ public class FKTV extends Spider {
                     line1.add(epName + "$" + vid + "|" + linkId + "|1");
                     line2.add(epName + "$" + vid + "|" + linkId + "|2");
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            } catch (Exception ignored) {}
         }
 
         if (!line1.isEmpty()) {
@@ -201,8 +198,8 @@ public class FKTV extends Spider {
         String vid = parts[0];
         String linkId = parts.length > 1 ? parts[1] : "";
 
-        // 第一集尝试直链
-        if (TextUtils.isEmpty(linkId) || linkId.equals("1")) {
+        // 第一集直链尝试
+        if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
             String html = OkHttp.string(host + "/movie/" + vid, getHeader());
             String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
             if (!TextUtils.isEmpty(m3u8)) {
@@ -210,7 +207,7 @@ public class FKTV extends Spider {
             }
         }
 
-        // 走加密接口
+        // 加密接口
         try {
             JSONObject dataObj = new JSONObject();
             dataObj.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
@@ -229,9 +226,9 @@ public class FKTV extends Spider {
             dataObj.put("data", inner);
 
             String plainText = dataObj.toString();
+            String encrypted = encryptHex(plainText);
 
-            // 关键修复：Hex Key 转字节
-            String encrypted = encryptWithHexKey(plainText);
+            if (TextUtils.isEmpty(encrypted)) throw new Exception("加密失败");
 
             String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
 
@@ -246,11 +243,10 @@ public class FKTV extends Spider {
         return Result.get().url(host + "/movie/" + vid).parse(1).string();
     }
 
-    // ====================== 辅助方法 ======================
+    // ====================== 工具方法 ======================
     private String getFixedPic(Element img) {
         if (img == null) return "";
-        String pic = img.attr("src");
-        return getFixedPicStr(pic);
+        return getFixedPicStr(img.attr("src"));
     }
 
     private String getFixedPicStr(String pic) {
@@ -262,11 +258,11 @@ public class FKTV extends Spider {
         return pic;
     }
 
-    private String encryptWithHexKey(String plain) {
+    private String encryptHex(String plain) {
         try {
-            // 把 hex key 转为字节数组
-            byte[] keyBytes = hexToBytes(AES_HEX_KEY);
-            String keyStr = new String(keyBytes, "UTF-8"); // 工具类内部会再转，但兼容处理
+            // Hex 转字节后转 String 给 AESEncryption
+            byte[] keyBytes = hexStringToByteArray(AES_HEX_KEY);
+            String keyStr = new String(keyBytes, "ISO-8859-1"); // 重要：避免 UTF-8 破坏二进制 key
             return AESEncryption.encrypt(plain, keyStr, "", AESEncryption.ECB_PKCS_7_PADDING);
         } catch (Exception e) {
             e.printStackTrace();
@@ -274,12 +270,12 @@ public class FKTV extends Spider {
         }
     }
 
-    private byte[] hexToBytes(String hex) {
-        int len = hex.length();
+    private byte[] hexStringToByteArray(String s) {
+        int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                    + Character.digit(hex.charAt(i + 1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+                    + Character.digit(s.charAt(i + 1), 16));
         }
         return data;
     }
