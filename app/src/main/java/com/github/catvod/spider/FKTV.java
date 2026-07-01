@@ -8,7 +8,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.net.OkResult;
 import com.github.catvod.utils.AESEncryption;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -71,8 +70,7 @@ public class FKTV extends Spider {
             filters.put("9", new ArrayList<>());
             return Result.string(classes, filters);
         }
-        // 关键修复：使用兼容的重载
-        return Result.string(classes, new LinkedHashMap<String, List<Filter>>());
+        return Result.string(classes, new ArrayList<>());
     }
 
     @Override
@@ -133,11 +131,17 @@ public class FKTV extends Spider {
         }
         pic = getFixedPicStr(pic);
 
+        // ==================== 重点优化：提取集数 ====================
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         List<String> line1 = new ArrayList<>();
         List<String> line2 = new ArrayList<>();
 
-        String linksJson = extractRegex(html, "\"links\"\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
+        // 更强的正则匹配 links 数组
+        String linksJson = extractRegex(html, "\"links\"\\s*:\\s*(\\[.*?\\}\\s*\\])", Pattern.DOTALL);
+        if (TextUtils.isEmpty(linksJson)) {
+            linksJson = extractRegex(html, "links\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
+        }
+
         if (!TextUtils.isEmpty(linksJson)) {
             try {
                 JSONArray arr = new JSONArray(linksJson);
@@ -145,10 +149,23 @@ public class FKTV extends Spider {
                     JSONObject obj = arr.getJSONObject(i);
                     String epName = obj.optString("name", "第" + (i + 1) + "集");
                     String linkId = obj.optString("id");
-                    line1.add(epName + "$" + vid + "|" + linkId + "|1");
-                    line2.add(epName + "$" + vid + "|" + linkId + "|2");
+                    if (!TextUtils.isEmpty(linkId)) {
+                        line1.add(epName + "$" + vid + "|" + linkId + "|1");
+                        line2.add(epName + "$" + vid + "|" + linkId + "|2");
+                    }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        // 如果还是没提取到，尝试提取 m3u8 直链作为 fallback
+        if (line1.isEmpty()) {
+            String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
+            if (!TextUtils.isEmpty(m3u8)) {
+                line1.add("播放$" + m3u8);
+                line2.add("播放$" + m3u8);
+            }
         }
 
         if (!line1.isEmpty()) {
@@ -167,6 +184,7 @@ public class FKTV extends Spider {
         return Result.string(vod);
     }
 
+    // 其他方法（searchContent、playerContent、工具方法）保持不变
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         String url = host + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
@@ -229,8 +247,7 @@ public class FKTV extends Spider {
             String encrypted = encryptHex(plainText);
 
             if (!TextUtils.isEmpty(encrypted)) {
-                OkResult okResult = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
-                String resp = okResult.getBody();
+                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
                 String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
                 if (!TextUtils.isEmpty(m3u8)) {
                     return Result.get().url(m3u8).string();
@@ -272,7 +289,8 @@ public class FKTV extends Spider {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+                    + Character.digit(s.charAt(i + 1), 16));
         }
         return data;
     }
