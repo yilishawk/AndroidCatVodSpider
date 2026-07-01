@@ -8,6 +8,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 import com.github.catvod.utils.AESEncryption;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -70,7 +71,7 @@ public class FKTV extends Spider {
             filters.put("9", new ArrayList<>());
             return Result.string(classes, filters);
         }
-        return Result.string(classes, new ArrayList<>()); // 兼容无筛选情况
+        return Result.string(classes);
     }
 
     @Override
@@ -229,7 +230,8 @@ public class FKTV extends Spider {
             String encrypted = encryptHex(plainText);
 
             if (!TextUtils.isEmpty(encrypted)) {
-                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
+                OkResult okResult = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
+                String resp = okResult.getBody();
                 String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
                 if (!TextUtils.isEmpty(m3u8)) {
                     return Result.get().url(m3u8).string();
@@ -272,8 +274,7 @@ public class FKTV extends Spider {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                    + Character.digit(s.charAt(i + 1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16));
         }
         return data;
     }
