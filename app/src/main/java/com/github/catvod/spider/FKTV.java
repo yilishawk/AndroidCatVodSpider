@@ -63,14 +63,14 @@ public class FKTV extends Spider {
         classes.add(new Class("9", "短剧"));
 
         if (filter) {
-            Map<String, List<Filter>> filters = new HashMap<>();
+            LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
             filters.put("5", new ArrayList<>());
             filters.put("6", new ArrayList<>());
             filters.put("4", new ArrayList<>());
             filters.put("9", new ArrayList<>());
             return Result.string(classes, filters);
         }
-        return Result.string(classes);
+        return Result.string(classes, new ArrayList<>()); // 兼容无筛选情况
     }
 
     @Override
@@ -198,7 +198,7 @@ public class FKTV extends Spider {
         String vid = parts[0];
         String linkId = parts.length > 1 ? parts[1] : "";
 
-        // 第一集直链尝试
+        // 第一集直链
         if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
             String html = OkHttp.string(host + "/movie/" + vid, getHeader());
             String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
@@ -228,13 +228,12 @@ public class FKTV extends Spider {
             String plainText = dataObj.toString();
             String encrypted = encryptHex(plainText);
 
-            if (TextUtils.isEmpty(encrypted)) throw new Exception("加密失败");
-
-            String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
-
-            String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-            if (!TextUtils.isEmpty(m3u8)) {
-                return Result.get().url(m3u8).string();
+            if (!TextUtils.isEmpty(encrypted)) {
+                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
+                String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
+                if (!TextUtils.isEmpty(m3u8)) {
+                    return Result.get().url(m3u8).string();
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -260,9 +259,8 @@ public class FKTV extends Spider {
 
     private String encryptHex(String plain) {
         try {
-            // Hex 转字节后转 String 给 AESEncryption
             byte[] keyBytes = hexStringToByteArray(AES_HEX_KEY);
-            String keyStr = new String(keyBytes, "ISO-8859-1"); // 重要：避免 UTF-8 破坏二进制 key
+            String keyStr = new String(keyBytes, "ISO-8859-1");
             return AESEncryption.encrypt(plain, keyStr, "", AESEncryption.ECB_PKCS_7_PADDING);
         } catch (Exception e) {
             e.printStackTrace();
