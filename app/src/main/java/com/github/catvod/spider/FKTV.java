@@ -199,7 +199,7 @@ public class FKTV extends Spider {
         String vid = parts[0];
         String linkId = parts.length > 1 ? parts[1] : "";
 
-        // 第一集直链
+        // 第一集尝试直链
         if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
             String html = OkHttp.string(host + "/movie/" + vid, getHeader());
             String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
@@ -244,7 +244,7 @@ public class FKTV extends Spider {
         return Result.get().url(host + "/movie/" + vid).parse(1).string();
     }
 
-    // ====================== 工具方法 ======================
+    // ====================== 辅助方法 ======================
     private String getFixedPic(Element img) {
         if (img == null) return "";
         return getFixedPicStr(img.attr("src"));
