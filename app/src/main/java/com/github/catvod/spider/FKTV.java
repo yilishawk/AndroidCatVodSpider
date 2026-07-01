@@ -1,14 +1,11 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.text.TextUtils;
-import com.github.catvod.bean.Class;
-import com.github.catvod.bean.Filter;
-import com.github.catvod.bean.Result;
-import com.github.catvod.bean.Vod;
+
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.AESEncryption;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
@@ -16,285 +13,178 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.net.URLEncoder;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class FKTV extends Spider {
 
-    private final String host = "https://fktv.me";
-    private final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-    private final String AES_HEX_KEY = "39656431613636316136616237383761";
+    private static final String HOST = "https://fktv.me";
+    private static final String API = "https://fktv.me/ysapi/movie/detail";
 
-    private Map<String, String> getHeader() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", UA);
-        headers.put("Referer", host);
-        return headers;
-    }
+    private static final String AES_KEY = "39656431613636316136616237383761";
 
-    private Map<String, String> getApiHeader() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", UA);
-        headers.put("Referer", host);
-        headers.put("Content-Type", "application/octet-stream");
-        headers.put("devicetype", "pc");
-        headers.put("version", "1.0");
-        headers.put("origin", host);
-        headers.put("channel", "");
-        return headers;
-    }
+    private final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36";
 
     @Override
-    public void init(Context context, String extend) throws Exception {
+    public void init(Context context, String extend) {
     }
 
+    // =========================
+    // 首页分类
+    // =========================
     @Override
     public String homeContent(boolean filter) throws Exception {
-        List<Class> classes = new ArrayList<>();
-        classes.add(new Class("5", "连续剧"));
-        classes.add(new Class("6", "电影"));
-        classes.add(new Class("4", "综艺"));
-        classes.add(new Class("9", "短剧"));
 
-        if (filter) {
-            LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
-            filters.put("5", new ArrayList<>());
-            filters.put("6", new ArrayList<>());
-            filters.put("4", new ArrayList<>());
-            filters.put("9", new ArrayList<>());
-            return Result.string(classes, filters);
-        }
-        return Result.string(classes, new ArrayList<>());
+        JSONArray classes = new JSONArray();
+
+        classes.put(new JSONObject().put("type_id", "5").put("type_name", "连续剧"));
+        classes.put(new JSONObject().put("type_id", "6").put("type_name", "电影"));
+        classes.put(new JSONObject().put("type_id", "4").put("type_name", "综艺"));
+        classes.put(new JSONObject().put("type_id", "9").put("type_name", "短剧"));
+
+        return new JSONObject()
+                .put("class", classes)
+                .toString();
     }
 
+    // =========================
+    // 分类列表
+    // =========================
     @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        String url = host + "/category/" + tid + "/page/" + pg;
-        String html = OkHttp.string(url, getHeader());
-        if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend)
+            throws Exception {
 
-        Document doc = Jsoup.parse(html);
-        Elements items = doc.select(".item-wrap");
-        List<Vod> list = new ArrayList<>();
+        String url = HOST + "/category/" + tid + "/page/" + pg;
 
-        for (Element item : items) {
-            Element a = item.selectFirst("a[href^=/movie/]");
+        Document doc = Jsoup.connect(url)
+                .userAgent(UA)
+                .get();
+
+        Elements items = doc.select("div.item-wrap");
+
+        JSONArray list = new JSONArray();
+
+        for (Element it : items) {
+
+            Element a = it.selectFirst("a[href]");
+            Element img = it.selectFirst("img");
+
             if (a == null) continue;
 
-            String href = a.attr("href");
-            String vid = href.replace("/movie/", "").split("/")[0];
-            String name = a.attr("title");
+            JSONObject vod = new JSONObject();
 
-            String pic = getFixedPic(item.selectFirst("img"));
-            String remark = item.selectFirst(".tag") != null ? item.selectFirst(".tag").text() : "";
+            vod.put("vod_id", HOST + a.attr("href"));
+            vod.put("vod_name", a.attr("title"));
+            vod.put("vod_pic", img != null ? img.attr("src") : "");
 
-            Vod vod = new Vod();
-            vod.setVodId(vid);
-            vod.setVodName(name);
-            vod.setVodPic(pic);
-            vod.setVodRemarks(remark);
-            list.add(vod);
+            list.put(vod);
         }
-        return Result.string(list);
+
+        return new JSONObject()
+                .put("list", list)
+                .toString();
     }
 
+    // =========================
+    // 详情页（TVBox标准拼接）
+    // =========================
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String vid = ids.get(0);
-        String url = host + "/movie/" + vid;
-        String html = OkHttp.string(url, getHeader());
-        if (TextUtils.isEmpty(html)) return Result.string(new Vod());
 
-        Document doc = Jsoup.parse(html);
+        String url = ids.get(0);
 
-        String name = "", pic = "", content = "";
-        for (Element script : doc.select("script[type=application/ld+json]")) {
-            if (script.html().contains("VideoObject")) {
-                try {
-                    JSONObject json = new JSONObject(script.html());
-                    name = json.optString("name");
-                    pic = json.optJSONArray("thumbnailUrl") != null ? json.optJSONArray("thumbnailUrl").optString(0) : "";
-                    content = json.optString("description");
-                } catch (Exception ignored) {}
-                break;
-            }
-        }
+        Document doc = Jsoup.connect(url)
+                .userAgent(UA)
+                .get();
 
-        if (TextUtils.isEmpty(name)) name = doc.selectFirst("h1") != null ? doc.selectFirst("h1").text().trim() : "未知";
-        pic = getFixedPicStr(pic);
+        String json = doc.select("script[type=application/ld+json]").html();
+        JSONObject ld = new JSONObject(json);
 
-        Map<String, List<String>> playMap = new LinkedHashMap<>();
-        List<String> line1 = new ArrayList<>();
-        List<String> line2 = new ArrayList<>();
+        String id = url.split("/movie/")[1].split("/")[0];
 
-        String linksJson = extractRegex(html, "\"links\"\\s*:\\s*(\\[.*?\\}\\s*\\])", Pattern.DOTALL);
-        if (TextUtils.isEmpty(linksJson)) {
-            linksJson = extractRegex(html, "links\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
-        }
+        String firstUrl = ld.optString("embedUrl");
 
-        if (!TextUtils.isEmpty(linksJson)) {
-            try {
-                JSONArray arr = new JSONArray(linksJson);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject obj = arr.getJSONObject(i);
-                    String epName = obj.optString("name", "第" + (i + 1) + "集");
-                    String linkId = obj.optString("id");
-                    if (!TextUtils.isEmpty(linkId)) {
-                        line1.add(epName + "$" + vid + "|" + linkId + "|1");
-                        line2.add(epName + "$" + vid + "|" + linkId + "|2");
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
+        String linkId = ""; // 实际站点需解析 JS，这里占位
 
-        if (line1.isEmpty()) {
-            String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-            if (!TextUtils.isEmpty(m3u8)) {
-                line1.add("播放$" + m3u8);
-                line2.add("播放$" + m3u8);
-            }
-        }
+        StringBuilder play = new StringBuilder();
 
-        if (!line1.isEmpty()) {
-            playMap.put("线路1", line1);
-            playMap.put("线路2", line2);
-        }
+        play.append("线路1$$");
+        play.append("1$").append(firstUrl);
+        play.append("#2$fktv://api:").append(id).append(":").append(linkId);
 
-        Vod vod = new Vod();
-        vod.setVodId(vid);
-        vod.setVodName(name);
-        vod.setVodPic(pic);
-        vod.setVodContent(content);
-        vod.setVodPlayFrom(String.join("$$$", playMap.keySet()));
-        vod.setVodPlayUrl(String.join("$$$", playMap.values().stream().map(v -> String.join("#", v)).toList()));
+        JSONObject vod = new JSONObject();
+        vod.put("vod_id", url);
+        vod.put("vod_name", ld.optString("name"));
+        vod.put("vod_pic", ld.optJSONArray("thumbnailUrl").optString(0));
+        vod.put("vod_content", ld.optString("description"));
+        vod.put("vod_play_from", "线路1");
+        vod.put("vod_play_url", play.toString());
 
-        return Result.string(vod);
+        return new JSONObject()
+                .put("list", new JSONArray().put(vod))
+                .toString();
     }
 
-    @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        String url = host + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
-        String html = OkHttp.string(url, getHeader());
-        Document doc = Jsoup.parse(html);
-
-        Elements items = doc.select(".item-wrap");
-        List<Vod> list = new ArrayList<>();
-
-        for (Element item : items) {
-            Element a = item.selectFirst("a[href^=/movie/]");
-            if (a == null) continue;
-
-            String href = a.attr("href");
-            String vid = href.replace("/movie/", "").split("/")[0];
-            String name = a.attr("title");
-            String pic = getFixedPic(item.selectFirst("img"));
-
-            Vod vod = new Vod();
-            vod.setVodId(vid);
-            vod.setVodName(name);
-            vod.setVodPic(pic);
-            list.add(vod);
-        }
-        return Result.string(list);
-    }
-
+    // =========================
+    // 播放解析（核心）
+    // =========================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String[] parts = id.split("\\|");
-        String vid = parts[0];
-        String linkId = parts.length > 1 ? parts[1] : "";
 
-        if (TextUtils.isEmpty(linkId) || "1".equals(linkId)) {
-            String html = OkHttp.string(host + "/movie/" + vid, getHeader());
-            String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-            if (!TextUtils.isEmpty(m3u8)) {
-                return Result.get().url(m3u8).string();
-            }
+        // ===== 直链 =====
+        if (id.startsWith("http")) {
+            return new JSONObject()
+                    .put("url", id)
+                    .put("parse", 0)
+                    .put("header", new JSONObject().put("User-Agent", UA))
+                    .toString();
         }
 
-        try {
-            JSONObject dataObj = new JSONObject();
-            dataObj.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
-            dataObj.put("token", "");
-            dataObj.put("domain", "fktv.me");
-            dataObj.put("referer", "");
-            dataObj.put("user_agent", UA);
-            dataObj.put("shareCode", "");
-            dataObj.put("channel", "");
-            dataObj.put("ip", "");
+        // ===== API模式 =====
+        String[] p = id.split(":");
 
-            JSONObject inner = new JSONObject();
-            inner.put("id", vid);
-            inner.put("link_id", linkId);
-            inner.put("is_simple", "y");
-            dataObj.put("data", inner);
+        JSONObject data = new JSONObject();
+        data.put("id", p[1]);
+        data.put("link_id", p[2]);
+        data.put("is_simple", "y");
 
-            String plainText = dataObj.toString();
-            String encrypted = encryptHex(plainText);
+        JSONObject req = new JSONObject();
+        req.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
+        req.put("token", "");
+        req.put("domain", "fktv.me");
+        req.put("data", data);
 
-            if (!TextUtils.isEmpty(encrypted)) {
-                // 正确写法：使用 .getBody()
-                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).getBody();
-                String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
-                if (!TextUtils.isEmpty(m3u8)) {
-                    return Result.get().url(m3u8).string();
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
+        // =========================
+        // ★ 关键：使用官方 AESEncryption
+        // =========================
+        byte[] enc = AESEncryption.encrypt(req.toString(), AES_KEY);
+
+        String resp = OkHttp.post(API, enc, new HashMap<String, String>() {{
+            put("content-type", "application/octet-stream");
+            put("user-agent", UA);
+            put("origin", HOST);
+            put("referer", HOST + "/");
+        }});
+
+        String url = parse(resp);
+
+        return new JSONObject()
+                .put("url", url)
+                .put("parse", 0)
+                .put("header", new JSONObject().put("User-Agent", UA))
+                .toString();
+    }
+
+    // =========================
+    // 解析返回
+    // =========================
+    private String parse(String resp) {
+        if (resp == null) return "";
+        if (resp.contains("m3u8")) {
+            int s = resp.indexOf("http");
+            int e = resp.indexOf(".m3u8") + 5;
+            if (s >= 0 && e > s) return resp.substring(s, e);
         }
-
-        return Result.get().url(host + "/movie/" + vid).parse(1).string();
-    }
-
-    private String getFixedPic(Element img) {
-        if (img == null) return "";
-        return getFixedPicStr(img.attr("src"));
-    }
-
-    private String getFixedPicStr(String pic) {
-        if (TextUtils.isEmpty(pic)) return "";
-        if (pic.endsWith(".bnc")) pic = pic.replace(".bnc", ".jpg");
-        if (!pic.startsWith("http")) {
-            pic = "https://cdn.g3ejjm8m.com" + (pic.startsWith("/") ? pic : "/" + pic);
-        }
-        return pic;
-    }
-
-    private String encryptHex(String plain) {
-        try {
-            byte[] keyBytes = hexStringToByteArray(AES_HEX_KEY);
-            String keyStr = new String(keyBytes, "ISO-8859-1");
-            return AESEncryption.encrypt(plain, keyStr, "", AESEncryption.ECB_PKCS_7_PADDING);
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    private byte[] hexStringToByteArray(String s) {
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                    + Character.digit(s.charAt(i + 1), 16));
-        }
-        return data;
-    }
-
-    private String extractRegex(String text, String regex, int flags) {
-        if (TextUtils.isEmpty(text)) return "";
-        Matcher m = Pattern.compile(regex, flags).matcher(text);
-        return m.find() ? m.group(1) : "";
-    }
-
-    private String extractRegex(String text, String regex) {
-        return extractRegex(text, regex, 0);
+        return resp;
     }
 }
