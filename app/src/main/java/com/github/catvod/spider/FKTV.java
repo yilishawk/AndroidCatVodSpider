@@ -131,12 +131,10 @@ public class FKTV extends Spider {
         }
         pic = getFixedPicStr(pic);
 
-        // ==================== 重点优化：提取集数 ====================
         Map<String, List<String>> playMap = new LinkedHashMap<>();
         List<String> line1 = new ArrayList<>();
         List<String> line2 = new ArrayList<>();
 
-        // 更强的正则匹配 links 数组
         String linksJson = extractRegex(html, "\"links\"\\s*:\\s*(\\[.*?\\}\\s*\\])", Pattern.DOTALL);
         if (TextUtils.isEmpty(linksJson)) {
             linksJson = extractRegex(html, "links\\s*:\\s*(\\[.*?\\])", Pattern.DOTALL);
@@ -154,12 +152,9 @@ public class FKTV extends Spider {
                         line2.add(epName + "$" + vid + "|" + linkId + "|2");
                     }
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            } catch (Exception ignored) {}
         }
 
-        // 如果还是没提取到，尝试提取 m3u8 直链作为 fallback
         if (line1.isEmpty()) {
             String m3u8 = extractRegex(html, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
             if (!TextUtils.isEmpty(m3u8)) {
@@ -184,7 +179,6 @@ public class FKTV extends Spider {
         return Result.string(vod);
     }
 
-    // 其他方法（searchContent、playerContent、工具方法）保持不变
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         String url = host + "/channel?keywords=" + URLEncoder.encode(key, "UTF-8");
@@ -247,7 +241,8 @@ public class FKTV extends Spider {
             String encrypted = encryptHex(plainText);
 
             if (!TextUtils.isEmpty(encrypted)) {
-                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader()).string();
+                // 修复：直接使用 OkHttp.post 返回 String
+                String resp = OkHttp.post(host + "/ysapi/movie/detail", encrypted, getApiHeader());
                 String m3u8 = extractRegex(resp, "\"m3u8_url\"\\s*:\\s*\"([^\"]+)\"", 0);
                 if (!TextUtils.isEmpty(m3u8)) {
                     return Result.get().url(m3u8).string();
