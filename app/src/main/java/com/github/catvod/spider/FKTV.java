@@ -11,7 +11,7 @@ import org.json.JSONObject;
 import java.util.*;
 import java.util.regex.*;
 
-public class FanKeSpider extends com.github.catvod.crawler.Spider {
+public class FKTV extends com.github.catvod.crawler.Spider {
 
     private final String HOST = "https://fktv.me";
 
