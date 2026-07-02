@@ -5,19 +5,20 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
 
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.util.*;
 import java.util.regex.*;
 
-public class FKTV extends com.github.catvod.crawler.Spider {
+public class FanKeSpider extends com.github.catvod.crawler.Spider {
 
     private final String HOST = "https://fktv.me";
 
     // ================= HOME =================
     @Override
     public String homeContent(boolean filter) {
+
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("5", "连续剧"));
         classes.add(new Class("6", "电影"));
@@ -47,7 +48,7 @@ public class FKTV extends com.github.catvod.crawler.Spider {
                     String json = m.group(1);
                     if (!json.endsWith("}")) json += "}";
 
-                    org.json.JSONObject obj = new org.json.JSONObject(json);
+                    JSONObject obj = new JSONObject(json);
 
                     String path = obj.optString("canonical_path");
                     String id = path.contains("/movie/")
@@ -63,6 +64,7 @@ public class FKTV extends com.github.catvod.crawler.Spider {
                     vod.setVodRemarks(obj.optString("release_at"));
 
                     list.add(vod);
+
                 } catch (Exception ignored) {}
             }
 
@@ -73,53 +75,80 @@ public class FKTV extends com.github.catvod.crawler.Spider {
         return Result.string(list);
     }
 
-    // ================= DETAIL =================
+    // ================= DETAIL（已修复核心） =================
     @Override
     public String detailContent(List<String> ids) {
 
         List<Vod> list = new ArrayList<>();
 
         try {
-            String id = ids.get(0);
-            String url = HOST + "/movie/" + id.replace("___", "/");
+            String vodId = ids.get(0);
+            String url = HOST + "/movie/" + vodId.replace("___", "/");
 
             String html = OkHttp.string(url);
-            Document doc = Jsoup.parse(html);
 
             Vod vod = new Vod();
 
-            vod.setVodName(doc.select("h1").text());
-            vod.setVodPic(doc.select("img").attr("src"));
+            // ===== 基础信息 =====
+            vod.setVodName(extractTitle(html));
+            vod.setVodPic(extractImg(html));
 
-            Pattern p = Pattern.compile("\"links\":(\\[.+?\\])");
-            Matcher m = p.matcher(html.replace("\\/", "/"));
+            // ===== 关键修复：NEXT_DATA =====
+            JSONObject nextData = getNextData(html);
 
-            List<String> playFrom = new ArrayList<>();
-            List<String> playUrl = new ArrayList<>();
+            JSONArray links = new JSONArray();
+            JSONArray playLinks = new JSONArray();
 
-            if (m.find()) {
-                String arr = m.group(1);
-                org.json.JSONArray links = new org.json.JSONArray(arr);
+            if (nextData != null) {
+                links = findArray(nextData, "links");
+                playLinks = findArray(nextData, "play_links");
+            }
 
-                playFrom.add("默认线路");
+            // ===== fallback regex =====
+            if (links.length() == 0) {
+                links = extractJsonArray(html, "links");
+            }
+            if (playLinks.length() == 0) {
+                playLinks = extractJsonArray(html, "play_links");
+            }
+
+            // ===== 组装播放 =====
+            List<String> from = new ArrayList<>();
+            List<String> urls = new ArrayList<>();
+
+            String movieId = vodId.split("___")[0];
+
+            if (playLinks.length() > 0 && links.length() > 0) {
+
+                from.add("默认线路");
 
                 StringBuilder sb = new StringBuilder();
+
                 for (int i = 0; i < links.length(); i++) {
-                    org.json.JSONObject e = links.getJSONObject(i);
 
-                    String name = e.optString("name", String.valueOf(i + 1));
-                    String epId = e.optString("id");
+                    JSONObject ep = links.getJSONObject(i);
 
-                    sb.append(name).append("$").append(id).append("@").append(epId);
+                    String name = ep.optString("name", String.valueOf(i + 1));
+                    String epId = ep.optString("id");
+
+                    String playUrl;
+
+                    if (i == 0) {
+                        playUrl = name + "$" + url;
+                    } else {
+                        playUrl = name + "$" + movieId + "@" + epId;
+                    }
+
+                    sb.append(playUrl);
 
                     if (i < links.length() - 1) sb.append("#");
                 }
 
-                playUrl.add(sb.toString());
+                urls.add(sb.toString());
             }
 
-            vod.setVodPlayFrom(String.join("$$$", playFrom));
-            vod.setVodPlayUrl(String.join("$$$", playUrl));
+            vod.setVodPlayFrom(String.join("$$$", from));
+            vod.setVodPlayUrl(String.join("$$$", urls));
 
             list.add(vod);
 
@@ -128,6 +157,86 @@ public class FKTV extends com.github.catvod.crawler.Spider {
         }
 
         return Result.string(list);
+    }
+
+    // ================= NEXT_DATA 提取（关键） =================
+    private JSONObject getNextData(String html) {
+        try {
+            Pattern p = Pattern.compile(
+                    "<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>",
+                    Pattern.DOTALL
+            );
+
+            Matcher m = p.matcher(html);
+
+            if (m.find()) {
+                return new JSONObject(m.group(1));
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    // ================= 递归查找数组 =================
+    private JSONArray findArray(Object obj, String key) {
+
+        try {
+            if (obj instanceof JSONObject) {
+                JSONObject o = (JSONObject) obj;
+
+                if (o.has(key)) return o.getJSONArray(key);
+
+                Iterator<String> it = o.keys();
+
+                while (it.hasNext()) {
+                    JSONArray r = findArray(o.get(it.next()), key);
+                    if (r != null && r.length() > 0) return r;
+                }
+            }
+
+            if (obj instanceof JSONArray) {
+                JSONArray arr = (JSONArray) obj;
+
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONArray r = findArray(arr.get(i), key);
+                    if (r != null && r.length() > 0) return r;
+                }
+            }
+
+        } catch (Exception ignored) {}
+
+        return new JSONArray();
+    }
+
+    // ================= fallback regex JSON =================
+    private JSONArray extractJsonArray(String html, String key) {
+        try {
+            Pattern p = Pattern.compile("\"" + key + "\":(\\[.+?\\])");
+            Matcher m = p.matcher(html.replace("\\/", "/"));
+            if (m.find()) {
+                return new JSONArray(m.group(1));
+            }
+        } catch (Exception ignored) {}
+        return new JSONArray();
+    }
+
+    // ================= title =================
+    private String extractTitle(String html) {
+        try {
+            Pattern p = Pattern.compile("<h1.*?>(.*?)</h1>");
+            Matcher m = p.matcher(html);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    // ================= image =================
+    private String extractImg(String html) {
+        try {
+            Pattern p = Pattern.compile("<img[^>]+src=\"(.*?)\"");
+            Matcher m = p.matcher(html);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) {}
+        return "";
     }
 
     // ================= PLAY =================
@@ -143,6 +252,7 @@ public class FKTV extends com.github.catvod.crawler.Spider {
             String movieId = arr[0];
             String linkId = arr[1];
 
+            // 这里简化（原站可能是AES，这里你可再扩展）
             String api = HOST + "/ysapi/movie/detail";
 
             Map<String, String> params = new HashMap<>();
