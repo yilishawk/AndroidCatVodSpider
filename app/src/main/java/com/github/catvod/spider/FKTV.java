@@ -72,7 +72,11 @@ public class FKTV extends Spider {
         header.put("Referer", HOST + "/");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         header.put("Accept-Language", "zh-CN,zh;q=0.9");
-        header.put("Accept-Encoding", "gzip, deflate");
+        // 注意：不要手动设置 Accept-Encoding！一旦调用方自己设置这个头，
+        // OkHttp 会认为调用方要自行处理响应编码，从而关闭内置的透明 gzip 解压，
+        // 导致拿到的是没解压的压缩字节而不是文本（这正是"只有分类标题、
+        // 没有视频列表"这个问题的根因——Python 的 requests 库会一直自动解压，
+        // 所以同样的写法在 Python 版本里不会出问题）。
 
         cateMap = new HashMap<>();
         cateMap.put("连续剧", "5");
