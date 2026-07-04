@@ -6,7 +6,6 @@ import android.util.Base64;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Misc;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -18,6 +17,8 @@ import org.jsoup.select.Elements;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -33,21 +34,27 @@ import java.util.regex.Pattern;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 
+import okhttp3.Headers;
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
  * 凡客影视 (fktv.me)
- * 由 Python 版 spider 按项目 Java 规范翻译而来。
+ * 由 Python 版 spider 按项目 Java 规范翻译，Result/Vod/Class/OkHttp 的调用方式已对照
+ * 实际上传的 Result.java / Vod.java / Class.java / OkHttp.java 源码核对过，说明如下：
  *
- * ⚠️ 以下几处依赖你们实际 base 工程中的 API，编译前请对照确认（这也是历史上
- * "Result API 方法名 / OkHttp 导入" 反复出错的地方）：
- *   1) com.github.catvod.bean.Result / Vod / Class 的具体 setter 名称
- *      （不同 fork 可能是 setTypeId / setType_id，或用构造器传参）；
- *   2) OkHttp 工具类里 GET/POST 的具体方法签名（这里假设有
- *      OkHttp.string(url, headers) 和 OkHttp.newCall(url, headers, body)，
- *      如果你们的封装叫法不同，只需替换这两处调用）；
- *   3) Misc.encode 是否存在于你们的 utils 包里，没有的话用
- *      java.net.URLEncoder.encode(str, "UTF-8") 替代即可。
+ *   - Result 没有传统 setter，只能用链式 builder：Result.get().vod(list).page(...).string()；
+ *     .page(page, count, limit, total) 里任何一个参数传 0 都会被规范化成 Integer.MAX_VALUE
+ *     （库自身的"无限/未知"语义，不是 bug）。
+ *   - Vod 用传统 setXxx()，但**没有 type_id 字段**，只有 setTypeName()，所以列表/详情里
+ *     都不再设置 type_id。
+ *   - Class 完全没有 setter，只能用构造函数 new Class(typeId, typeName)。
+ *   - OkHttp 没有 newCall(url, headers, body) 这个三参数重载，POST 自定义 Content-Type
+ *     的原始字节流必须自己拼 okhttp3.Request 再调用 OkHttp.newCall(Request)。
+ *   - OkHttp.string() 内部吞掉了 IOException，失败时返回空字符串而不是抛异常，因此用
+ *     TextUtils.isEmpty() 判断请求是否成功，而不是依赖 try/catch。
  */
 public class FKTV extends Spider {
 
@@ -94,6 +101,14 @@ public class FKTV extends Spider {
                     + Character.digit(hex.charAt(i + 1), 16));
         }
         return data;
+    }
+
+    private static String urlEncode(String s) {
+        try {
+            return URLEncoder.encode(s, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            return s;
+        }
     }
 
     /** 对应 Python 的 find_key_json：在嵌套 JSON 中递归查找第一个匹配的 key */
@@ -184,22 +199,13 @@ public class FKTV extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(buildClass("5_tag_296", "国产剧"));
-        classes.add(buildClass("5", "连续剧"));
-        classes.add(buildClass("6", "电影"));
-        classes.add(buildClass("4", "综艺"));
-        classes.add(buildClass("9", "短剧"));
+        classes.add(new Class("5_tag_296", "国产剧"));
+        classes.add(new Class("5", "连续剧"));
+        classes.add(new Class("6", "电影"));
+        classes.add(new Class("4", "综艺"));
+        classes.add(new Class("9", "短剧"));
 
-        Result result = new Result();
-        result.setClasses(classes);
-        return result.string();
-    }
-
-    private Class buildClass(String id, String name) {
-        Class c = new Class();
-        c.setTypeId(id);
-        c.setTypeName(name);
-        return c;
+        return Result.get().classes(classes).string();
     }
 
     // ========================= 分类列表 =========================
@@ -212,28 +218,20 @@ public class FKTV extends Spider {
             String baseTid = parts[0];
             String tagId = parts[1];
             String typeName = typeNameMap.containsKey(baseTid) ? typeNameMap.get(baseTid) : "";
-            String encodedName = Misc.encode(typeName);
-            url = HOST + "/category/" + baseTid + "/" + encodedName + "/tag/" + tagId + "/" + tagId + "/position/tv/page/" + pg;
+            url = HOST + "/category/" + baseTid + "/" + urlEncode(typeName) + "/tag/" + tagId + "/" + tagId + "/position/tv/page/" + pg;
         } else {
             String typeName = typeNameMap.containsKey(tid) ? typeNameMap.get(tid) : "";
-            String encodedName = Misc.encode(typeName);
-            url = HOST + "/category/" + tid + "/" + encodedName + "/page/" + pg;
+            url = HOST + "/category/" + tid + "/" + urlEncode(typeName) + "/page/" + pg;
         }
 
-        String htmlText;
-        try {
-            htmlText = OkHttp.string(url, header);
-        } catch (Exception e) {
-            Result result = new Result();
-            result.setList(new ArrayList<Vod>());
-            result.setPage(Integer.parseInt(pg));
-            result.setPagecount(0);
-            result.setLimit(0);
-            result.setTotal(0);
-            return result.string();
+        String htmlText = OkHttp.string(url, header);
+        if (TextUtils.isEmpty(htmlText)) {
+            return Result.get().vod(new ArrayList<Vod>())
+                    .page(Integer.parseInt(pg), 0, 0, 0)
+                    .string();
         }
 
-        List<Vod> videos = parseItemsFromHtml(htmlText, tid);
+        List<Vod> videos = parseItemsFromHtml(htmlText);
 
         int totalPages = Integer.parseInt(pg) + 1;
         try {
@@ -252,17 +250,13 @@ public class FKTV extends Spider {
         } catch (Exception ignore) {
         }
 
-        Result result = new Result();
-        result.setList(videos);
-        result.setPage(Integer.parseInt(pg));
-        result.setPagecount(totalPages);
-        result.setLimit(videos.size());
-        result.setTotal(videos.size() * 10);
-        return result.string();
+        return Result.get().vod(videos)
+                .page(Integer.parseInt(pg), totalPages, videos.size(), videos.size() * 10)
+                .string();
     }
 
     /** categoryContent 与 searchContent 共用的列表解析逻辑（对应 Python 里重复的那段 item 提取代码） */
-    private List<Vod> parseItemsFromHtml(String htmlText, String tid) {
+    private List<Vod> parseItemsFromHtml(String htmlText) {
         List<Vod> videos = new ArrayList<>();
         String cleanHtml = htmlText.replace("\\\"", "\"").replace("\\/", "/");
 
@@ -293,7 +287,6 @@ public class FKTV extends Spider {
                     vod.setVodName(vodName);
                     vod.setVodPic(vodPic);
                     vod.setVodRemarks(vodRemarks);
-                    if (tid != null) vod.setTypeId(tid);
                     videos.add(vod);
                 }
             } catch (Exception ignore) {
@@ -309,40 +302,26 @@ public class FKTV extends Spider {
         return searchContent(key, quick, "1");
     }
 
-    /** 兼容部分壳子(如 FongMi)会额外传 pg 参数的调用方式 */
+    /** 重载：兼容部分壳子(如 FongMi)会额外传 pg 参数的调用方式 */
     public String searchContent(String key, boolean quick, String pg) throws Exception {
+        int pageNum = safeParseInt(pg, 1);
+
         if (TextUtils.isEmpty(key)) {
-            return emptySearchResult(pg);
+            return Result.get().vod(new ArrayList<Vod>()).page(pageNum, 1, 0, 0).string();
         }
 
-        String url = HOST + "/channel?keywords=" + Misc.encode(key);
-        String htmlText;
-        try {
-            htmlText = OkHttp.string(url, header);
-        } catch (Exception e) {
-            return emptySearchResult(pg);
+        String url = HOST + "/channel?keywords=" + urlEncode(key);
+        String htmlText = OkHttp.string(url, header);
+        if (TextUtils.isEmpty(htmlText)) {
+            return Result.get().vod(new ArrayList<Vod>()).page(pageNum, 1, 0, 0).string();
         }
 
-        List<Vod> videos = parseItemsFromHtml(htmlText, null);
+        List<Vod> videos = parseItemsFromHtml(htmlText);
         if (quick && videos.size() > 10) {
             videos = new ArrayList<>(videos.subList(0, 10));
         }
 
-        Result result = new Result();
-        result.setList(videos);
-        result.setPage(safeParseInt(pg, 1));
-        result.setPagecount(1);
-        result.setTotal(videos.size());
-        return result.string();
-    }
-
-    private String emptySearchResult(String pg) {
-        Result result = new Result();
-        result.setList(new ArrayList<Vod>());
-        result.setPage(safeParseInt(pg, 1));
-        result.setPagecount(1);
-        result.setTotal(0);
-        return result.string();
+        return Result.get().vod(videos).page(pageNum, 1, videos.size(), videos.size()).string();
     }
 
     private int safeParseInt(String s, int fallback) {
@@ -361,20 +340,15 @@ public class FKTV extends Spider {
         String rawPath = vodId.replace("___", "/");
         String url = HOST + "/movie/" + rawPath;
 
-        String htmlText;
-        try {
-            htmlText = OkHttp.string(url, header);
-        } catch (Exception e) {
-            Result result = new Result();
-            result.setList(new ArrayList<Vod>());
-            return result.string();
+        String htmlText = OkHttp.string(url, header);
+        if (TextUtils.isEmpty(htmlText)) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
         }
 
         String vodName = "";
         String vodPic = "";
         String embedUrl = "";
         String typeName = "未知";
-        String typeId = "";
         String vodDirector = "";
         String vodActor = "";
         String vodArea = "";
@@ -392,7 +366,6 @@ public class FKTV extends Spider {
                     if ("VideoObject".equals(data.optString("@type"))) {
                         vodName = data.optString("name", "");
                         typeName = data.optString("genre", "未知");
-                        typeId = cateMap.containsKey(typeName) ? cateMap.get(typeName) : "";
                         embedUrl = data.optString("embedUrl", "");
 
                         JSONArray thumbs = data.optJSONArray("thumbnailUrl");
@@ -540,7 +513,6 @@ public class FKTV extends Spider {
         vod.setVodName(vodName);
         vod.setVodPic(vodPic);
         vod.setTypeName(typeName);
-        vod.setTypeId(typeId);
         vod.setVodRemarks(linksData != null ? ("共 " + linksData.length() + " 集") : "");
         vod.setVodContent(vodContent);
         vod.setVodPlayFrom(vodPlayFrom);
@@ -550,12 +522,7 @@ public class FKTV extends Spider {
         vod.setVodArea(vodArea);
         vod.setVodYear(vodYear);
 
-        List<Vod> list = new ArrayList<>();
-        list.add(vod);
-
-        Result result = new Result();
-        result.setList(list);
-        return result.string();
+        return Result.get().vod(vod).string();
     }
 
     // ========================= 播放解析 =========================
@@ -597,7 +564,6 @@ public class FKTV extends Spider {
             String encryptedBody = encryptAesEcb(jsonStr, AES_KEY);
 
             Map<String, String> apiHeaders = new HashMap<>();
-            apiHeaders.put("authority", "fktv.me");
             apiHeaders.put("pragma", "no-cache");
             apiHeaders.put("cache-control", "no-cache");
             apiHeaders.put("ip", "");
@@ -609,7 +575,6 @@ public class FKTV extends Spider {
             apiHeaders.put("time", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
             apiHeaders.put("user-agent", ua);
             apiHeaders.put("channel", "");
-            apiHeaders.put("content-type", "application/octet-stream");
             apiHeaders.put("version", "1.0");
             apiHeaders.put("accept", "*/*");
             apiHeaders.put("origin", "https://fktv.me");
@@ -617,12 +582,17 @@ public class FKTV extends Spider {
             apiHeaders.put("sec-fetch-mode", "cors");
             apiHeaders.put("sec-fetch-dest", "empty");
             apiHeaders.put("referer", "https://fktv.me/movie/" + movieId + "/mianpintu");
-            apiHeaders.put("accept-encoding", "gzip, deflate, br, zstd");
             apiHeaders.put("accept-language", "zh-CN,zh;q=0.9");
             apiHeaders.put("cookie", "_did=ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
+            // 注意：authority / content-type 不放进 addHeader，交给 okhttp3 请求本身处理，
+            // 避免和 OkHttpClient 自动生成的同名请求头冲突（见下方 RequestBody 的 MediaType）
 
-            String apiUrl = "https://fktv.me/ysapi/movie/detail";
-            Response res = OkHttp.newCall(apiUrl, apiHeaders, encryptedBody);
+            RequestBody body = RequestBody.create(MediaType.parse("application/octet-stream"), encryptedBody);
+            Request.Builder builder = new Request.Builder().url("https://fktv.me/ysapi/movie/detail").post(body);
+            builder.headers(Headers.of(apiHeaders));
+            Request request = builder.build();
+
+            Response res = OkHttp.newCall(request);
             if (res == null || !res.isSuccessful() || res.body() == null) {
                 return failPlay();
             }
@@ -698,19 +668,11 @@ public class FKTV extends Spider {
         }
     }
 
-    private String okPlay(String url) throws Exception {
-        Result result = new Result();
-        result.setParse(0);
-        result.setUrl(url);
-        result.setHeader(new HashMap<String, String>());
-        return result.string();
+    private String okPlay(String url) {
+        return Result.get().url(url).string();
     }
 
-    private String failPlay() throws Exception {
-        Result result = new Result();
-        result.setParse(0);
-        result.setUrl("");
-        result.setHeader(new HashMap<String, String>());
-        return result.string();
+    private String failPlay() {
+        return Result.get().url("").string();
     }
 }
