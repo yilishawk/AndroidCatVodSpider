@@ -27,10 +27,6 @@ jsSpider 参考 https://github.com/jadehh/TVSpider
 ---
 
 
-## 公众号
-关注公众号，获取最新更新。
-
-![pAW8wwV.jpg](wechat.png)
 
 ## 备注
 该项目仅为自己自用开发，如果发现bug，可以提issues，但是基本不接受新需求（除非我感兴趣的新需求）。
