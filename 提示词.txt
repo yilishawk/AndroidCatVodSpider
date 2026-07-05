@@ -1,0 +1,253 @@
+# TVBox / FongMi / CatVod Java Spider 编写规范
+
+用途：把这份文档发给 AI（或粘贴关键段落），AI 就能直接照着正确的语法/API 写 spider，
+不用再靠猜——这份规范里的条目都是从项目实际依赖源码（Result.java / Vod.java /
+Class.java / OkHttp.java 等）和真实踩坑经历里确认过的，不是通用范例代码。
+
+---
+
+## 0. 使用方式
+
+把这份文档整个发给 AI，再附上：
+1. 要爬的目标网站的接口/页面结构说明（或者一份能正常跑的 Python 版 spider 作为逻辑参考）；
+2. 如果项目里 Result/Vod/Class/OkHttp 等 bean 的写法跟下面描述的不一致（比如你们
+   fork 改过），把这几个文件原文一起发给 AI，比这份文档里的默认约定更权威。
+
+AI 拿到这份规范后应该做到：不臆造不存在的方法（如 setTypeId）、不用 Java 8 以上的语法、
+返回值字段填完整、避免下面列的已知坑。
+
+---
+
+## 1. 基本结构
+
+package com.github.catvod.spider;
+
+import com.github.catvod.crawler.Spider;
+// 按需 import 其他依赖
+
+public class 站点名 extends Spider {
+    @Override
+    public void init(android.content.Context context, String extend) throws Exception { ... }
+
+    @Override
+    public String homeContent(boolean filter) throws Exception { ... }
+
+    @Override
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception { ... }
+
+    @Override
+    public String detailContent(List<String> ids) throws Exception { ... }
+
+    @Override
+    public String searchContent(String key, boolean quick) throws Exception { ... }
+
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception { ... }
+}
+
+- 类名跟文件名一致，extends Spider（com.github.catvod.crawler.Spider）。
+- 每个生命周期方法都要加 @Override。这不是风格问题——如果参数类型/个数写错了，
+  少了 @Override 编译器不会报错，只会悄悄变成一个跟框架毫无关系的新方法，框架永远反射
+  调用不到它，功能表现为"一直不对但编译通过"，是最隐蔽的一类 bug。加了 @Override，
+  签名一旦写错编译器会当场报错提醒你。
+
+方法签名表（参数个数必须完全一致）：
+- init：(Context, String) —— extend 参数
+- homeContent：(boolean) —— filter
+- categoryContent：(String, String, boolean, HashMap<String,String>) —— tid, pg, filter, extend
+- detailContent：(List<String>) —— ids
+- searchContent：(String, boolean) —— key, quick
+- playerContent：(String, String, List<String>) —— flag, id, vipFlags
+
+---
+
+## 2. Result 是链式 builder，不是传统 setter
+
+没有 result.setList(...)、result.setPage(...)、result.setClasses(...) 这种方法。
+只能这样写：
+
+// 首页
+return Result.get().classes(classList).string();
+
+// 分类/搜索列表
+return Result.get()
+        .vod(vodList)
+        .page(pageNum, pageCount, limit, total)   // 见下方"0 值语义"说明
+        .string();
+
+// 详情（单个 Vod）
+return Result.get().vod(vodObject).string();
+
+// 播放地址
+return Result.get().url(realUrl).header(headerMap).string();
+
+常用链式方法：classes(List<Class>)、vod(List<Vod>) / vod(Vod)、
+filters(...)、header(Map<String,String>)、url(String)、parse(int)、
+page(int page, int count, int limit, int total)、msg(String)。
+
+也可以用静态便捷方法（等价写法，二选一）：
+Result.string(classList, vodList);
+Result.string(vodList);
+Result.error("提示信息");
+
+### .page(...) 的"0 值语义"
+
+public Result page(int page, int count, int limit, int total) {
+    this.page = page > 0 ? page : Integer.MAX_VALUE;
+    this.limit = limit > 0 ? limit : Integer.MAX_VALUE;
+    this.total = total > 0 ? total : Integer.MAX_VALUE;
+    this.pagecount = count > 0 ? count : Integer.MAX_VALUE;
+    return this;
+}
+
+传 0 不会被当成真的 0，而是被规范化成 Integer.MAX_VALUE（库自己的"未知/无限"语义）。
+写请求失败、空列表这类分支时心里要有数，不要以为传 page(pg, 0, 0, 0) 就是"0 条数据"的字面意思。
+
+---
+
+## 3. Vod 用传统 setXxx()，但字段以真实 bean 为准
+
+Vod 用的是常规 setter（new Vod(); vod.setVodId(x); vod.setVodName(x); ...），
+但具体有哪些字段、有没有 type_id 这种字段，必须以项目里真实的 Vod.java 为准——
+不同 fork 增删字段是常事（比如有的版本没有单独的 type_id 字段，只有 type_name）。
+
+要求 AI 写代码前，先确认 Vod.java 的真实字段/setter 列表，不要凭空调用没见过的
+set 方法。如果没有原文件，AI 应该只用最基础、几乎所有版本都有的字段
+（vod_id/vod_name/vod_pic/vod_remarks/vod_content/vod_play_from/vod_play_url），
+并明确注明"其余字段（导演/演员/年份/地区等）需要对照实际 Vod.java 确认 setter 是否存在"。
+
+---
+
+## 4. Class（分类）大概率没有 setter，走构造函数
+
+new Class(typeId, typeName)
+
+不要写 new Class(); c.setTypeId(...); 这种——很多版本的 Class 只有构造函数和
+getTypeId()，没有任何 setter。同样，如果项目里的 Class.java 跟这个不一样，以实际文件为准。
+
+---
+
+## 5. OkHttp 网络请求的真实调用方式
+
+### GET 请求
+
+String html = OkHttp.string(url, headerMap);
+
+- 没有异常会抛出来：OkRequest.execute() 内部把 IOException 吞掉了，失败时直接
+  返回空字符串，不会走到 catch 分支。判断请求是否成功要用 TextUtils.isEmpty(html)，
+  不要指望 try/catch 能捕获网络失败。
+
+### POST 请求（表单或 JSON）
+
+String body = OkHttp.post(url, jsonString, headerMap);
+
+- 这个封装内部固定用 application/json; charset=utf-8 作为 Content-Type，
+  不受 headerMap 里另外设置的 content-type 影响。
+
+### POST 需要自定义 Content-Type（比如发送加密后的二进制/其他格式 payload）
+
+OkHttp 没有 newCall(url, header, body) 这种三参数重载！只有：
+- newCall(Request request)
+- newCall(String url)
+- newCall(String url, Map<String,String> header)
+
+需要自定义 Content-Type 时，必须自己拼 okhttp3.Request：
+
+RequestBody body = RequestBody.create(MediaType.parse("application/octet-stream"), rawBytesOrString);
+Request request = new Request.Builder()
+        .url(apiUrl)
+        .post(body)
+        .headers(Headers.of(headerMap))
+        .build();
+Response res = OkHttp.newCall(request);
+if (res == null || !res.isSuccessful() || res.body() == null) { /* 失败处理 */ }
+String text = res.body().string();
+
+---
+
+## 6. 已知坑规则（写代码时主动避开）
+
+1. 不要手动在 header 里设置 Accept-Encoding。
+   OkHttp 只有在这个头是自己加的时候才会自动透明解压 gzip/deflate；一旦调用方手动设置了
+   这个头，OkHttp 会认为调用方要自己处理响应编码，直接关闭自动解压，导致拿到的
+   html 其实是没解压的压缩字节乱码，正则/Jsoup 全部匹配不到，表现为"分类标题正常显示，
+   但视频列表永远是空的"（因为首页不发请求，分类/搜索/详情都要发请求）。
+
+2. content-type 想通过 header map 传给 OkHttp.post() 是无效的（见第 5 条），
+   需要自定义 Content-Type 时必须走手动拼 Request 的路线。
+
+3. OkHttp.newCall() 不存在三参数重载，发 POST 原始字节流不能直接照抄这种写法：
+   OkHttp.newCall(url, header, bodyString) ——编译会直接报错方法不存在。
+
+---
+
+## 7. Java 8 兼容性硬约束（非常重要）
+
+项目目标运行环境卡在 Java 8（电视版 TVBox 的工具链/运行时版本比手机版更低），
+以下语法/API 禁止使用，用了要么编译失败、要么运行时方法找不到：
+
+- var name = ...（局部变量类型推断） → 需要 Java 10 → 改用写明确类型
+- 文本块 """...""" → 需要 Java 15 → 改用普通字符串拼接/\n
+- record X(...) → 需要 Java 16 → 改用普通类 + 字段 + getter
+- sealed class/interface、permits → 需要 Java 17 → 改用普通继承
+- 模式匹配 instanceof（obj instanceof Foo f） → 需要 Java 16 → 改用 instanceof 判断 + 强制类型转换
+- switch 箭头语法（case X -> ...） → 需要 Java 14 → 改用传统 case X: ... break;
+- switch 表达式 yield → 需要 Java 13 → 改用传统 switch 语句
+- List.of(...) / Map.of(...) / Set.of(...) → 需要 Java 9 → 改用 Arrays.asList(...)、手动 new ArrayList<>(); add(...)
+- String.isBlank() → 需要 Java 11 → 改用 str == null || str.trim().isEmpty()
+- String.strip() / stripLeading() / stripTrailing() → 需要 Java 11 → 改用 String.trim()
+- String.repeat(n) → 需要 Java 11 → 改用循环拼接
+- Stream.toList() → 需要 Java 16 → 改用 .collect(Collectors.toList())
+- Optional.isEmpty() → 需要 Java 11 → 改用 !optional.isPresent()
+- try-with-resources 直接用已声明变量 → 需要 Java 9 → 在括号里正常声明资源变量
+
+写完代码后，建议过一遍这张表（或者用配套的静态检测工具扫一遍），确认没有混入这些语法。
+
+---
+
+## 8. 加解密 / 编码工具写法参考
+
+private static byte[] hexToBytes(String hex) {
+    int len = hex.length();
+    byte[] data = new byte[len / 2];
+    for (int i = 0; i < len; i += 2) {
+        data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                + Character.digit(hex.charAt(i + 1), 16));
+    }
+    return data;
+}
+
+private String encryptAesEcb(String text, byte[] key) throws Exception {
+    Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+    cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
+    return Base64.encodeToString(cipher.doFinal(text.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
+}
+
+private String decryptAesEcb(String base64Str, byte[] key) throws Exception {
+    Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+    cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"));
+    return new String(cipher.doFinal(Base64.decode(base64Str, Base64.NO_WRAP)), StandardCharsets.UTF_8);
+}
+
+用 javax.crypto + android.util.Base64，不要引入第三方 Base64 库（Android 自带即可）。
+
+---
+
+## 9. URL 编码
+
+用标准库，不要假设项目里有 Misc.encode 这类工具类（除非项目里确实有并且已经确认存在）：
+
+import java.net.URLEncoder;
+...
+URLEncoder.encode(str, "UTF-8");
+
+---
+
+## 10. 写完之后的自检清单
+
+- 每个生命周期方法都加了 @Override，参数个数/顺序跟第 1 节的表一致
+- 没有调用任何没在真实 Result/Vod/Class/OkHttp 源码里出现过的方法
+- 没有手动设置 Accept-Encoding
+- 自定义 Content-Type 的 POST 走的是手动拼 Request，不是 OkHttp.post()
+- 全文没有出现第 7 节表格里任何一条 Java 9+ 语法/API
+- categoryContent/searchContent 返回的 Result 都调用了 .page(...)，字段没漏
