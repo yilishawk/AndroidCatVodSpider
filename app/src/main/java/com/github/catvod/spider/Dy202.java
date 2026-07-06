@@ -1,18 +1,14 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.os.Handler;
-import android.text.TextUtils;
-import android.webkit.CookieManager;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
+
+import android.text.TextUtils;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,50 +21,72 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import okhttp3.Headers;
+import okhttp3.Request;
+import okhttp3.Response;
 
 public class Dy202 extends Spider {
 
     private String host = "https://www.202dy.com";
     private String ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
     private Map<String, String> baseHeaders;
+    private String cookie;
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        // 通过 WebView 访问首页获取 Cookie
-        final CountDownLatch latch = new CountDownLatch(1);
-        final String[] cookieContainer = new String[1];
-        Handler mainHandler = new Handler(context.getMainLooper());
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                WebView webView = new WebView(context);
-                WebSettings settings = webView.getSettings();
-                settings.setJavaScriptEnabled(true);
-                webView.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        String cookie = CookieManager.getInstance().getCookie(url);
-                        cookieContainer[0] = cookie;
-                        latch.countDown();
-                    }
-                });
-                webView.loadUrl(host);
-            }
-        });
-        // 等待最多10秒获取 Cookie
-        latch.await(10, TimeUnit.SECONDS);
-
+        // 模拟真实浏览器请求头获取 Cookie
+        cookie = fetchCookie();
         baseHeaders = new HashMap<>();
         baseHeaders.put("User-Agent", ua);
-        baseHeaders.put("Referer", host + "/");
-        if (cookieContainer[0] != null && !cookieContainer[0].isEmpty()) {
-            baseHeaders.put("Cookie", cookieContainer[0]);
+        // 以下两个头服务器可能校验，增加成功率
+        baseHeaders.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
+        baseHeaders.put("sec-ch-ua-mobile", "?0");
+        baseHeaders.put("sec-ch-ua-platform", "\"Windows\"");
+        if (!TextUtils.isEmpty(cookie)) {
+            baseHeaders.put("Cookie", cookie);
         }
-        // 注意：绝不设置 Accept-Encoding，否则 OkHttp 自动解压失效
+        // 绝对不设置 Accept-Encoding
+    }
+
+    /**
+     * 请求首页并返回完整 Cookie 字符串
+     */
+    private String fetchCookie() {
+        try {
+            Request request = new Request.Builder()
+                    .url(host)
+                    .header("User-Agent", ua)
+                    .header("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"")
+                    .header("sec-ch-ua-mobile", "?0")
+                    .header("sec-ch-ua-platform", "\"Windows\"")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+                    .header("Accept-Language", "zh-CN,zh;q=0.9")
+                    .header("Upgrade-Insecure-Requests", "1")
+                    .build();
+            Response response = OkHttp.newCall(request);
+            if (response == null || !response.isSuccessful()) {
+                if (response != null) response.close();
+                return "";
+            }
+            Headers headers = response.headers();
+            List<String> cookies = headers.values("Set-Cookie");
+            response.close();
+            if (cookies.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            for (String c : cookies) {
+                String[] parts = c.split(";");
+                if (parts.length > 0) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(parts[0].trim());
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Override
@@ -87,7 +105,6 @@ public class Dy202 extends Spider {
         Map<String, String> headers = new HashMap<>(baseHeaders);
         headers.put("Referer", host + "/" + tid + "/");
         headers.put("Accept", "*/*");
-        // 不设置 Accept-Encoding
 
         String jsonStr = OkHttp.string(url, headers);
         if (TextUtils.isEmpty(jsonStr)) {
@@ -113,7 +130,7 @@ public class Dy202 extends Spider {
                 vod.setVodName(item.getString("vod_name"));
                 vod.setVodPic(item.optString("vod_pic"));
                 vod.setVodRemarks(item.optString("vod_remarks"));
-                // 以下 setter 需确认项目中 Vod.java 是否存在，若缺少请删除或替换为已存在字段
+                // 以下字段如果 Vod.java 不支持，请删除或替换
                 // vod.setVodYear(item.optString("vod_year"));
                 // vod.setVodArea(item.optString("vod_area"));
                 // vod.setVodActor(item.optString("vod_actor"));
@@ -154,7 +171,7 @@ public class Dy202 extends Spider {
             vod.setVodPic(pic);
         }
 
-        // 导演（查找包含“导演”的 .video-info-itemtitle）
+        // 导演、主演、年份、状态
         Elements infoItems = doc.select(".video-info-items");
         for (Element item : infoItems) {
             Element itemTitle = item.selectFirst(".video-info-itemtitle");
@@ -188,7 +205,7 @@ public class Dy202 extends Spider {
             String text = a.text().trim();
             if (!TextUtils.isEmpty(href) && !TextUtils.isEmpty(text)) {
                 names.add("第" + text + "集");
-                urls.add(href); // 相对路径，如 /play/jingchengqitan-1-1.html
+                urls.add(href);
             }
         }
 
@@ -202,19 +219,16 @@ public class Dy202 extends Spider {
             vod.setVodPlayUrl(playUrl.toString());
         }
 
-        // 以上 setter 如 setVodDirector 等需与项目中 Vod.java 一致，若缺字段请自行增删
         return Result.get().vod(vod).string();
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        // 搜索暂未实现
         return Result.get().vod(new ArrayList<Vod>()).page(1, 1, 0, 0).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // id 为播放页路径，如 /play/jingchengqitan-1-1.html
         String playUrl = id.startsWith("http") ? id : host + id;
         Map<String, String> headers = new HashMap<>(baseHeaders);
         headers.put("Referer", host + "/");
@@ -231,11 +245,9 @@ public class Dy202 extends Spider {
             playerSrc = playerSrc.startsWith("/") ? host + playerSrc : host + "/" + playerSrc;
         }
 
-        // 请求真正的播放器页面
         String playerHtml = OkHttp.string(playerSrc, headers);
         if (TextUtils.isEmpty(playerHtml)) return Result.error("获取播放器失败");
 
-        // 正则提取 url: "..."
         Pattern p = Pattern.compile("url:\\s*\"(https?://[^\"]+)\"");
         Matcher m = p.matcher(playerHtml);
         if (!m.find()) return Result.error("提取播放地址失败");
