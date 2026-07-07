@@ -18,7 +18,17 @@ import java.util.Map;
 public class ProxyIPTV extends Spider {
 
     private static final String HOST = "https://tonkiang.us";
-    private final Map<String, List<String>> cacheData = new HashMap<>();
+    private static final Map<String, List<String>> cacheData = new HashMap<>();
+
+    /**
+     * 供 Proxy.java 静态调用：按需触发爬取并返回缓存数据
+     */
+    public static synchronized Map<String, List<String>> getCacheData() {
+        if (cacheData.isEmpty()) {
+            crawlAll();
+        }
+        return cacheData;
+    }
 
     @Override
     public void init(Context context, String extend) throws Exception {
@@ -28,10 +38,12 @@ public class ProxyIPTV extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
+        // 根据 Class.java: 构造函数为 (String typeId, String typeName)
         classes.add(new Class("cctv", "央视"));
         classes.add(new Class("sat", "卫视"));
         classes.add(new Class("other", "其他"));
         
+        // 显式使用实例方法链，避免静态方法歧义
         return Result.get().classes(classes).string();
     }
 
@@ -47,9 +59,11 @@ public class ProxyIPTV extends Spider {
         for (String line : channels) {
             String[] split = line.split("\\$");
             if (split.length < 2) continue;
+            // 根据 Vod.java: 构造函数 (String id, String name, String pic, String remarks)
             list.add(new Vod(line, split[0], "https://epg.112114.xyz/logo/" + split[0] + ".png", "直播源"));
         }
 
+        // 显式使用实例方法链
         return Result.get().vod(list).string();
     }
 
@@ -69,10 +83,11 @@ public class ProxyIPTV extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // 直播源 parse(0) 代表直接播放
         return Result.get().url(id).parse(0).string();
     }
 
-    private synchronized void crawlAll() {
+    private static synchronized void crawlAll() {
         cacheData.put("cctv", new ArrayList<>());
         cacheData.put("sat", new ArrayList<>());
         cacheData.put("other", new ArrayList<>());
@@ -80,6 +95,7 @@ public class ProxyIPTV extends Spider {
         String[] sources = {"iptvhotelx.php", "iptvproxy.php"};
         for (String php : sources) {
             try {
+                // 使用 OkHttp.java 中的静态方法
                 String html = OkHttp.string(HOST + "/" + php);
                 Document doc = Jsoup.parse(html);
                 int count = 0;
@@ -101,7 +117,7 @@ public class ProxyIPTV extends Spider {
         }
     }
 
-    private void parseAndSort(String html) {
+    private static void parseAndSort(String html) {
         if (html == null || html.isEmpty()) return;
         Document doc = Jsoup.parse(html);
         for (Element div : doc.select("div.result")) {
@@ -125,38 +141,11 @@ public class ProxyIPTV extends Spider {
         }
     }
 
-    private String getParam(String url, String name) {
+    private static String getParam(String url, String name) {
         int start = url.indexOf(name + "=");
         if (start == -1) return "";
         int end = url.indexOf("&", start);
         if (end == -1) end = url.length();
         return url.substring(start + name.length() + 1, end);
-    }
-
-    // ====================== 新增：专门供给 Proxy.java 调用的导出方法 ======================
-    public static String exportToM3u() {
-        StringBuilder m3u = new StringBuilder();
-        m3u.append("#EXTM3U\n");
-        try {
-            ProxyIPTV spider = new ProxyIPTV();
-            spider.crawlAll();
-
-            String[] categories = {"cctv", "sat", "other"};
-            String[] labels = {"央视", "卫视", "其他"};
-
-            for (int i = 0; i < categories.length; i++) {
-                List<String> channels = spider.cacheData.getOrDefault(categories[i], new ArrayList<>());
-                for (String line : channels) {
-                    String[] split = line.split("\\$");
-                    if (split.length >= 2) {
-                        m3u.append("#EXTINF:-1 group-title=\"").append(labels[i]).append("\",").append(split[0]).append("\n")
-                           .append(split[1]).append("\n");
-                    }
-                }
-            }
-        } catch (Exception e) {
-            m3u.append("#ERROR: ").append(e.getMessage()).append("\n");
-        }
-        return m3u.toString();
     }
 }
