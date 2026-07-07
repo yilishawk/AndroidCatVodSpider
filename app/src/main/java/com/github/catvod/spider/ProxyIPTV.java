@@ -21,7 +21,7 @@ public class ProxyIPTV extends Spider {
     private static final Map<String, List<String>> cacheData = new HashMap<>();
 
     /**
-     * 供 Proxy.java 静态调用：按需触发爬取并返回缓存数据
+     * 供 Proxy.java 静态调用:按需触发爬取并返回缓存数据
      */
     public static synchronized Map<String, List<String>> getCacheData() {
         if (cacheData.isEmpty()) {
