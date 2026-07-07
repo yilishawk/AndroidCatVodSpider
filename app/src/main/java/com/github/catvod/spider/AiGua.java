@@ -250,7 +250,7 @@ public class AiGua extends Spider {
             vod.setVodPic(imgEl.attr("originalSrc"));
         }
 
-        // 年份、地区（类型已忽略，因 Vod 无对应字段）
+        // 年份、地区
         Elements typeSpans = doc.select(".GNbox-type span");
         String year = "", area = "";
         for (Element span : typeSpans) {
@@ -283,7 +283,7 @@ public class AiGua extends Spider {
     /**
      * id 格式：videoId|chapterId
      * flag 对应 SOURCE_NAMES 中的线路名称，映射为 sourceId，然后调用 play-url
-     * 从返回的 resource_url 对象中取对应 sourceId 的地址
+     * 兼容 resource_url 为对象或字符串两种类型
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
@@ -312,15 +312,24 @@ public class AiGua extends Spider {
                 .getJSONObject("data")
                 .getJSONObject("urlinfo");
 
-        // resource_url 是一个对象，key 为 sourceId
-        JSONObject resourceUrl = urlinfo.getJSONObject("resource_url");
-        String finalUrl = resourceUrl.optString(sourceId);
-        if (TextUtils.isEmpty(finalUrl)) {
-            // 如果该 sourceId 不存在，取第一个可用的
-            JSONArray keys = resourceUrl.names();
-            if (keys != null && keys.length() > 0) {
-                finalUrl = resourceUrl.getString(keys.getString(0));
+        // resource_url 可能是对象也可能是直接字符串
+        Object resourceUrlObj = urlinfo.get("resource_url");
+        String finalUrl = null;
+        if (resourceUrlObj instanceof JSONObject) {
+            JSONObject resourceUrl = (JSONObject) resourceUrlObj;
+            finalUrl = resourceUrl.optString(sourceId);
+            if (TextUtils.isEmpty(finalUrl)) {
+                JSONArray keys = resourceUrl.names();
+                if (keys != null && keys.length() > 0) {
+                    finalUrl = resourceUrl.getString(keys.getString(0));
+                }
             }
+        } else if (resourceUrlObj instanceof String) {
+            finalUrl = (String) resourceUrlObj;
+        }
+
+        if (TextUtils.isEmpty(finalUrl)) {
+            return Result.error("未获取到播放地址");
         }
 
         // 播放请求使用 PC 模拟头
