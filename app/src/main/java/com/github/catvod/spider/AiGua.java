@@ -283,9 +283,10 @@ public class AiGua extends Spider {
     /**
      * id 格式：videoId|chapterId
      * flag → sourceId 对照 SOURCE_NAMES/SOURCE_IDS（超快=21，普快=1，如意专线=19，专线=16）
-     * play-url 接口不管传哪个 sourceId，都会把当前 chapter 下**全部线路**的地址一次性返回在
-     * data.urlinfo.resource_url 这个对象里（key 是线路 id，不是单个字符串），
-     * 所以这里按 flag 对应的 sourceId 去这个对象里取值即可，不需要为每条线路单独发请求。
+     * play-url 接口返回的 data.urlinfo.resource_url 类型不固定：
+     *   - 多条线路都有地址时，是按线路 id 分组的 JSONObject；
+     *   - 只有一条线路可用时，直接是一个字符串。
+     * 两种情况都要处理，不能假设固定是对象。
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
@@ -307,21 +308,33 @@ public class AiGua extends Spider {
                 + "&sourceId="  + sourceId;
 
         String resp = OkHttp.string(apiUrl, headers());
-        JSONObject resourceUrls = new JSONObject(resp)
+        JSONObject urlinfo = new JSONObject(resp)
                 .getJSONObject("data")
-                .getJSONObject("urlinfo")
-                .getJSONObject("resource_url");
+                .getJSONObject("urlinfo");
 
-        // 优先取当前 flag 对应的线路；如果这个 chapter 恰好没有这条线路的地址（不同集数
-        // 可用线路可能不完全一致），按 SOURCE_IDS 的顺序找第一个有地址的线路兜底，
-        // 避免直接失败——好过完全播放不了。
-        String finalUrl = resourceUrls.optString(sourceId, "");
-        if (finalUrl.isEmpty()) {
-            for (String candidate : SOURCE_IDS) {
-                String u = resourceUrls.optString(candidate, "");
-                if (!u.isEmpty()) { finalUrl = u; break; }
+        // 实测 resource_url 的类型不固定：多线路可用时是按线路 id 分组的对象，
+        // 但只有一条线路可用时接口会直接返回一个字符串（之前按固定 JSONObject 解析
+        // 在这种情况下会抛 JSONException，日志里那条报错就是这个原因）。
+        Object ruRaw = urlinfo.get("resource_url");
+        String finalUrl = "";
+
+        if (ruRaw instanceof JSONObject) {
+            JSONObject resourceUrls = (JSONObject) ruRaw;
+            // 优先取当前 flag 对应的线路；如果这个 chapter 恰好没有这条线路的地址（不同集数
+            // 可用线路可能不完全一致），按 SOURCE_IDS 的顺序找第一个有地址的线路兜底，
+            // 避免直接失败——好过完全播放不了。
+            finalUrl = resourceUrls.optString(sourceId, "");
+            if (finalUrl.isEmpty()) {
+                for (String candidate : SOURCE_IDS) {
+                    String u = resourceUrls.optString(candidate, "");
+                    if (!u.isEmpty()) { finalUrl = u; break; }
+                }
             }
+        } else if (ruRaw instanceof String) {
+            // 只有一条线路可用时,接口直接给字符串,不管当前 flag 是哪条线路,只能用这一条
+            finalUrl = (String) ruRaw;
         }
+
         if (finalUrl.isEmpty()) {
             return Result.get().url("").string();
         }
