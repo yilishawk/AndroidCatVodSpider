@@ -1,13 +1,11 @@
 package com.github.catvod.spider;
 
 import android.util.Base64;
-
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.ProxyVideo;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -22,7 +20,6 @@ import java.util.regex.Pattern;
 public class Proxy {
 
     private static final int PROXY_PORT = 9978;
-
     private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
     public static int getPort() {
@@ -50,6 +47,16 @@ public class Proxy {
 
         log("📨 [Proxy] 收到请求: " + params);
 
+        // ====================== 新增：在这里拦截 127.0.0.1 访问 IPTV 的请求 ======================
+        if ("iptv".equals(action)) {
+            try {
+                String m3uData = ProxyIPTV.exportToM3u();
+                return new Object[]{200, "application/x-mpegurl; charset=utf-8", new ByteArrayInputStream(m3uData.getBytes("UTF-8"))};
+            } catch (Exception e) {
+                return errorResponse(500, e.getMessage());
+            }
+        }
+
         if ("getPoster".equals(action)) return handleGetPoster(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("danmu".equals(action)) return handleDanmu(params);
@@ -64,7 +71,6 @@ public class Proxy {
         if (title == null) return "";
         String s = title.trim();
 
-        // 阿拉伯数字季 → 中文季，例：第3季 → 第三季
         Pattern seasonPattern = Pattern.compile("第([0-9]+)季");
         Matcher seasonMatcher = seasonPattern.matcher(s);
         StringBuffer seasonBuf = new StringBuffer();
@@ -75,7 +81,6 @@ public class Proxy {
         seasonMatcher.appendTail(seasonBuf);
         s = seasonBuf.toString();
 
-        // 括号语言标注替换
         s = s.replaceAll("[(（]粤[)）]", "粤语版");
         s = s.replaceAll("[(（]国[)）]", "国语版");
         s = s.replaceAll("[(（]英[)）]", "英语版");
