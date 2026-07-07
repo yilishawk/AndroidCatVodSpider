@@ -1,11 +1,13 @@
 package com.github.catvod.spider;
 
 import android.util.Base64;
+
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.ProxyVideo;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -13,6 +15,7 @@ import java.io.ByteArrayInputStream;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -20,6 +23,7 @@ import java.util.regex.Pattern;
 public class Proxy {
 
     private static final int PROXY_PORT = 9978;
+
     private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
     public static int getPort() {
@@ -47,20 +51,11 @@ public class Proxy {
 
         log("📨 [Proxy] 收到请求: " + params);
 
-        // ====================== 新增：在这里拦截 127.0.0.1 访问 IPTV 的请求 ======================
-        if ("iptv".equals(action)) {
-            try {
-                String m3uData = ProxyIPTV.exportToM3u();
-                return new Object[]{200, "application/x-mpegurl; charset=utf-8", new ByteArrayInputStream(m3uData.getBytes("UTF-8"))};
-            } catch (Exception e) {
-                return errorResponse(500, e.getMessage());
-            }
-        }
-
         if ("getPoster".equals(action)) return handleGetPoster(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
+        if ("iptv".equals(action)) return handleIptv(params);
 
         return errorResponse(400, "Unknown action: " + action);
     }
@@ -71,6 +66,7 @@ public class Proxy {
         if (title == null) return "";
         String s = title.trim();
 
+        // 阿拉伯数字季 → 中文季，例：第3季 → 第三季
         Pattern seasonPattern = Pattern.compile("第([0-9]+)季");
         Matcher seasonMatcher = seasonPattern.matcher(s);
         StringBuffer seasonBuf = new StringBuffer();
@@ -81,6 +77,7 @@ public class Proxy {
         seasonMatcher.appendTail(seasonBuf);
         s = seasonBuf.toString();
 
+        // 括号语言标注替换
         s = s.replaceAll("[(（]粤[)）]", "粤语版");
         s = s.replaceAll("[(（]国[)）]", "国语版");
         s = s.replaceAll("[(（]英[)）]", "英语版");
@@ -185,6 +182,45 @@ public class Proxy {
         } catch (Exception e) {
             log("❌ [proxy] 失败: " + e.getMessage());
             return errorResponse(500, e.getMessage());
+        }
+    }
+
+    // ====================== IPTV 直播源代理 ======================
+
+    /**
+     * 将 ProxyIPTV 爬取到的直播源数据按 TVBox 标准 TXT 格式原样返回（分组,#genre# + 频道名,地址）。
+     * 用法: http://127.0.0.1:9978/proxy?do=iptv           返回全部分组
+     *      http://127.0.0.1:9978/proxy?do=iptv&tid=cctv   仅返回指定分组 (cctv/sat/other)
+     */
+    private static Object[] handleIptv(Map<String, String> params) {
+        try {
+            String tid = params.get("tid");
+            Map<String, List<String>> data = ProxyIPTV.getCacheData();
+
+            StringBuilder txt = new StringBuilder();
+            if (tid != null && !tid.isEmpty()) {
+                appendTxtGroup(txt, tid, data.get(tid));
+            } else {
+                for (Map.Entry<String, List<String>> entry : data.entrySet()) {
+                    appendTxtGroup(txt, entry.getKey(), entry.getValue());
+                }
+            }
+
+            byte[] bytes = txt.toString().getBytes("UTF-8");
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            log("❌ iptv 失败: " + e.getMessage());
+            return errorResponse(500, e.getMessage());
+        }
+    }
+
+    private static void appendTxtGroup(StringBuilder txt, String group, List<String> channels) {
+        if (channels == null || channels.isEmpty()) return;
+        txt.append(group).append(",#genre#\n");
+        for (String line : channels) {
+            // cacheData 里存的就是 "name$url"，这里只替换分隔符为逗号，不做其他改动
+            String item = line.replaceFirst("\\$", ",");
+            txt.append(item).append("\n");
         }
     }
 
