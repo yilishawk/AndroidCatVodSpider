@@ -250,9 +250,8 @@ public class AiGua extends Spider {
             vod.setVodPic(imgEl.attr("originalSrc"));
         }
 
-        // 类型、年份、地区
+        // 年份、地区（类型已忽略，因 Vod 无对应字段）
         Elements typeSpans = doc.select(".GNbox-type span");
-        List<String> typeList = new ArrayList<>();
         String year = "", area = "";
         for (Element span : typeSpans) {
             String text = span.text().trim();
@@ -260,12 +259,7 @@ public class AiGua extends Spider {
                 year = text;
             } else if (text.matches("^[\\u4e00-\\u9fa5]{2,4}$")) {
                 area = text;
-            } else {
-                typeList.add(text);
             }
-        }
-        if (!typeList.isEmpty()) {
-            vod.setVodClass(TextUtils.join(",", typeList)); // 若 Vod 无此字段可注释
         }
         if (!year.isEmpty()) vod.setVodYear(year);
         if (!area.isEmpty()) vod.setVodArea(area);
