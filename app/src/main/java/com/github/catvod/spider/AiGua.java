@@ -1,5 +1,7 @@
 package com.github.catvod.spider;
 
+import android.text.TextUtils;
+
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
@@ -15,7 +17,6 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,52 +27,73 @@ import java.util.concurrent.Executors;
 
 public class AiGua extends Spider {
 
-    private static final String HOST     = "https://aigua8.com";
+    private static final String HOST = "https://aigua8.com";
     private static final String API_CATE = HOST + "/video/refresh-cate";
     private static final String API_PLAY = HOST + "/video/play-url";
 
+    // 分类 id → 名称
     private static final String[][] CHANNELS = {
-            {"2",  "电视剧"},
-            {"1",  "电影"},
-            {"3",  "综艺"},
-            {"4",  "动漫"},
+            {"2", "电视剧"},
+            {"1", "电影"},
+            {"3", "综艺"},
+            {"4", "动漫"},
             {"32", "纪录片"},
     };
 
-    private static final String[] SOURCE_NAMES = {"普快线路", "超快线路"};
-    private static final String[] SOURCE_IDS   = {"1",       "21"};
+    // 播放线路展示顺序：超快(21) → 普快(1) → 如意(19) → 专线(16)
+    private static final String[] SOURCE_NAMES = {"超快线路", "普快线路", "如意专线", "专线"};
+    private static final String[] SOURCE_IDS = {"21", "1", "19", "16"};
 
-    // filters 必须是 LinkedHashMap 才能传给 Result.filters()
+    // 筛选器缓存，必须 LinkedHashMap 才能正确传给 Result.filters()
     private final LinkedHashMap<String, List<Filter>> filterCache = new LinkedHashMap<>();
 
-    // ------------------------------------------------------------------ 工具
+    // ------------------------------------------------------------------ 工具方法
 
-    private Map<String, String> headers() {
+    /**
+     * 基础请求头，不设置 Accept-Encoding
+     */
+    private Map<String, String> baseHeaders() {
         Map<String, String> h = new HashMap<>();
-        h.put("Referer",    HOST + "/");
+        h.put("Referer", HOST + "/");
         h.put("User-Agent", "Mozilla/5.0 (Linux; Android 11; TV) AppleWebKit/537.36 Chrome/114 Safari/537.36");
         return h;
     }
 
-    private String cateUrl(String channelId, int page, Map<String, String> ext) {
-        String tag    = ext.getOrDefault("tag",    "");
-        String area   = ext.getOrDefault("area",   "");
-        String year   = ext.getOrDefault("year",   "");
-        String sort   = ext.getOrDefault("sort",   "new");
-        String status = ext.getOrDefault("status", "");
-        return API_CATE
-                + "?page_num="   + page
-                + "&sorttype=desc"
-                + "&channel_id=" + channelId
-                + "&tag="        + ("0".equals(tag)    ? "" : tag)
-                + "&area="       + ("0".equals(area)   ? "" : area)
-                + "&year="       + ("0".equals(year)   ? "" : year)
-                + "&status="     + ("0".equals(status) ? "" : status)
-                + "&page_size=24"
-                + "&sort="       + sort
-                + "&_="          + System.currentTimeMillis();
+    /**
+     * 播放请求专用的请求头，模拟 PC 浏览器
+     */
+    private Map<String, String> playHeaders() {
+        Map<String, String> h = new HashMap<>();
+        h.put("Referer", HOST + "/");
+        h.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
+        return h;
     }
 
+    /**
+     * 拼接分类列表请求 URL
+     */
+    private String cateUrl(String channelId, int page, Map<String, String> ext) {
+        String tag    = ext.getOrDefault("tag", "");
+        String area   = ext.getOrDefault("area", "");
+        String year   = ext.getOrDefault("year", "");
+        String sort   = ext.getOrDefault("sort", "new");
+        String status = ext.getOrDefault("status", "");
+        return API_CATE
+                + "?page_num=" + page
+                + "&sorttype=desc"
+                + "&channel_id=" + channelId
+                + "&tag=" + ("0".equals(tag) ? "" : tag)
+                + "&area=" + ("0".equals(area) ? "" : area)
+                + "&year=" + ("0".equals(year) ? "" : year)
+                + "&status=" + ("0".equals(status) ? "" : status)
+                + "&page_size=24"
+                + "&sort=" + sort
+                + "&_=" + System.currentTimeMillis();
+    }
+
+    /**
+     * 解析 API 返回的 JSON 列表为 Vod 集合
+     */
     private List<Vod> parseVodList(JSONArray arr) throws Exception {
         List<Vod> list = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {
@@ -86,17 +108,20 @@ public class AiGua extends Spider {
         return list;
     }
 
+    /**
+     * 预加载某个分类的筛选器
+     */
     private void fetchFilters(String channelId) {
         if (filterCache.containsKey(channelId)) return;
         List<Filter> result = new ArrayList<>();
         try {
-            String resp = OkHttp.string(cateUrl(channelId, 1, new HashMap<>()), headers());
+            String resp = OkHttp.string(cateUrl(channelId, 1, new HashMap<>()), baseHeaders());
             JSONArray searchBox = new JSONObject(resp)
                     .getJSONObject("data")
                     .getJSONArray("search_box");
             for (int i = 0; i < searchBox.length(); i++) {
                 JSONObject box = searchBox.getJSONObject(i);
-                String field   = box.getString("field");
+                String field = box.getString("field");
                 if ("channel_id".equals(field) || "source".equals(field)) continue;
                 JSONArray vals = box.getJSONArray("list");
                 List<Filter.Value> values = new ArrayList<>();
@@ -113,58 +138,67 @@ public class AiGua extends Spider {
     }
 
     /**
-     * 解析详情页 HTML 集数，只取 data-source-id="1" 那组（两线路章节号相同）。
-     * 播放 id 格式：videoId|chapterId
+     * 解析详情页，构建多线路播放列表
      */
     private void buildPlayUrls(Vod vod, String videoId, Document doc) {
-        Elements items = doc.select("li[data-source-id=1][data-chapter-id]");
-        if (items.isEmpty()) return;
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
 
-        String[] titles = new String[items.size()];
-        String[] ids    = new String[items.size()];
-        for (int i = 0; i < items.size(); i++) {
-            Element li = items.get(i);
-            String title = li.select(".select-link").text().trim();
-            if (title.isEmpty()) title = String.valueOf(i + 1);
-            titles[i] = title;
-            ids[i]    = videoId + "|" + li.attr("data-chapter-id");
-        }
-
-        StringBuilder fromSb = new StringBuilder();
-        StringBuilder urlSb  = new StringBuilder();
         for (int k = 0; k < SOURCE_NAMES.length; k++) {
-            if (k > 0) { fromSb.append("$$$"); urlSb.append("$$$"); }
-            fromSb.append(SOURCE_NAMES[k]);
-            StringBuilder line = new StringBuilder();
-            for (int j = 0; j < titles.length; j++) {
-                if (j > 0) line.append("#");
-                line.append(titles[j]).append("$").append(ids[j]);
+            String sourceId = SOURCE_IDS[k];
+            String sourceName = SOURCE_NAMES[k];
+            Elements items = doc.select("li[data-source-id=" + sourceId + "][data-chapter-id]");
+            if (items.isEmpty()) continue; // 该线路无剧集，跳过
+
+            List<String> names = new ArrayList<>();
+            List<String> ids = new ArrayList<>();
+            for (Element li : items) {
+                String chapterId = li.attr("data-chapter-id");
+                String title = li.select(".select-link").text().trim();
+                if (title.isEmpty()) title = String.valueOf(names.size() + 1);
+                names.add(title);
+                ids.add(videoId + "|" + chapterId);
             }
-            urlSb.append(line);
+
+            StringBuilder lineUrl = new StringBuilder();
+            for (int j = 0; j < names.size(); j++) {
+                if (j > 0) lineUrl.append("#");
+                lineUrl.append(names.get(j)).append("$").append(ids.get(j));
+            }
+
+            fromList.add(sourceName);
+            urlList.add(lineUrl.toString());
         }
-        vod.setVodPlayFrom(fromSb.toString());
-        vod.setVodPlayUrl(urlSb.toString());
+
+        if (!fromList.isEmpty()) {
+            vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
+            vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
+        }
     }
 
-    // ------------------------------------------------------------------ Spider
+    // ------------------------------------------------------------------ Spider 核心方法
 
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        for (String[] ch : CHANNELS) classes.add(new Class(ch[0], ch[1]));
+        for (String[] ch : CHANNELS) {
+            classes.add(new Class(ch[0], ch[1]));
+        }
 
         if (filter) {
-            ExecutorService exec  = Executors.newFixedThreadPool(CHANNELS.length);
-            CountDownLatch  latch = new CountDownLatch(CHANNELS.length);
+            ExecutorService exec = Executors.newFixedThreadPool(CHANNELS.length);
+            CountDownLatch latch = new CountDownLatch(CHANNELS.length);
             for (String[] ch : CHANNELS) {
                 String tid = ch[0];
-                exec.submit(() -> { try { fetchFilters(tid); } finally { latch.countDown(); } });
+                exec.submit(() -> {
+                    try { fetchFilters(tid); } finally { latch.countDown(); }
+                });
             }
             latch.await();
             exec.shutdown();
         }
 
-        String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
+        String resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), baseHeaders());
         JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
 
         return Result.get()
@@ -176,7 +210,7 @@ public class AiGua extends Spider {
 
     @Override
     public String homeVideoContent() throws Exception {
-        String    resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), headers());
+        String resp = OkHttp.string(cateUrl("2", 1, new HashMap<>()), baseHeaders());
         JSONArray list = new JSONObject(resp).getJSONObject("data").getJSONArray("list");
         return Result.get().vod(parseVodList(list)).string();
     }
@@ -184,12 +218,12 @@ public class AiGua extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter,
                                   HashMap<String, String> extend) throws Exception {
-        int    page = pg == null || pg.isEmpty() ? 1 : Integer.parseInt(pg);
-        String resp = OkHttp.string(cateUrl(tid, page, extend), headers());
-        JSONObject data      = new JSONObject(resp).getJSONObject("data");
-        int        totalPage = data.optInt("total_page",  1);
-        int        total     = data.optInt("total_count", 0);
-        JSONArray  list      = data.getJSONArray("list");
+        int page = pg == null || pg.isEmpty() ? 1 : Integer.parseInt(pg);
+        String resp = OkHttp.string(cateUrl(tid, page, extend), baseHeaders());
+        JSONObject data = new JSONObject(resp).getJSONObject("data");
+        int totalPage = data.optInt("total_page", 1);
+        int total = data.optInt("total_count", 0);
+        JSONArray list = data.getJSONArray("list");
 
         return Result.get()
                 .page(page, totalPage, 24, total)
@@ -199,102 +233,139 @@ public class AiGua extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String   videoId = ids.get(0);
-        String   html    = OkHttp.string(HOST + "/video/detail?video_id=" + videoId, headers());
-        Document doc     = Jsoup.parse(html);
+        String videoId = ids.get(0);
+        String html = OkHttp.string(HOST + "/video/detail?video_id=" + videoId, baseHeaders());
+        Document doc = Jsoup.parse(html);
 
         Vod vod = new Vod();
         vod.setVodId(videoId);
-        vod.setVodName(doc.select("meta[property=og:title]").attr("content"));
-        vod.setVodPic(doc.select("meta[property=og:image]").attr("content"));
-        vod.setVodContent(doc.select("meta[property=og:description]").attr("content"));
 
-        for (Element p : doc.select(".info p, .video-info p, .detail-info p")) {
-            String text = p.text();
-            if (text.startsWith("导演")) vod.setVodDirector(text.replace("导演：", "").trim());
-            else if (text.startsWith("主演")) vod.setVodActor(text.replace("主演：", "").trim());
-            else if (text.startsWith("年份")) vod.setVodYear(text.replace("年份：", "").trim());
-            else if (text.startsWith("地区") || text.startsWith("地域"))
-                vod.setVodArea(text.replaceAll("地[区域]：", "").trim());
+        // 标题
+        Element titleEl = doc.selectFirst("h1.player-title .title-txt");
+        vod.setVodName(titleEl != null ? titleEl.text().trim() : "");
+
+        // 封面 (originalSrc 懒加载)
+        Element imgEl = doc.selectFirst(".GNbox-xq-img img[originalSrc]");
+        if (imgEl != null) {
+            vod.setVodPic(imgEl.attr("originalSrc"));
         }
 
+        // 类型、年份、地区
+        Elements typeSpans = doc.select(".GNbox-type span");
+        List<String> typeList = new ArrayList<>();
+        String year = "", area = "";
+        for (Element span : typeSpans) {
+            String text = span.text().trim();
+            if (text.matches("\\d{4}")) {
+                year = text;
+            } else if (text.matches("^[\\u4e00-\\u9fa5]{2,4}$")) {
+                area = text;
+            } else {
+                typeList.add(text);
+            }
+        }
+        if (!typeList.isEmpty()) {
+            vod.setVodClass(TextUtils.join(",", typeList)); // 若 Vod 无此字段可注释
+        }
+        if (!year.isEmpty()) vod.setVodYear(year);
+        if (!area.isEmpty()) vod.setVodArea(area);
+
+        // 导演、主演、简介
+        Element dirSpan = doc.selectFirst(".GNbox-xq-text div:contains(导演) span");
+        if (dirSpan != null) vod.setVodDirector(dirSpan.text().trim());
+
+        Element actorSpan = doc.selectFirst(".GNbox-xq-text div:contains(主演) span");
+        if (actorSpan != null) vod.setVodActor(actorSpan.text().trim());
+
+        Element descSpan = doc.selectFirst(".GNbox-xq-text div:contains(简介) span");
+        if (descSpan != null) vod.setVodContent(descSpan.text().trim());
+
+        // 构建多线路播放列表
         buildPlayUrls(vod, videoId, doc);
+
         return Result.get().vod(vod).string();
     }
 
     /**
      * id 格式：videoId|chapterId
-     * flag = "普快线路" → sourceId=1；flag = "超快线路" → sourceId=21
-     * 直接用对应 sourceId 调 play-url，返回的 resource_url 就是正确 CDN 地址。
-     * 均添加 Referer: https://aigua8.com/
+     * flag 对应 SOURCE_NAMES 中的线路名称，映射为 sourceId，然后调用 play-url
+     * 从返回的 resource_url 对象中取对应 sourceId 的地址
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String[] parts     = id.split("\\|", 2);
-        String   videoId   = parts[0];
-        String   chapterId = parts[1];
+        String[] parts = id.split("\\|", 2);
+        String videoId = parts[0];
+        String chapterId = parts[1];
 
-        // flag → sourceId
-        String sourceId = "1";
-        for (int k = 0; k < SOURCE_NAMES.length; k++) {
-            if (SOURCE_NAMES[k].equals(flag)) { sourceId = SOURCE_IDS[k]; break; }
+        // 根据 flag 获取 sourceId
+        String sourceId = "1"; // 默认普快
+        for (int i = 0; i < SOURCE_NAMES.length; i++) {
+            if (SOURCE_NAMES[i].equals(flag)) {
+                sourceId = SOURCE_IDS[i];
+                break;
+            }
         }
 
         String apiUrl = API_PLAY
                 + "?citycode=AMS"
                 + "&page=detail"
                 + "&chapterId=" + chapterId
-                + "&videoId="   + videoId
-                + "&sourceId="  + sourceId;
+                + "&videoId=" + videoId
+                + "&sourceId=" + sourceId;
 
-        String resp     = OkHttp.string(apiUrl, headers());
-        String finalUrl = new JSONObject(resp)
+        String resp = OkHttp.string(apiUrl, baseHeaders());
+        JSONObject urlinfo = new JSONObject(resp)
                 .getJSONObject("data")
-                .getJSONObject("urlinfo")
-                .getString("resource_url");
+                .getJSONObject("urlinfo");
 
-        Map<String, String> referer = new HashMap<>();
-        referer.put("Referer", HOST + "/");
-        return Result.get().url(finalUrl).header(referer).string();
+        // resource_url 是一个对象，key 为 sourceId
+        JSONObject resourceUrl = urlinfo.getJSONObject("resource_url");
+        String finalUrl = resourceUrl.optString(sourceId);
+        if (TextUtils.isEmpty(finalUrl)) {
+            // 如果该 sourceId 不存在，取第一个可用的
+            JSONArray keys = resourceUrl.names();
+            if (keys != null && keys.length() > 0) {
+                finalUrl = resourceUrl.getString(keys.getString(0));
+            }
+        }
+
+        // 播放请求使用 PC 模拟头
+        return Result.get().url(finalUrl).header(playHeaders()).string();
     }
+
+    // ------------------------------------------------------------------ 搜索
 
     private static final String API_SEARCH = HOST + "/video/refresh-video";
 
     /**
-     * 解析搜索结果 HTML，每条 .SSbox 对应一个视频。
-     * 封面用 img[originalSrc]（懒加载真实地址），标题从 .SSjgName a span 拼接，
-     * 备注用年份 + 主演首位。
+     * 解析搜索结果 HTML
      */
     private List<Vod> parseSearchHtml(String html) {
         List<Vod> list = new ArrayList<>();
-        Document  doc  = Jsoup.parse(html);
+        Document doc = Jsoup.parse(html);
         for (Element box : doc.select(".SSbox")) {
-            // video_id
             String href = box.select("a.SSjgImg").attr("href");
-            // href = "/video/detail?video_id=223864"
             String videoId = "";
             int idx = href.indexOf("video_id=");
             if (idx >= 0) videoId = href.substring(idx + 9);
             if (videoId.isEmpty()) continue;
 
-            // 封面（懒加载，真实 src 在 originalSrc）
             String pic = box.select("img[originalSrc]").attr("originalSrc");
 
-            // 标题：.SSjgName a 下所有 span 的文字拼合（排除空 span）
             StringBuilder title = new StringBuilder();
             for (Element span : box.select(".SSjgName a span")) {
                 String t = span.text().trim();
                 if (!t.isEmpty()) title.append(t);
             }
 
-            // 年份 + 主演首位 → 备注
-            String year    = "";
-            String actors  = "";
+            String year = "", actors = "";
             for (Element p : box.select(".SSjg > p")) {
                 String text = p.text().trim();
-                if (text.startsWith("年份")) year   = text.replaceFirst("年份：?", "").trim();
-                if (text.startsWith("主演")) actors = p.select("span").first() != null
-                        ? p.select("span").first().text().trim() : "";
+                if (text.startsWith("年份")) year = text.replaceFirst("年份：?", "").trim();
+                if (text.startsWith("主演")) {
+                    Element first = p.select("span").first();
+                    if (first != null) actors = first.text().trim();
+                }
             }
             String remarks = year.isEmpty() ? actors : (actors.isEmpty() ? year : year + " " + actors);
 
@@ -317,15 +388,14 @@ public class AiGua extends Spider {
     public String searchContent(String key, boolean quick, String pg) throws Exception {
         int page = pg == null || pg.isEmpty() ? 1 : Integer.parseInt(pg);
         String url = API_SEARCH
-                + "?page_num="  + page
+                + "?page_num=" + page
                 + "&sorttype=desc"
                 + "&page_size=24"
                 + "&tvNum=7"
                 + "&sort=new"
-                + "&keyword="   + java.net.URLEncoder.encode(key, "UTF-8");
-        String     html = OkHttp.string(url, headers());
-        List<Vod>  list = parseSearchHtml(html);
-        // 搜索结果 HTML 不提供总页数，有结果就允许翻页
+                + "&keyword=" + java.net.URLEncoder.encode(key, "UTF-8");
+        String html = OkHttp.string(url, baseHeaders());
+        List<Vod> list = parseSearchHtml(html);
         int total = list.isEmpty() ? 0 : page * 24 + 1;
         return Result.get()
                 .page(page, page + (list.isEmpty() ? 0 : 1), 24, total)
