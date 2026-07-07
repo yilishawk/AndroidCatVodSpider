@@ -45,6 +45,11 @@ public class AiGua extends Spider {
     private static final String[] SOURCE_NAMES = {"超快线路", "普快线路", "如意专线", "专线"};
     private static final String[] SOURCE_IDS   = {"21",      "1",       "19",      "16"};
 
+    // 超快线路(21)拿不到自己地址时的兜底：用普快线路(1)的地址换成这个域名
+    private static final String SOURCE_ID_FASTLINE   = "21";
+    private static final String SOURCE_ID_NORMAL     = "1";
+    private static final String FASTLINE_CDN_DOMAIN  = "https://cfav103.orangecloudapi.com";
+
     // filters 必须是 LinkedHashMap 才能传给 Result.filters()，
     // 但 fetchFilters() 会被多个线程池线程并发调用，LinkedHashMap 本身不是线程安全的，
     // 用 Collections.synchronizedMap 包一层，避免并发 put 导致内部结构损坏。
@@ -320,10 +325,21 @@ public class AiGua extends Spider {
 
         if (ruRaw instanceof JSONObject) {
             JSONObject resourceUrls = (JSONObject) ruRaw;
-            // 优先取当前 flag 对应的线路；如果这个 chapter 恰好没有这条线路的地址（不同集数
-            // 可用线路可能不完全一致），按 SOURCE_IDS 的顺序找第一个有地址的线路兜底，
-            // 避免直接失败——好过完全播放不了。
             finalUrl = resourceUrls.optString(sourceId, "");
+
+            // 超快线路(21) 经常拿不到自己的地址，但它其实和普快线路(1) 是同一份资源、
+            // 只是走了不同 CDN 域名分发（对比过实际返回的 1/21 两条地址，路径部分完全
+            // 一样，只有域名不同），拿不到 21 的地址时，用 1 的地址把域名换成超快专用
+            // CDN 域名即可，不用退化成别的线路。
+            if (finalUrl.isEmpty() && SOURCE_ID_FASTLINE.equals(sourceId)) {
+                String baseUrl = resourceUrls.optString(SOURCE_ID_NORMAL, "");
+                if (!baseUrl.isEmpty()) {
+                    finalUrl = swapDomain(baseUrl, FASTLINE_CDN_DOMAIN);
+                }
+            }
+
+            // 其他线路缺失时，按 SOURCE_IDS 的优先级顺序找第一个有地址的线路兜底，
+            // 避免直接失败——好过完全播放不了。
             if (finalUrl.isEmpty()) {
                 for (String candidate : SOURCE_IDS) {
                     String u = resourceUrls.optString(candidate, "");
@@ -342,6 +358,16 @@ public class AiGua extends Spider {
         Map<String, String> referer = new HashMap<>();
         referer.put("Referer", HOST + "/");
         return Result.get().url(finalUrl).header(referer).string();
+    }
+
+    /** 把 url 的域名部分（scheme://host）换成 newDomain，路径/查询串原样保留 */
+    private String swapDomain(String url, String newDomain) {
+        int schemeEnd = url.indexOf("://");
+        if (schemeEnd < 0) return url;
+        int pathStart = url.indexOf('/', schemeEnd + 3);
+        String path = pathStart >= 0 ? url.substring(pathStart) : "";
+        String base = newDomain.endsWith("/") ? newDomain.substring(0, newDomain.length() - 1) : newDomain;
+        return base + path;
     }
 
     /**
