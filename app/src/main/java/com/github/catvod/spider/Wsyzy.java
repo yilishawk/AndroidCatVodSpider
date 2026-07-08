@@ -38,8 +38,10 @@ public class Wsyzy extends Spider {
     // SearchMode.PROVIDE_VOD → ?ac=videolist&wd=  （标准苹果CMS采集接口）
     // SearchMode.SUGGEST     → /index.php/ajax/suggest.html?mid=1&wd=  （suggest接口，baseUrl填根域名）
     private static final ExtraSource[] SOURCES = {
-            new ExtraSource("备1", "https://caiji.xgzyapi.com/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
-            new ExtraSource("备2", "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8", SearchMode.PROVIDE_VOD),
+            new ExtraSource("备西瓜", "https://caiji.xgzyapi.com/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
+            new ExtraSource("备电影天堂", "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8", SearchMode.PROVIDE_VOD),
+            new ExtraSource("备悠悠资源", "https://uuzy.me/api.php/provide/vod",                    SearchMode.PROVIDE_VOD),
+        
             // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                       SearchMode.PROVIDE_VOD),
             // new ExtraSource("备4", "https://yyy.com",                                           SearchMode.SUGGEST),
     };
