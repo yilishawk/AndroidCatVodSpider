@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
 public class Vanale extends Spider {
 
     private static final String HOST = "https://a.v-anale.best";
-    private static boolean isVerified = false; // 密码验证状态全局缓存
+    private static boolean isVerified = false; // 密码验证状 态全局缓存
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<String, String>();
