@@ -34,7 +34,7 @@ public class Vanale extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<Class>();
-        // 根据提供的内容，精选常用分类并翻译为中文
+        // 根据提供的内容， 精选常用分类并翻译为中文
         classes.add(new Class("asian", "亚洲"));
         classes.add(new Class("rimming", "毒龙/舔肛"));
         classes.add(new Class("granny", "熟女/祖母"));
