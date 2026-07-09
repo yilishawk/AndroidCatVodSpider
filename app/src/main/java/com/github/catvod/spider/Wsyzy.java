@@ -109,6 +109,7 @@ public class Wsyzy extends Spider {
         JSONArray classArr = root.optJSONArray("class");
 
         List<Class> classes = new ArrayList<>();
+        List<String> classNames = new ArrayList<>(); // 与 classes 一一对应，仅用于排序，不依赖 Class 的 getter
         if (classArr != null) {
             for (int i = 0; i < classArr.length(); i++) {
                 JSONObject c = classArr.getJSONObject(i);
@@ -117,10 +118,11 @@ public class Wsyzy extends Spider {
                 if (HIDE_TYPE_IDS.contains(tid)) continue;
                 if (isBlocked(name)) continue;
                 classes.add(new Class(tid, name));
+                classNames.add(name);
             }
         }
 
-        sortClassesByPriority(classes);
+        sortClassesByPriority(classes, classNames);
 
         return Result.get().classes(classes).string();
     }
@@ -316,14 +318,26 @@ public class Wsyzy extends Spider {
     }
 
     // 按 CLASS_PRIORITY 顺序把指定分类置顶，其余分类保持原相对顺序（稳定排序）
-    private static void sortClassesByPriority(List<Class> classes) {
-        classes.sort((a, b) -> {
-            int pa = CLASS_PRIORITY.indexOf(a.getTypeName());
-            int pb = CLASS_PRIORITY.indexOf(b.getTypeName());
-            if (pa == -1) pa = Integer.MAX_VALUE;
-            if (pb == -1) pb = Integer.MAX_VALUE;
-            return Integer.compare(pa, pb);
+    // 注意：Class 这个 bean 没有 getTypeName() 之类的 getter，只能构造时传入，
+    // 所以排序不能反查 Class 对象取名字，改用调用方传入的平行 names 列表按下标排序。
+    private static void sortClassesByPriority(List<Class> classes, List<String> names) {
+        int n = classes.size();
+        Integer[] idx = new Integer[n];
+        for (int i = 0; i < n; i++) idx[i] = i;
+
+        Arrays.sort(idx, (i1, i2) -> {
+            int p1 = CLASS_PRIORITY.indexOf(names.get(i1));
+            int p2 = CLASS_PRIORITY.indexOf(names.get(i2));
+            if (p1 == -1) p1 = Integer.MAX_VALUE;
+            if (p2 == -1) p2 = Integer.MAX_VALUE;
+            if (p1 != p2) return Integer.compare(p1, p2);
+            return Integer.compare(i1, i2); // 优先级相同则保持原相对顺序，保证稳定排序
         });
+
+        List<Class> sortedClasses = new ArrayList<>(n);
+        for (int i : idx) sortedClasses.add(classes.get(i));
+        classes.clear();
+        classes.addAll(sortedClasses);
     }
 
     private static List<String[]> searchExtra(int idx, String title) {
