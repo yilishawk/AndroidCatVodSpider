@@ -1,13 +1,18 @@
 package com.github.catvod.spider;
 
-import android.app.AlertDialog;
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
-import android.content.DialogInterface;
+import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.InputType;
 import android.text.TextUtils;
-import android.widget.EditText;
+import android.util.Base64;
+import android.view.ViewGroup;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
@@ -34,48 +39,102 @@ public class Vanale extends Spider {
         return headers;
     }
 
+    // 全局动态尝试获取合法的 Activity
+    private Activity getActivity() {
+        try {
+            return com.github.catvod.spider.Init.getActivity();
+        } catch (Throwable e) {
+            try {
+                java.lang.reflect.Method method = Class.forName("com.github.catvod.utils.Utils").getMethod("getTopActivity");
+                return (Activity) method.invoke(null);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+    }
+
     @Override
     public void init(final Context context, String extend) throws Exception {
         super.init(context, extend);
-        
-        // 如果已经验证过，不再重复弹窗
+    }
+
+    private synchronized void checkPasswordWithWebView() {
         if (isVerified) {
             return;
         }
 
+        final Activity activity = getActivity();
+        if (activity == null || activity.isFinishing()) {
+            return;
+        }
+
+        // 创建锁，初始计数为 1
         final CountDownLatch latch = new CountDownLatch(1);
-        
-        // 切换到 Android UI 线程弹出对话框
+
+        // 强行切到 Android UI 主线程进行 WebView 渲染
         new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface", "AddJavascriptInterface"})
             @Override
             public void run() {
                 try {
-                    final EditText input = new EditText(context);
-                    input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    final Dialog dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+                    final WebView webView = new WebView(activity);
                     
-                    AlertDialog dialog = new AlertDialog.Builder(context)
-                            .setTitle("提示")
-                            .setMessage("请输入身份验证密码以继续")
-                            .setView(input)
-                            .setCancelable(false)
-                            .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+                    webView.getSettings().setJavaScriptEnabled(true);
+                    webView.setBackgroundColor(Color.parseColor("#121212")); // 适配暗黑背景
+
+                    // 构建交互用的 HTML 页面内容（纯前端 UI，不依赖外部网络，秒开）
+                    String html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no'>"
+                            + "<style>"
+                            + "body { background-color: #121212; color: #ffffff; font-family: sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; }"
+                            + ".box { background: #1e1e1e; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-align: center; width: 80%; max-width: 360px; }"
+                            + "h3 { margin-bottom: 20px; color: #e0e0e0; font-weight: normal; }"
+                            + "input { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid #333; background: #2c2c2c; color: #fff; border-radius: 6px; box-sizing: border-box; font-size: 16px; text-align: center; }"
+                            + "button { width: 100%; padding: 12px; border: none; background: #ff4757; color: #fff; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }"
+                            + "button:active { background: #e84118; }"
+                            + "</style></head><body>"
+                            + "<div class='box'>"
+                            + "<h3>请输入安全验证密码</h3>"
+                            + "<input type='password' id='pwd' placeholder='请输入密码' autofocus>"
+                            + "<button onclick='submit()'>确 定</button>"
+                            + "</div>"
+                            + "<script>"
+                            + "function submit() {"
+                            + "    var p = document.getElementById('pwd').value;"
+                            + "    if(p) { window.AndroidBridge.onPasswordSubmit(p); }"
+                            + "}"
+                            + "</script></body></html>";
+
+                    // 注入 Javascript 桥梁接口
+                    webView.addJavascriptInterface(new Object() {
+                        @JavascriptInterface
+                        public void onPasswordSubmit(String password) {
+                            if ("123456789".equals(password)) {
+                                isVerified = true;
+                            }
+                            // 收到密码并验证后，通知主线程关闭 Dialog 并释放 Latch
+                            new Handler(Looper.getMainLooper()).post(new Runnable() {
                                 @Override
-                                public void onClick(DialogInterface dialogInterface, int i) {
-                                    String pwd = input.getText().toString();
-                                    if ("123456789".equals(pwd)) {
-                                        isVerified = true;
+                                public void run() {
+                                    try {
+                                        dialog.dismiss();
+                                    } catch (Exception e) {
+                                        SpiderDebug.log(e);
                                     }
-                                    latch.countDown();
+                                    latch.countDown(); // 减计数，释放爬虫阻塞状态
                                 }
-                            })
-                            .setNegativeButton("取消", new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface dialogInterface, int i) {
-                                    latch.countDown();
-                                }
-                            })
-                            .create();
+                            });
+                        }
+                    }, "AndroidBridge");
+
+                    webView.setWebViewClient(new WebViewClient());
+                    String encodedHtml = Base64.encodeToString(html.getBytes("UTF-8"), Base64.NO_PADDING);
+                    webView.loadData(encodedHtml, "text/html", "base64");
+
+                    dialog.setContentView(webView, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                    dialog.setCancelable(false); // 强制要求用户必须输入，不可滑走
                     dialog.show();
+
                 } catch (Exception e) {
                     SpiderDebug.log(e);
                     latch.countDown();
@@ -83,7 +142,7 @@ public class Vanale extends Spider {
             }
         });
 
-        // 阻塞等待用户输入完毕
+        // 核心阻塞：让爬虫的核心提取线程在非 UI 线程挂起，等待用户在 WebView 输入完成
         try {
             latch.await();
         } catch (InterruptedException e) {
@@ -93,14 +152,14 @@ public class Vanale extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
+        // 进入首页时唤醒 WebView
+        checkPasswordWithWebView();
+
         List<Class> classes = new ArrayList<Class>();
-        
-        // 校验未通过，直接返回空分类，阻断运行
         if (!isVerified) {
-            return Result.get().classes(classes).string();
+            return Result.error("验证失败，安全限制无法访问该爬虫源！");
         }
 
-        // 精选常用分类并翻译为中文
         classes.add(new Class("asian", "亚洲"));
         classes.add(new Class("rimming", "毒龙/舔肛"));
         classes.add(new Class("granny", "熟女/祖母"));
@@ -121,7 +180,7 @@ public class Vanale extends Spider {
         classes.add(new Class("double-anal", "双洞肛交"));
         classes.add(new Class("dildo", "假阳具"));
         classes.add(new Class("homemade", "自拍自制"));
-        classes.add(new Class("hardcore", "硬核硬核"));
+        classes.add(new Class("hardcore", "硬核"));
         classes.add(new Class("mature", "熟女"));
         classes.add(new Class("toys", "性玩具"));
         classes.add(new Class("ass-to-mouth", "肛转口"));
@@ -162,9 +221,7 @@ public class Vanale extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         List<Vod> list = new ArrayList<Vod>();
-        if (!isVerified) {
-            return Result.get().vod(list).string();
-        }
+        if (!isVerified) return Result.get().vod(list).string();
 
         int page = Integer.parseInt(pg);
         String url = HOST + "/" + tid + "?page=" + page;
@@ -217,9 +274,7 @@ public class Vanale extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        if (!isVerified) {
-            return Result.get().vod(new Vod()).string();
-        }
+        if (!isVerified) return Result.get().vod(new Vod()).string();
 
         String id = ids.get(0);
         Vod vod = new Vod();
@@ -240,9 +295,7 @@ public class Vanale extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (!isVerified) {
-            return Result.get().url("").string();
-        }
+        if (!isVerified) return Result.get().url("").string();
 
         String targetUrl = HOST + "/get/" + id;
         String m3u8MainUrl = OkHttp.string(targetUrl, getHeaders());
@@ -290,7 +343,7 @@ public class Vanale extends Spider {
                 return matcher.group(1).trim();
             }
         } catch (Exception e) {
-            SpiderDebug.log(e);
+            // 优雅抓取
         }
         return "";
     }
