@@ -35,20 +35,25 @@ public class Wsyzy extends Spider {
     private static final String SEARCH_API = "https://api.wsyzy.net/index.php/ajax/suggest.html?mid=1";
 
     // 副接口列表：要加新源只需在这里追加一行
-    // SearchMode.PROVIDE_VOD → ?ac=videolist&wd=  （标准苹果CMS采集接口）
-    // SearchMode.SUGGEST     → /index.php/ajax/suggest.html?mid=1&wd=  （suggest接口，baseUrl填根域名）
+    // SearchMode.PROVIDE_VOD     → ?ac=videolist&wd=  （标准苹果CMS采集接口，baseUrl需填完整接口地址，可带 /from/xxx 指定线路）
+    // SearchMode.SUGGEST         → /index.php/ajax/suggest.html?mid=1&wd=  （suggest接口精确匹配id，baseUrl只填根域名；
+    //                                如需指定采集线路，detailPath 传 "/from/xxx"，会拼在详情接口路径后面）
+    // SearchMode.APIJSON_DETAIL  → ?wd=xxx&ac=detail  （搜索详情合一接口，一次请求直接返回匹配详情，baseUrl填完整接口地址）
     private static final ExtraSource[] SOURCES = {
             new ExtraSource("备西瓜", "https://caiji.xgzyapi.com/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
-            new ExtraSource("备电影天堂", "http://caiji.dyttzyapi.com/api.php/provide/vod/from/dyttm3u8", SearchMode.PROVIDE_VOD),
-            new ExtraSource("备1080资源", "https://api.1080zyku.com/inc/apijson.php",                    SearchMode.PROVIDE_VOD),
+            new ExtraSource("备电影天堂", "https://caiji.dyttzyapi.com", SearchMode.SUGGEST, "/from/dyttm3u8"),
+            new ExtraSource("备1080资源", "https://api.1080zyku.com/inc/apijson.php",                    SearchMode.APIJSON_DETAIL),
             new ExtraSource("备无尽", "https://api.wujinapi.me/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
-        
+
             // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                       SearchMode.PROVIDE_VOD),
             // new ExtraSource("备4", "https://yyy.com",                                           SearchMode.SUGGEST),
     };
 
     // 主接口父分类（无数据），homeContent 里过滤掉
     private static final Set<String> HIDE_TYPE_IDS = new HashSet<>(Arrays.asList("1", "2", "3", "4"));
+
+    // 首页分类排序：按此列表顺序优先展示，未列出的分类保持原相对顺序排在后面
+    private static final List<String> CLASS_PRIORITY = Arrays.asList("国产剧", "大陆剧");
 
     // 成人内容关键词：分类名/视频名包含任意一个则屏蔽
     private static final String[] BLOCK_KEYWORDS = {
@@ -68,18 +73,29 @@ public class Wsyzy extends Spider {
 
     private enum SearchMode {
         PROVIDE_VOD,
-        SUGGEST
+        SUGGEST,
+        // 特殊接口：wd= + ac=detail 合并成一次请求直接返回匹配详情
+        // （无需先搜索拿id再单独查详情），例如 1080zyku 的 apijson.php
+        APIJSON_DETAIL
     }
 
     private static class ExtraSource {
         final String label;
         final String baseUrl;
         final SearchMode mode;
+        // 可选：仅 SUGGEST 模式下用于指定详情接口的路径后缀，例如 "/from/dyttm3u8"
+        // 用于在 baseUrl + "/api.php/provide/vod" 后面追加，指定采集线路
+        final String detailPath;
 
         ExtraSource(String label, String baseUrl, SearchMode mode) {
+            this(label, baseUrl, mode, "");
+        }
+
+        ExtraSource(String label, String baseUrl, SearchMode mode, String detailPath) {
             this.label = label;
             this.baseUrl = baseUrl;
             this.mode = mode;
+            this.detailPath = detailPath == null ? "" : detailPath;
         }
     }
 
@@ -103,6 +119,8 @@ public class Wsyzy extends Spider {
                 classes.add(new Class(tid, name));
             }
         }
+
+        sortClassesByPriority(classes);
 
         return Result.get().classes(classes).string();
     }
@@ -297,12 +315,43 @@ public class Wsyzy extends Spider {
         return s.toLowerCase();
     }
 
+    // 按 CLASS_PRIORITY 顺序把指定分类置顶，其余分类保持原相对顺序（稳定排序）
+    private static void sortClassesByPriority(List<Class> classes) {
+        classes.sort((a, b) -> {
+            int pa = CLASS_PRIORITY.indexOf(a.getTypeName());
+            int pb = CLASS_PRIORITY.indexOf(b.getTypeName());
+            if (pa == -1) pa = Integer.MAX_VALUE;
+            if (pb == -1) pb = Integer.MAX_VALUE;
+            return Integer.compare(pa, pb);
+        });
+    }
+
     private static List<String[]> searchExtra(int idx, String title) {
         List<String[]> out = new ArrayList<>();
         ExtraSource src = SOURCES[idx];
         try {
             String wd = URLEncoder.encode(title, "UTF-8");
             String target = normalize(title);
+
+            if (src.mode == SearchMode.APIJSON_DETAIL) {
+                // 搜索详情合一：一次请求直接返回匹配详情，无需二次请求查详情
+                String url = src.baseUrl + "?wd=" + wd + "&ac=detail";
+                JSONObject obj = new JSONObject(OkHttp.string(url));
+                JSONArray list = obj.optJSONArray("list");
+                if (list != null) {
+                    for (int j = 0; j < list.length(); j++) {
+                        JSONObject extraVod = list.getJSONObject(j);
+                        if (!target.equals(normalize(extraVod.optString("vod_name")))) continue;
+                        List<String> fromOut = new ArrayList<>();
+                        List<String> urlOut = new ArrayList<>();
+                        splitPlay(extraVod.optString("vod_play_from"), extraVod.optString("vod_play_url"), fromOut, urlOut, src.label);
+                        for (int k = 0; k < fromOut.size(); k++) out.add(new String[]{fromOut.get(k), urlOut.get(k)});
+                        break; // 精确匹配到一条即可
+                    }
+                }
+                return out;
+            }
+
             String matchId = null;
 
             if (src.mode == SearchMode.SUGGEST) {
@@ -319,7 +368,7 @@ public class Wsyzy extends Spider {
                     }
                 }
                 if (matchId != null) {
-                    String detailBase = src.baseUrl + "/api.php/provide/vod";
+                    String detailBase = src.baseUrl + "/api.php/provide/vod" + src.detailPath;
                     JSONObject dObj = new JSONObject(OkHttp.string(detailBase + "?ac=detail&ids=" + matchId));
                     JSONArray dList = dObj.optJSONArray("list");
                     if (dList != null && dList.length() > 0) {
