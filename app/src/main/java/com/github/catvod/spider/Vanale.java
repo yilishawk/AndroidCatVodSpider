@@ -1,23 +1,31 @@
 package com.github.catvod.spider;
 
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
 import android.text.TextUtils;
-import com.github.catvod.crawler.Spider;
-import com.github.catvod.crawler.SpiderDebug;
+import android.widget.EditText;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
+import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Vanale extends Spider {
 
     private static final String HOST = "https://a.v-anale.best";
+    private static boolean isVerified = false; // 密码验证状态全局缓存
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<String, String>();
@@ -27,14 +35,72 @@ public class Vanale extends Spider {
     }
 
     @Override
-    public void init(Context context, String extend) throws Exception {
+    public void init(final Context context, String extend) throws Exception {
         super.init(context, extend);
+        
+        // 如果已经验证过，不再重复弹窗
+        if (isVerified) {
+            return;
+        }
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        
+        // 切换到 Android UI 线程弹出对话框
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final EditText input = new EditText(context);
+                    input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    
+                    AlertDialog dialog = new AlertDialog.Builder(context)
+                            .setTitle("提示")
+                            .setMessage("请输入身份验证密码以继续")
+                            .setView(input)
+                            .setCancelable(false)
+                            .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialogInterface, int i) {
+                                    String pwd = input.getText().toString();
+                                    if ("123456789".equals(pwd)) {
+                                        isVerified = true;
+                                    }
+                                    latch.countDown();
+                                }
+                            })
+                            .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialogInterface, int i) {
+                                    latch.countDown();
+                                }
+                            })
+                            .create();
+                    dialog.show();
+                } catch (Exception e) {
+                    SpiderDebug.log(e);
+                    latch.countDown();
+                }
+            }
+        });
+
+        // 阻塞等待用户输入完毕
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            SpiderDebug.log(e);
+        }
     }
 
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<Class>();
-        // 根据提供的内容， 精选常用分类并翻译为中文
+        
+        // 校验未通过，直接返回空分类，阻断运行
+        if (!isVerified) {
+            return Result.get().classes(classes).string();
+        }
+
+        // 精选常用分类并翻译为中文
         classes.add(new Class("asian", "亚洲"));
         classes.add(new Class("rimming", "毒龙/舔肛"));
         classes.add(new Class("granny", "熟女/祖母"));
@@ -95,29 +161,30 @@ public class Vanale extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        List<Vod> list = new ArrayList<Vod>();
+        if (!isVerified) {
+            return Result.get().vod(list).string();
+        }
+
         int page = Integer.parseInt(pg);
         String url = HOST + "/" + tid + "?page=" + page;
         String html = OkHttp.string(url, getHeaders());
 
-        List<Vod> list = new ArrayList<Vod>();
         if (TextUtils.isEmpty(html)) {
             return Result.get().vod(list).page(page, 0, 0, 0).string();
         }
 
-        // 解析视频列表核心块
         Pattern pVideo = Pattern.compile("<div class=\"video\">([\\s\\S]*?)</div>\\s*</div>", Pattern.CASE_INSENSITIVE);
         Matcher mVideo = pVideo.matcher(html);
 
         while (mVideo.find()) {
             String block = mVideo.group(1);
 
-            // 提取 id (data-id)
             Pattern pId = Pattern.compile("data-id=\"(\\d+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mId = pId.matcher(block);
             if (!mId.find()) continue;
             String id = mId.group(1);
 
-            // 提取图片 (src)
             Pattern pImg = Pattern.compile("<img[^>]+src=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mImg = pImg.matcher(block);
             String img = mImg.find() ? mImg.group(1) : "";
@@ -125,12 +192,10 @@ public class Vanale extends Spider {
                 img = HOST + img;
             }
 
-            // 提取标题 (alt属性通常可用作标题)
             Pattern pTitle = Pattern.compile("<img[^>]+alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mTitle = pTitle.matcher(block);
             String title = mTitle.find() ? mTitle.group(1) : "Video " + id;
 
-            // 提取时长 (duration)
             Pattern pDur = Pattern.compile("<span class=\"duration\">[^<]*</span>\\s*([^<]+)</span>", Pattern.CASE_INSENSITIVE);
             Matcher mDur = pDur.matcher(block);
             String duration = mDur.find() ? mDur.group(1).trim() : "";
@@ -144,7 +209,6 @@ public class Vanale extends Spider {
             list.add(vod);
         }
 
-        // 判断是否有下一页（简单通过包含"?page=当前页+1"字符来做预判）
         int nextPg = page + 1;
         int totalPage = html.contains("page=" + nextPg) ? nextPg : page;
 
@@ -153,15 +217,16 @@ public class Vanale extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String id = ids.get(0);
+        if (!isVerified) {
+            return Result.get().vod(new Vod()).string();
+        }
 
-        // 规范：详情页也是播放页，在 detail 里将信息填完整
+        String id = ids.get(0);
         Vod vod = new Vod();
         vod.setVodId(id);
         vod.setVodName("视频详情 #" + id);
-        vod.setVodPic(HOST + "/images/" + id + ".jpg"); // 缺省封面图规律预测
+        vod.setVodPic(HOST + "/images/" + id + ".jpg");
         vod.setVodPlayFrom("Vanale高速线");
-        // 播放ID直接使用视频的ID
         vod.setVodPlayUrl("播放播放$" + id); 
 
         return Result.get().vod(vod).string();
@@ -169,14 +234,16 @@ public class Vanale extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        // 如果该网站支持搜索，可在此处拼装搜索URL。现预留符合规范的空返回。
         List<Vod> list = new ArrayList<Vod>();
         return Result.get().vod(list).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 1. 请求 /get/{id} 接口获取真实 m3u8 一级地址
+        if (!isVerified) {
+            return Result.get().url("").string();
+        }
+
         String targetUrl = HOST + "/get/" + id;
         String m3u8MainUrl = OkHttp.string(targetUrl, getHeaders());
 
@@ -185,26 +252,21 @@ public class Vanale extends Spider {
         }
         m3u8MainUrl = m3u8MainUrl.trim();
 
-        // 2. 请求一级 m3u8 获取多码率列表，进行重排
         String m3u8Content = OkHttp.string(m3u8MainUrl, getHeaders());
         if (TextUtils.isEmpty(m3u8Content)) {
-            // 如果拿不到内容，直接退回一级m3u8地址
             return Result.get().url(m3u8MainUrl).header(getHeaders()).string();
         }
 
-        // 解析二级 m3u8 线路并按高清晰度向下重排
         String baseUrl = m3u8MainUrl.substring(0, m3u8MainUrl.lastIndexOf("/") + 1);
         
-        // 分别抓取对应档位的子m3u8链接
         String p1080 = findSubM3u8(m3u8Content, "1080p");
         String p720 = findSubM3u8(m3u8Content, "720p");
         String p480 = findSubM3u8(m3u8Content, "480p");
         String p360 = findSubM3u8(m3u8Content, "360p");
         String p250 = findSubM3u8(m3u8Content, "250p");
 
-        String finalPlayUrl = m3u8MainUrl; // 缺省
+        String finalPlayUrl = m3u8MainUrl;
         
-        // 严格遵循高到低排列：有1080p先用1080p，以此类推
         if (!p1080.isEmpty()) {
             finalPlayUrl = p1080.startsWith("http") ? p1080 : baseUrl + p1080;
         } else if (!p720.isEmpty()) {
@@ -220,7 +282,6 @@ public class Vanale extends Spider {
         return Result.get().url(finalPlayUrl).header(getHeaders()).string();
     }
 
-    // 辅助提取方法：通过NAME寻找对应的hls文件文件名
     private String findSubM3u8(String content, String resolutionName) {
         try {
             Pattern pattern = Pattern.compile("RESOLUTION=[^,\\n\\r]+,NAME=\"" + resolutionName + "\"\\s*\\n?([^\\#\\n\\r]+)", Pattern.CASE_INSENSITIVE);
