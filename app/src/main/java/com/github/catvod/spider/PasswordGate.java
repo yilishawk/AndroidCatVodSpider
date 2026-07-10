@@ -1,32 +1,34 @@
 package com.github.catvod.spider;
 
-import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
-import android.graphics.Color;
-import android.graphics.PixelFormat;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.util.Log;
-import android.view.Gravity;
-import android.view.WindowManager;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebView;
+import android.widget.EditText;
+import android.widget.Toast;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.security.MessageDigest;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 通用密码门禁工具类（WebView + 系统悬浮窗实现）。
+ * 通用密码门禁工具类。
  * 在爬虫的 init() 里调用 PasswordGate.ensureUnlocked(context)，
  * 只有密码正确才会返回 true，爬虫才继续往下走。
  *
- * 用系统悬浮窗（TYPE_APPLICATION_OVERLAY）挂载 WebView，不依赖 Activity Context，
- * 因此不会出现 AlertDialog 那种 BadTokenException 崩溃问题。
+ * 由于本项目只能编译成 spider jar 塞进已打包好的宿主 App，无法修改宿主 App 的
+ * AndroidManifest.xml，因此不能用悬浮窗权限方案。改为：通过反射拿到宿主 App
+ * 当前处于前台的真实 Activity，把普通 AlertDialog 依附在这个 Activity 上，
+ * 不需要任何额外权限。
  *
- * 前提条件：App 需要已获得"显示在其他应用上层"权限（SYSTEM_ALERT_WINDOW），
- * 需要在 AndroidManifest.xml 声明该权限，并引导用户在系统设置里手动开启。
+ * 局限：反射依赖 Android 内部私有实现，个别系统版本/厂商 ROM 上可能失效，
+ * 失效时会走兜底逻辑（弹窗失败但不崩溃，只是验证不通过），不影响 App 稳定性。
  *
  * 注意：必须在【非主线程】调用（init() 通常已经是在后台线程执行，正常情况下没问题）。
  */
@@ -40,7 +42,7 @@ public class PasswordGate {
     public static boolean ensureUnlocked(Context context) {
         if (unlocked) return true;
 
-        // 防御性检查：避免主线程调用导致死锁（post到主线程弹窗 + 当前线程阻塞等待会互相卡死）。
+        // 防御性检查：避免主线程调用导致死锁。
         if (Looper.myLooper() == Looper.getMainLooper()) {
             Log.e("PasswordGate", "ensureUnlocked 被主线程调用，为避免死锁已跳过弹窗，请确认 init() 是否运行在后台线程");
             return false;
@@ -49,8 +51,7 @@ public class PasswordGate {
         CountDownLatch latch = new CountDownLatch(1);
         boolean[] result = {false};
 
-        Context appContext = context.getApplicationContext();
-        new Handler(Looper.getMainLooper()).post(() -> showWebViewPrompt(appContext, latch, result));
+        new Handler(Looper.getMainLooper()).post(() -> showPrompt(context, latch, result));
 
         try {
             latch.await(5, TimeUnit.MINUTES); // 最多等5分钟，避免用户长时间不操作导致线程卡死
@@ -61,86 +62,76 @@ public class PasswordGate {
         return unlocked;
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private static void showWebViewPrompt(Context appContext, CountDownLatch latch, boolean[] result) {
+    private static void showPrompt(Context fallbackContext, CountDownLatch latch, boolean[] result) {
         try {
-            WindowManager wm = (WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
-            if (wm == null) throw new IllegalStateException("拿不到 WindowManager");
+            Activity activity = getTopActivity();
+            // 优先用反射拿到的真实前台 Activity；拿不到就退回原始 context（大概率还是会失败，
+            // 但至少不会因为反射本身报错而崩溃）。
+            Context dialogContext = (activity != null) ? activity : fallbackContext;
 
-            WebView webView = new WebView(appContext);
-            webView.getSettings().setJavaScriptEnabled(true);
-            webView.setBackgroundColor(Color.parseColor("#CC000000")); // 半透明黑色遮罩，铺满全屏
+            EditText input = new EditText(dialogContext);
+            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            input.setHint("请输入访问密码");
 
-            int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY // Android 8.0+ 用这个类型
-                    : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;       // 老版本兼容
-
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    overlayType,
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, // 不加 NOT_FOCUSABLE，保证能接收键盘/遥控器输入
-                    PixelFormat.TRANSLUCENT
-            );
-            params.gravity = Gravity.CENTER;
-
-            // JS 回调桥接：密码框提交/取消都通过这个接口传回 Java 层
-            webView.addJavascriptInterface(new Object() {
-                @JavascriptInterface
-                public void submit(String pwd) {
-                    if (sha256(pwd).equals(PASSWORD_HASH)) {
-                        result[0] = true;
-                        closeOverlay(wm, webView);
-                        latch.countDown();
-                    } else {
-                        webView.post(() -> webView.evaluateJavascript("showError()", null));
-                    }
-                }
-
-                @JavascriptInterface
-                public void cancel() {
-                    closeOverlay(wm, webView);
-                    latch.countDown();
-                }
-            }, "Android");
-
-            webView.loadDataWithBaseURL(null, buildHtml(), "text/html", "utf-8", null);
-
-            wm.addView(webView, params);
+            new AlertDialog.Builder(dialogContext)
+                    .setTitle("该源需要密码")
+                    .setView(input)
+                    .setCancelable(false)
+                    .setPositiveButton("确定", (dialog, which) -> {
+                        String pwd = input.getText().toString();
+                        if (sha256(pwd).equals(PASSWORD_HASH)) {
+                            result[0] = true;
+                            latch.countDown();
+                        } else {
+                            Toast.makeText(dialogContext, "密码错误，请重试", Toast.LENGTH_SHORT).show();
+                            showPrompt(fallbackContext, latch, result); // 密码错了重新弹一次
+                        }
+                    })
+                    .setNegativeButton("取消", (dialog, which) -> latch.countDown())
+                    .show();
         } catch (Exception e) {
-            // 常见于没有"显示在其他应用上层"权限，addView 会抛异常。
-            // 弹窗失败时不能让异常往外抛导致整个 App 崩溃，这里改为验证失败处理。
-            Log.e("PasswordGate", "WebView 悬浮窗显示失败，请检查是否已授予悬浮窗权限: " + e);
+            // 依然可能因为 context 不是 Activity（反射失败时的兜底情况）而抛 BadTokenException，
+            // 这里 catch 住避免崩溃整个 App，只是这次验证失败。
+            Log.e("PasswordGate", "弹窗显示失败: " + e);
             latch.countDown();
         }
     }
 
-    private static void closeOverlay(WindowManager wm, WebView webView) {
-        new Handler(Looper.getMainLooper()).post(() -> {
-            try {
-                wm.removeView(webView);
-            } catch (Exception ignored) {
-            }
-        });
-    }
+    /**
+     * 反射获取当前处于前台、可交互的 Activity。
+     * 依赖 android.app.ActivityThread 的私有字段，非官方 API。
+     */
+    @SuppressWarnings("unchecked")
+    private static Activity getTopActivity() {
+        try {
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            Method currentActivityThreadMethod = activityThreadClass.getMethod("currentActivityThread");
+            Object activityThread = currentActivityThreadMethod.invoke(null);
+            if (activityThread == null) return null;
 
-    private static String buildHtml() {
-        return "<html><body style='margin:0;display:flex;align-items:center;justify-content:center;height:100vh;'>"
-                + "<div style='background:#222;padding:30px 40px;border-radius:12px;text-align:center;font-family:sans-serif;'>"
-                + "<div style='color:#fff;font-size:18px;margin-bottom:16px;'>该源需要密码</div>"
-                + "<input id='pwd' type='password' placeholder='请输入访问密码' autofocus "
-                + "style='font-size:18px;padding:10px;width:220px;border-radius:6px;border:none;box-sizing:border-box;'/>"
-                + "<div id='err' style='color:#ff6b6b;margin-top:8px;display:none;'>密码错误，请重试</div>"
-                + "<div style='margin-top:16px;'>"
-                + "<button onclick='doSubmit()' style='font-size:16px;padding:8px 24px;margin-right:12px;border-radius:6px;border:none;background:#4CAF50;color:#fff;'>确定</button>"
-                + "<button onclick='Android.cancel()' style='font-size:16px;padding:8px 24px;border-radius:6px;border:none;background:#666;color:#fff;'>取消</button>"
-                + "</div></div>"
-                + "<script>"
-                + "function doSubmit(){Android.submit(document.getElementById('pwd').value);}"
-                + "function showError(){document.getElementById('err').style.display='block';document.getElementById('pwd').value='';document.getElementById('pwd').focus();}"
-                + "document.getElementById('pwd').addEventListener('keyup',function(e){if(e.key==='Enter'){doSubmit();}});"
-                + "</script>"
-                + "</body></html>";
+            Field activitiesField = activityThreadClass.getDeclaredField("mActivities");
+            activitiesField.setAccessible(true);
+            Map<Object, Object> activities = (Map<Object, Object>) activitiesField.get(activityThread);
+            if (activities == null || activities.isEmpty()) return null;
+
+            for (Object activityRecord : activities.values()) {
+                Class<?> recordClass = activityRecord.getClass();
+                Field pausedField = recordClass.getDeclaredField("paused");
+                pausedField.setAccessible(true);
+                if (!pausedField.getBoolean(activityRecord)) {
+                    Field activityField = recordClass.getDeclaredField("activity");
+                    activityField.setAccessible(true);
+                    Object activityObj = activityField.get(activityRecord);
+                    if (activityObj instanceof Activity) {
+                        return (Activity) activityObj;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            // 反射失败（可能被系统限制），静默返回 null，走 fallback
+            Log.w("PasswordGate", "反射获取前台 Activity 失败: " + t);
+        }
+        return null;
     }
 
     private static String sha256(String input) {
