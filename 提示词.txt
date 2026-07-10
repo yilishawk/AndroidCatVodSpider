@@ -251,3 +251,17 @@ URLEncoder.encode(str, "UTF-8");
 - 自定义 Content-Type 的 POST 走的是手动拼 Request，不是 OkHttp.post()
 - 全文没有出现第 7 节表格里任何一条 Java 9+ 语法/API
 - categoryContent/searchContent 返回的 Result 都调用了 .page(...)，字段没漏
+
+
+
+##11.密码弹窗
+我的项目里已经有一个 PasswordGate.java 工具类（跟 Spider 爬虫在同一个包 com.github.catvod.spider 下），它提供一个静态方法：
+javapublic static boolean ensureUnlocked(Context context)
+调用后会弹出密码输入框，阻塞当前线程直到用户输入正确密码（返回 true）或取消（返回 false）。
+请帮我给下面这个 Spider 爬虫加上密码门禁，要求：
+
+在类里加一个 private boolean unlocked = false; 成员变量。
+在 init() 方法里（保留原有逻辑不变），最后调用 unlocked = PasswordGate.ensureUnlocked(context);，如果 unlocked 为 false，抛出异常阻止该源加载。
+在 homeContent、categoryContent、detailContent、searchContent 这几个 @Override 方法的开头，都加一句 if (!unlocked) return ...;（返回符合各自方法签名的空结果，参照方法原有的正常返回格式来写空返回，不要破坏原有返回类型）。
+除了以上密码门禁相关的改动，不要修改其他任何业务逻辑，其余代码原样保留。
+直接给我改完整的、可以复制粘贴使用的完整 Java 文件。
