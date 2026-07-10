@@ -18,6 +18,9 @@ import java.util.regex.Pattern;
 public class Vanale extends Spider {
 
     private static final String HOST = "https://a.v-anale.best";
+    
+    // 1. 添加密码门禁状态变量
+    private boolean unlocked = false;
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<String, String>();
@@ -29,10 +32,21 @@ public class Vanale extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
+        
+        // 2. 调用密码门禁，若未解锁则抛出异常阻止源加载
+        this.unlocked = PasswordGate.ensureUnlocked(context);
+        if (!this.unlocked) {
+            throw new Exception("Password verification failed. Source initialization aborted.");
+        }
     }
 
     @Override
     public String homeContent(boolean filter) throws Exception {
+        // 3. 门禁检查：返回符合原有正常返回格式的空结果
+        if (!unlocked) {
+            return Result.get().classes(new ArrayList<Class>()).string();
+        }
+
         List<Class> classes = new ArrayList<Class>();
         // 根据提供的内容， 精选常用分类并翻译为中文
         classes.add(new Class("asian", "亚洲"));
@@ -95,6 +109,12 @@ public class Vanale extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        // 3. 门禁检查：返回符合原有正常返回格式的空结果
+        if (!unlocked) {
+            int page = Integer.parseInt(pg);
+            return Result.get().vod(new ArrayList<Vod>()).page(page, 0, 0, 0).string();
+        }
+
         int page = Integer.parseInt(pg);
         String url = HOST + "/" + tid + "?page=" + page;
         String html = OkHttp.string(url, getHeaders());
@@ -153,6 +173,11 @@ public class Vanale extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
+        // 3. 门禁检查：返回符合原有正常返回格式的空结果
+        if (!unlocked) {
+            return Result.get().string();
+        }
+
         String id = ids.get(0);
 
         // 规范：详情页也是播放页，在 detail 里将信息填完整
@@ -169,6 +194,11 @@ public class Vanale extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
+        // 3. 门禁检查：返回符合原有正常返回格式的空结果
+        if (!unlocked) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
+        }
+
         // 如果该网站支持搜索，可在此处拼装搜索URL。现预留符合规范的空返回。
         List<Vod> list = new ArrayList<Vod>();
         return Result.get().vod(list).string();
