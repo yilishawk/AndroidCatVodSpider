@@ -29,16 +29,25 @@ public class PPnix extends Spider {
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     private Map<String, String> baseHeaders;
 
+    private boolean unlocked = false; // 密码是否验证通过
+
     @Override
     public void init(android.content.Context context, String extend) throws Exception {
         baseHeaders = new HashMap<>();
         baseHeaders.put("User-Agent", commonUa);
         baseHeaders.put("Referer", host + "/");
         // 注意：不设置 Accept-Encoding，避免 OkHttp 自动解压失效
+
+        unlocked = PasswordGate.ensureUnlocked(context);
+        if (!unlocked) {
+            throw new Exception("密码验证未通过，拒绝加载该源");
+        }
     }
 
     @Override
     public String homeContent(boolean filter) throws Exception {
+        if (!unlocked) return Result.get().classes(new ArrayList<>()).string();
+
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("movie", "电影"));
         classes.add(new Class("tv", "电视剧"));
@@ -48,6 +57,11 @@ public class PPnix extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter,
                                   HashMap<String, String> extend) throws Exception {
+        if (!unlocked) {
+            int page = Integer.parseInt(pg);
+            return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
+        }
+
         int page = Integer.parseInt(pg);
         int pageIndex = page - 1;
         String url = host + "/cn/" + tid + "/---" + pageIndex + "-.html";
@@ -106,6 +120,8 @@ public class PPnix extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
+        if (!unlocked) return Result.error("密码验证未通过");
+
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
         String id = ids.get(0);
         String url = id.startsWith("http") ? id : host + id;
@@ -223,6 +239,8 @@ public class PPnix extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
+        if (!unlocked) return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+
         // 未实现搜索，返回空列表
         return Result.get()
                 .vod(new ArrayList<>())
