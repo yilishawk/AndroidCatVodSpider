@@ -196,7 +196,7 @@ public class JavSiri extends Spider {
             String id = mId.group(1);
 
             // 提取封面图 (data-original)
-            Pattern pImg = Pattern.compile("data-original=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+            Pattern pImg = Pattern.compile("data-preview=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mImg = pImg.matcher(block);
             String img = mImg.find() ? mImg.group(1) : "";
 
