@@ -18,7 +18,7 @@ public class JavSiri extends Spider {
 
     private static final String HOST = "https://javsiri.cc";
     
-    // 1. 添加密码门禁状态变量
+    // 1. 密码门禁状态变量
     private boolean unlocked = false;
 
     private Map<String, String> getHeaders() {
@@ -41,13 +41,13 @@ public class JavSiri extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        // 3. 门禁检查：未解锁则返回空分类结果
+        // 3. 门禁检查
         if (!unlocked) {
             return Result.get().classes(new ArrayList<Class>()).string();
         }
 
         List<Class> classes = new ArrayList<Class>();
-        // 根据Swiper数据精选的主要分类
+        // 精选的主要分类
         classes.add(new Class("anal-sex", "肛交"));
         classes.add(new Class("big-tits", "大奶子"));
         classes.add(new Class("ntr", "NTR"));
@@ -86,9 +86,12 @@ public class JavSiri extends Spider {
 
         List<Vod> list = parseVideoList(html);
         
-        // 简单计算预估下一页，防止卡页
-        int nextPg = page + 1;
-        int totalPage = html.contains("from=" + nextPg) ? nextPg : page;
+        // 改进后的翻页判断逻辑：
+        // 如果当前页解析出来的视频数量大于等于10个，认为有下一页（KVS每页通常展示20-40个视频）
+        int totalPage = page;
+        if (list.size() >= 10) {
+            totalPage = page + 1;
+        }
 
         return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
     }
