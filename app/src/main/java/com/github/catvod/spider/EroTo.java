@@ -43,18 +43,19 @@ public class EroTo extends Spider {
             return Result.get().classes(new ArrayList<Class>()).string();
         }
 
+        // 1. 将“无码去马赛克”直接加入一级分类 (classes)
         List<Class> classes = new ArrayList<Class>();
         classes.add(new Class("vod", "成人视频 (VOD)"));
+        classes.add(new Class("vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb", "无码去马赛克"));
         classes.add(new Class("fc2", "FC2 PPV特区"));
 
         // 构建筛选数据
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         
         List<Filter> filterList = new ArrayList<>();
-        // 声明 Value 列表
         List<Filter.Value> values = new ArrayList<>();
         
-        // 使用您依赖中定义的 public Value(String n, String v) 构造器填充数据
+        // 这里的筛选去掉了“无码去马赛克”，防止重复，保持界面清爽
         values.add(new Filter.Value("全部", ""));
         values.add(new Filter.Value("单体作品", "vod_genre/%e5%8d%98%e4%bd%93%e4%bd%9c%e5%93%81"));
         values.add(new Filter.Value("中出", "vod_genre/%e4%b8%ad%e5%87%ba%e3%81%97"));
@@ -63,7 +64,6 @@ public class EroTo extends Spider {
         values.add(new Filter.Value("巨乳", "vod_genre/%e5%b7%a8%e4%b9%b3"));
         values.add(new Filter.Value("4K极清", "vod_genre/4k"));
         values.add(new Filter.Value("素人/自拍", "vod_genre/%e7%b4%a0%e4%ba%ba"));
-        values.add(new Filter.Value("无码去马赛克", "vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb"));
         values.add(new Filter.Value("人妻・主妇", "vod_genre/%e4%ba%ba%e5%a6%bb%e3%83%bb%e4%b8%bb%e5%a9%a6"));
         values.add(new Filter.Value("美少女", "vod_genre/%e7%be%af%e5%b0%91%e5%a5%b3"));
         values.add(new Filter.Value("吹箫/口交", "vod_genre/%e3%83%95%e3%82%a7%e3%82%a9"));
@@ -105,11 +105,11 @@ public class EroTo extends Spider {
         values.add(new Filter.Value("美腿/脚丫", "vod_genre/%e8%84%9a%e3%83%95%e3%82%a7%e3%83%a1"));
         values.add(new Filter.Value("SM虐恋", "vod_genre/sm"));
 
-        // 将 values 组装入 Filter 中
         filterList.add(new Filter("genre", "类型", values));
         
-        // 绑定给首选分类
+        // 分别为 视频大类 和 无码专区 都配上分类过滤器
         filters.put("vod", filterList);
+        filters.put("vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb", filterList);
 
         return Result.get().classes(classes).filters(filters).string();
     }
@@ -126,7 +126,7 @@ public class EroTo extends Spider {
         // 判定是否激活了筛选
         String realTid = tid;
         if (extend != null && extend.containsKey("genre") && !TextUtils.isEmpty(extend.get("genre"))) {
-            realTid = extend.get("genre"); // 获取选中的筛选子标签
+            realTid = extend.get("genre"); 
         }
 
         // 拼接 URL 请求
