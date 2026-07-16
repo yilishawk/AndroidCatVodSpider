@@ -6,19 +6,19 @@ import com.github.catvod.crawler.Spider;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.net.OkHttp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class EroTo extends Spider {
 
     private static final String HOST = "https://ero.to";
-
-    // 1. 添加密码门禁状态变量
     private boolean unlocked = false;
 
     private Map<String, String> getHeaders() {
@@ -31,8 +31,6 @@ public class EroTo extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
-
-        // 2. 调用密码门禁，若未解锁则抛出异常阻止源加载
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
             throw new Exception("Password verification failed. Source initialization aborted.");
@@ -41,40 +39,107 @@ public class EroTo extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        // 3. 门禁检查：未解锁则返回空分类
         if (!unlocked) {
             return Result.get().classes(new ArrayList<Class>()).string();
         }
 
         List<Class> classes = new ArrayList<Class>();
-        // 提取分类并将日文翻译成中文
-        classes.add(new Class("vod", "成人视频"));
+        classes.add(new Class("vod", "成人视频 (VOD)"));
         classes.add(new Class("fc2", "FC2 PPV特区"));
-        classes.add(new Class("vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb", "无码AI去马赛克"));
 
-        return Result.get().classes(classes).string();
+        // 构建筛选数据
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+        
+        List<Filter> filterList = new ArrayList<>();
+        // 声明 Value 列表
+        List<Filter.Value> values = new ArrayList<>();
+        
+        // 使用您依赖中定义的 public Value(String n, String v) 构造器填充数据
+        values.add(new Filter.Value("全部", ""));
+        values.add(new Filter.Value("单体作品", "vod_genre/%e5%8d%98%e4%bd%93%e4%bd%9c%e5%93%81"));
+        values.add(new Filter.Value("中出", "vod_genre/%e4%b8%ad%e5%87%ba%e3%81%97"));
+        values.add(new Filter.Value("高清/HD", "vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb"));
+        values.add(new Filter.Value("独占作品", "vod_genre/%e7%8b%ac%e5%8d%a0%e9%85%8d%e4%bf%a1"));
+        values.add(new Filter.Value("巨乳", "vod_genre/%e5%b7%a8%e4%b9%b3"));
+        values.add(new Filter.Value("4K极清", "vod_genre/4k"));
+        values.add(new Filter.Value("素人/自拍", "vod_genre/%e7%b4%a0%e4%ba%ba"));
+        values.add(new Filter.Value("无码去马赛克", "vod_genre/%e3%83%a2%e3%82%b6%e3%82%a4%e3%82%af%e9%99%a4%e5%8e%bb"));
+        values.add(new Filter.Value("人妻・主妇", "vod_genre/%e4%ba%ba%e5%a6%bb%e3%83%bb%e4%b8%bb%e5%a9%a6"));
+        values.add(new Filter.Value("美少女", "vod_genre/%e7%be%af%e5%b0%91%e5%a5%b3"));
+        values.add(new Filter.Value("吹箫/口交", "vod_genre/%e3%83%95%e3%82%a7%e3%82%a9"));
+        values.add(new Filter.Value("苗条/骨感", "vod_genre/%e3%82%b9%e3%83%ac%e3%83%b3%e3%83%80%e3%83%bc"));
+        values.add(new Filter.Value("自拍/哈麦德", "vod_genre/%e3%83%9a%e3%83%a1%e6%92%ae%e3%82%8a"));
+        values.add(new Filter.Value("熟女", "vod_genre/%e7%86%9f%e5%a5%b3"));
+        values.add(new Filter.Value("超清FHD", "vod_genre/%e3%83%95%e3%83%ab%e3%83%8f%e3%82%a4%e3%83%93%e3%82%b8%e3%83%a7%e3%83%b3fhd"));
+        values.add(new Filter.Value("痴女", "vod_genre/%e7%97%b4%e5%a5%b3"));
+        values.add(new Filter.Value("双飞3P/4P", "vod_genre/3p%e3%83%bb4p"));
+        values.add(new Filter.Value("潮吹", "vod_genre/%e6%bd%ae%e5%90%b9%e3%81%8d"));
+        values.add(new Filter.Value("美乳", "vod_genre/%e7%be%8e%e4%b9%b3"));
+        values.add(new Filter.Value("寝取/NTR", "vod_genre/%e5%af%9d%e5%8f%96%e3%82%8a%e3%83%bb%e5%af%9d%e5%8f%96%e3%82%8a%e3%82%8c%e3%83%bbntr"));
+        values.add(new Filter.Value("淫乱/重口味", "vod_genre/%e6%b7%ab%e4%b9%b1%e3%83%bb%e3%83%8f%e3%83%bc%e3%83%89%e7%b3%bb"));
+        values.add(new Filter.Value("高潮/绝顶", "vod_genre/%e3%82%a2%e3%82%af%e3%83%a1%e3%83%bb%e3%82%aa%e3%83%bc%e3%82%ac%e3%82%ba%e3%83%a0"));
+        values.add(new Filter.Value("剧情/故事", "vod_genre/%e3%83%89%e3%83%a9%e3%83%9e"));
+        values.add(new Filter.Value("乳交/夹乳", "vod_genre/%e3%83%91%e3%82%a4%e3%82%ba%e3%83%aa"));
+        values.add(new Filter.Value("骑乘位", "vod_genre/%e9%a8%8e%e4%b9%97%e4%bd%8d"));
+        values.add(new Filter.Value("颜射", "vod_genre/%e9%a1%94%e5%b0%84"));
+        values.add(new Filter.Value("大屁股/巨尻", "vod_genre/%e5%b7%a1%e5%b0%bb"));
+        values.add(new Filter.Value("女子校生", "vod_genre/%e5%a5%b3%e5%ad%90%e6%a0%a1%e7%94%9f"));
+        values.add(new Filter.Value("白虎/无毛", "vod_genre/%e3%83%91%e3%83%a4%e3%83%91%e3%83%b3"));
+        values.add(new Filter.Value("大姐姐", "vod_genre/%e3%81%8a%e5%a7%89%e3%81%95%e3%82%93"));
+        values.add(new Filter.Value("角色扮演/制服", "vod_genre/%e3%82%b3%e3%82%b3%e3%83%97%e3%83%ac"));
+        values.add(new Filter.Value("接吻/深吻", "vod_genre/%e3%82%ac%e3%82%b9%e3%83%bb%e6%8e%a5%e5%90%bb"));
+        values.add(new Filter.Value("深喉/深插", "vod_genre/%e3%82%a4%e3%83%a9%e3%83%a1%e3%83%81%e3%82%aa"));
+        values.add(new Filter.Value("女白领/OL", "vod_genre/ol"));
+        values.add(new Filter.Value("制服诱惑", "vod_genre/%e5%88%b6%e6%9c%8d"));
+        values.add(new Filter.Value("街头搭讪", "vod_genre/%e3%83%8a%e3%83%b3%e3%83%91"));
+        values.add(new Filter.Value("群交/乱交", "vod_genre/%e4%b9%b1%e4%ba%a4"));
+        values.add(new Filter.Value("精油/按摩", "vod_genre/%e3%83%ad%e3%83%bc%e3%82%b7%e3%83%a7%e3%83%b3%e3%83%bb%e3%82%aa%e3%82%a4%e3%83%ab"));
+        values.add(new Filter.Value("辣妹", "vod_genre/%e3%82%ae%e3%83%a3%e3%83%ab"));
+        values.add(new Filter.Value("女子大生", "vod_genre/%e5%a5%b3%e5%ad%90%e5%a4%a7%e7%94%9f"));
+        values.add(new Filter.Value("手淫/自慰", "vod_genre/%e3%82%aa%e3%83%aa%e3%83%8b%e3%83%bc"));
+        values.add(new Filter.Value("美臀/美尻", "vod_genre/%e7%be%a5%e5%b0%bb"));
+        values.add(new Filter.Value("羞耻", "vod_genre/%e7%be%9e%e6%81%a5"));
+        values.add(new Filter.Value("手交/手淫", "vod_genre/%e6%89%8b%e3%82%b3%e3%82%ad"));
+        values.add(new Filter.Value("肛交", "vod_genre/%e3%82%a2%e3%83%8a%e3%83%ab"));
+        values.add(new Filter.Value("温泉/旅馆", "vod_genre/%e6%b8%a9%e6%b3%89"));
+        values.add(new Filter.Value("美腿/脚丫", "vod_genre/%e8%84%9a%e3%83%95%e3%82%a7%e3%83%a1"));
+        values.add(new Filter.Value("SM虐恋", "vod_genre/sm"));
+
+        // 将 values 组装入 Filter 中
+        filterList.add(new Filter("genre", "类型", values));
+        
+        // 绑定给首选分类
+        filters.put("vod", filterList);
+
+        return Result.get().classes(classes).filters(filters).string();
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        // 3. 门禁检查
         if (!unlocked) {
             int page = Integer.parseInt(pg);
             return Result.get().vod(new ArrayList<Vod>()).page(page, 0, 0, 0).string();
         }
 
         int page = Integer.parseInt(pg);
+        
+        // 判定是否激活了筛选
+        String realTid = tid;
+        if (extend != null && extend.containsKey("genre") && !TextUtils.isEmpty(extend.get("genre"))) {
+            realTid = extend.get("genre"); // 获取选中的筛选子标签
+        }
+
+        // 拼接 URL 请求
         String url;
         if (page == 1) {
-            url = HOST + "/" + tid + "/";
+            url = HOST + "/" + realTid + "/";
         } else {
-            url = HOST + "/" + tid + "/page/" + page + "/";
+            url = HOST + "/" + realTid + "/page/" + page + "/";
         }
 
         String html = OkHttp.string(url, getHeaders());
         List<Vod> list = parseVideoList(html);
 
-        // 翻页判断：如果解析出来的数量较多（一般每页12-24个以上），则提供下一页
         int totalPage = page;
         if (list.size() >= 8) {
             totalPage = page + 1;
@@ -85,19 +150,17 @@ public class EroTo extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        // 3. 门禁检查
         if (!unlocked) {
             return Result.get().string();
         }
 
-        String id = ids.get(0); // 传入的id包含"vod/155360"或"fc2/155353"
+        String id = ids.get(0);
         String detailUrl = HOST + "/" + id + "/";
         String html = OkHttp.string(detailUrl, getHeaders());
 
         Vod vod = new Vod();
         vod.setVodId(id);
 
-        // 提取视频标题，移除多余换行符
         Pattern pTitle = Pattern.compile("<title>([^<]+)</title>", Pattern.CASE_INSENSITIVE);
         Matcher mTitle = pTitle.matcher(html);
         String title = "Video " + id;
@@ -106,7 +169,6 @@ public class EroTo extends Spider {
         }
         vod.setVodName(title);
 
-        // 提取大图海报
         Pattern pPic = Pattern.compile("<img[^>]+src=\"(https://img.manyse.com/[^\"]+)\"", Pattern.CASE_INSENSITIVE);
         Matcher mPic = pPic.matcher(html);
         if (mPic.find()) {
@@ -121,12 +183,10 @@ public class EroTo extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        // 3. 门禁检查
         if (!unlocked) {
             return Result.get().vod(new ArrayList<Vod>()).string();
         }
 
-        // 拼装搜索链接
         String url = HOST + "/?s=" + key + "&post_type%5B0%5D=vod";
         String html = OkHttp.string(url, getHeaders());
 
@@ -141,16 +201,16 @@ public class EroTo extends Spider {
 
         String playUrl = "";
 
-        // ---- 场景二：直接匹配 playUrls ----
+        // 场景二：直接匹配 playUrls
         if (html.contains("playUrls")) {
             Pattern pUrls = Pattern.compile("const playUrls = \\[\\{\"label\":\"[^\"]+\",\"url\":\"([^\"]+)\"\\}\\];", Pattern.CASE_INSENSITIVE);
             Matcher mUrls = pUrls.matcher(html);
             if (mUrls.find()) {
-                playUrl = mUrls.group(1).replace("\\/", "/"); // 还原转义的斜杠
+                playUrl = mUrls.group(1).replace("\\/", "/");
             }
         }
 
-        // ---- 场景一：匹配 sources + 变量组合 ----
+        // 场景一：匹配 variables 组合
         if (TextUtils.isEmpty(playUrl)) {
             String videoLink = "";
             String pndvd = "";
@@ -169,7 +229,6 @@ public class EroTo extends Spider {
             if (mSuffix.find()) versionSuffix = mSuffix.group(1).trim();
 
             if (!TextUtils.isEmpty(videoLink) && !TextUtils.isEmpty(pndvd)) {
-                // 默认拼接最优播放节点 FHD
                 playUrl = "https://test.manyse.com/" + videoLink + "/" + pndvd + "/play.m3u8" + versionSuffix;
             }
         }
@@ -177,22 +236,17 @@ public class EroTo extends Spider {
         return Result.get().url(playUrl).header(getHeaders()).string();
     }
 
-    /**
-     * 解析列表共用方法
-     */
     private List<Vod> parseVideoList(String html) {
         List<Vod> list = new ArrayList<Vod>();
         if (TextUtils.isEmpty(html)) {
             return list;
         }
 
-        // 使用正则提取卡片容器
         Pattern pCard = Pattern.compile("<div class=\"card text-white bg-dark mb-3\"[\\s\\S]*?<a href=\"https://ero.to/([^\"]+)\"[\\s\\S]*?<img [^>]*src=\"([^\"]+)\"[\\s\\S]*?<div style=\"display: -webkit-box;[^>]*>([\\s\\S]*?)</div>\\s*</div>", Pattern.CASE_INSENSITIVE);
         Matcher mCard = pCard.matcher(html);
 
         while (mCard.find()) {
-            String id = mCard.group(1).trim(); // 例如 "vod/155360" 或者 "fc2/148355"
-            // 清理末尾反斜杠以确保ID标准化
+            String id = mCard.group(1).trim();
             if (id.endsWith("/")) {
                 id = id.substring(0, id.length() - 1);
             }
@@ -203,7 +257,7 @@ public class EroTo extends Spider {
             vod.setVodId(id);
             vod.setVodName(title);
             vod.setVodPic(img);
-            vod.setVodRemarks(""); // 此页面无直接时长显示，置空
+            vod.setVodRemarks("");
             list.add(vod);
         }
         return list;
