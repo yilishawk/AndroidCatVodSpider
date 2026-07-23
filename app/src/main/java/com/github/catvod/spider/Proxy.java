@@ -17,6 +17,7 @@ import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,6 +26,12 @@ public class Proxy {
     private static final int PROXY_PORT = 9978;
 
     private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
+
+    /**
+     * IPTV 缓存锁，用于非阻塞返回。
+     * getCacheData() 是同步方法，会等待爬虫完成；但这里用 ConcurrentHashMap 保证读取安全。
+     */
+    private static final Map<String, Object> iptvLock = new ConcurrentHashMap<>();
 
     public static int getPort() {
         return PROXY_PORT;
@@ -66,7 +73,6 @@ public class Proxy {
         if (title == null) return "";
         String s = title.trim();
 
-        // 阿拉伯数字季 → 中文季，例：第3季 → 第三季
         Pattern seasonPattern = Pattern.compile("第([0-9]+)季");
         Matcher seasonMatcher = seasonPattern.matcher(s);
         StringBuffer seasonBuf = new StringBuffer();
@@ -77,7 +83,6 @@ public class Proxy {
         seasonMatcher.appendTail(seasonBuf);
         s = seasonBuf.toString();
 
-        // 括号语言标注替换
         s = s.replaceAll("[(（]粤[)）]", "粤语版");
         s = s.replaceAll("[(（]国[)）]", "国语版");
         s = s.replaceAll("[(（]英[)）]", "英语版");
@@ -191,10 +196,24 @@ public class Proxy {
      * 将 ProxyIPTV 爬取到的直播源数据按 TVBox 标准 TXT 格式原样返回（分组,#genre# + 频道名,地址）。
      * 用法: http://127.0.0.1:9978/proxy?do=iptv           返回全部分组
      *      http://127.0.0.1:9978/proxy?do=iptv&tid=cctv   仅返回指定分组 (cctv/sat/other)
+     * 
+     * 【非阻塞设计】：
+     * - 如果爬虫已完成，直接返回内存中的数据（毫秒级）
+     * - 如果爬虫还在运行，立即返回空响应，不等待爬取完成
+     * - 这样不影响其他爬虫或 TVBox 的其他请求
      */
     private static Object[] handleIptv(Map<String, String> params) {
         try {
             String tid = params.get("tid");
+            
+            // 检查爬虫是否已完成
+            Boolean isComplete = (Boolean) iptvLock.get("complete");
+            if (!Boolean.TRUE.equals(isComplete)) {
+                // 爬虫还在运行，非阻塞返回空内容，避免卡住 TVBox
+                log("⏳ IPTV 爬虫运行中，暂不返回数据");
+                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
+            }
+
             Map<String, List<String>> data = ProxyIPTV.getCacheData();
 
             StringBuilder txt = new StringBuilder();
