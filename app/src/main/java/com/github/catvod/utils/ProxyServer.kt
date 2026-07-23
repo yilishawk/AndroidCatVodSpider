@@ -53,7 +53,7 @@ object ProxyServer {
                                 proxyAsync(url, header, req, response)
                             }
                         } else {
-                            // 日志面板 等
+                            // 日志面板等
                             handleLogsRoute(req, response)
                         }
                     } catch (e: Exception) {
@@ -78,12 +78,19 @@ object ProxyServer {
     private fun handleIptvRoute(req: AdvancedHttpServer.Request, response: AdvancedHttpServer.Response) {
         try {
             val tid = req.queryParams["tid"]
-            val data = com.github.catvod.spider.ProxyIPTV.getCacheData()
+
+            // 获取缓存数据
+            @Suppress("UNCHECKED_CAST")
+            val data = com.github.catvod.spider.ProxyIPTV.getCacheData() as? Map<String, List<String>> ?: emptyMap()
 
             val txt = StringBuilder()
+
+            // 如果指定了 tid，只返回该分组
             if (tid != null && !tid.isEmpty()) {
-                appendTxtGroup(txt, tid, data.get(tid))
+                val channels = data[tid]
+                appendTxtGroup(txt, tid, channels)
             } else {
+                // 返回所有分组
                 for ((group, channels) in data) {
                     appendTxtGroup(txt, group, channels)
                 }
@@ -96,6 +103,7 @@ object ProxyServer {
             response.write(bytes)
         } catch (e: Exception) {
             SpiderDebug.log("iptv route error: ${e.message}")
+            e.printStackTrace()
             response.setContentType("text/plain; charset=utf-8")
             response.setStatusCode(500)
             response.start()
