@@ -36,6 +36,18 @@ public class Prefers {
         return getPrefers().getBoolean(key, false);
     }
 
+    public static long getLong(String key) {
+        return getPrefers().getLong(key, 0L);
+    }
+
+    public static long getLong(String key, long defaultValue) {
+        return getPrefers().getLong(key, defaultValue);
+    }
+
+    public static void putLong(String key, long value) {
+        getPrefers().edit().putLong(key, value).apply();
+    }
+
     public static void put(String key, Object obj) {
         if (obj == null) return;
         if (obj instanceof String) {
