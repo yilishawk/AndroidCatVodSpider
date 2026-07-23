@@ -24,7 +24,7 @@ public class Proxy {
 
     private static final int PROXY_PORT = 9978;
 
-    private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
+    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
     // IPTV 状态标记（和 ProxyIPTV 同步）
     private static volatile boolean iptvLoading = false;
