@@ -10,7 +10,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayInputStream
 
-
 object ProxyServer {
     private val THREAD_NUM = Runtime.getRuntime().availableProcessors()
     private val partSize = 1024 * 1024
@@ -39,14 +38,22 @@ object ProxyServer {
                 };
                 httpServer?.addRoutes("/proxy") { req, response ->
                     try {
-                        run {
-                            val key = req.queryParams["key"];
+                        val doAction = req.queryParams["do"]
+                        val key = req.queryParams["key"]
+
+                        // IPTV 直播源接口
+                        if ("iptv" == doAction) {
+                            handleIptvRoute(req, response)
+                        } else if (key != null) {
+                            // 原有视频代理逻辑
                             val url = urlMap[key]
                             val header = headerMap[key]
-
                             if (url != null && header != null) {
                                 proxyAsync(url, header, req, response)
                             }
+                        } else {
+                            // 日志面板等
+                            handleLogsRoute(req, response)
                         }
                     } catch (e: Exception) {
                         SpiderDebug.log("代理视频出错:" + e.message)
@@ -67,6 +74,96 @@ object ProxyServer {
 
     }
 
+    /**
+     * 处理 /proxy?do=iptv 路由
+     */
+    private fun handleIptvRoute(req: AdvancedHttpServer.Request, response: AdvancedHttpServer.Response) {
+        try {
+            val tid = req.queryParams["tid"]
+            val data = com.github.catvod.spider.ProxyIPTV.getCacheData()
+
+            val txt = StringBuilder()
+            if (tid != null && !tid.isEmpty()) {
+                appendTxtGroup(txt, tid, data.get(tid))
+            } else {
+                for ((group, channels) in data) {
+                    appendTxtGroup(txt, group, channels)
+                }
+            }
+
+            val bytes = txt.toString().toByteArray(Charsets.UTF_8)
+            response.setContentType("text/plain; charset=utf-8")
+            response.setHeader("Content-Length", bytes.size.toString())
+            response.start()
+            response.write(bytes)
+        } catch (e: Exception) {
+            SpiderDebug.log("iptv route error: ${e.message}")
+            response.setContentType("text/plain; charset=utf-8")
+            response.setStatusCode(500)
+            response.start()
+            response.write("Error: ${e.message}".toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    private fun appendTxtGroup(txt: StringBuilder, group: String?, channels: List<String>?) {
+        if (channels == null || channels.isEmpty()) return
+        txt.append(group).append(",#genre#\n")
+        for (line in channels) {
+            // cacheData 里存的就是 "name$url"，这里只替换分隔符为逗号
+            val item = line.replaceFirst("\\$", ",")
+            txt.append(item).append("\n")
+        }
+    }
+
+    private fun handleLogsRoute(req: AdvancedHttpServer.Request, response: AdvancedHttpServer.Response) {
+        try {
+            val doAction = req.queryParams["do"]
+            val logsBuilder = StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>")
+
+            if ("get_logs" == doAction || "logs" == doAction || "kaige_debug" == doAction) {
+                response.setContentType("text/plain; charset=utf-8")
+                response.start()
+                response.write(logsBuilder.toString().toByteArray(Charsets.UTF_8))
+            } else if ("clean" == doAction) {
+                logsBuilder.setLength(0)
+                logsBuilder.append("<div style='color:red;'>--- 日誌已手動清空 ---</div>")
+                response.setContentType("text/plain; charset=utf-8")
+                response.start()
+                response.write("OK".toByteArray(Charsets.UTF_8))
+            } else {
+                val html = "<html><head><meta charset='utf-8'><style>" +
+                        "body{background:#fff;color:#000;font-family:monospace;font-size:12px;margin:0;padding:10px;}" +
+                        ".header{position:sticky;top:0;background:#fff;padding:5px;border-bottom:1px solid #000;display:flex;justify-content:space-between;z-index:9;}" +
+                        ".time{color:#888;margin-right:5px;}.line{border-bottom:1px solid #eee;padding:2px 0;}" +
+                        "button{background:#000;color:#fff;border:none;padding:4px 8px;border-radius:3px;}" +
+                        "</style></head><body>" +
+                        "<div class='header'><b>📟 凱哥監聽</b><button onclick='clr()'>🧹 清空</button></div>" +
+                        "<div id='logs'>正在對接矩陣數據...</div>" +
+                        "<script>" +
+                        "function clr(){fetch('?do=clean').then(()=>location.reload());}" +
+                        "let last = '';" +
+                        "setInterval(() => {" +
+                        "  fetch('?do=get_logs').then(r=>r.text()).then(data=>{" +
+                        "    if(data !== last) {" +
+                        "      document.getElementById('logs').innerHTML = data;" +
+                        "      last = data;" +
+                        "      window.scrollTo(0, document.body.scrollHeight);" +
+                        "    }" +
+                        "  });" +
+                        "}, 1000);" +
+                        "</script></body></html>";
+                response.setContentType("text/html; charset=utf-8")
+                response.start()
+                response.write(html.toByteArray(Charsets.UTF_8))
+            }
+        } catch (e: Exception) {
+            response.setContentType("text/plain; charset=utf-8")
+            response.setStatusCode(500)
+            response.start()
+            response.write("Error: ${e.message}".toByteArray(Charsets.UTF_8))
+        }
+    }
+
     private fun proxyAsync(
         url: String,
         headers: Map<String, String>,
@@ -83,9 +180,8 @@ object ProxyServer {
 
 
                 var rangeHeader = request.headers["Range"]
-                //没有range头
+                //没有range		如果为null就设为初始请求
                 if (rangeHeader.isNullOrEmpty()) {
-                    // 处理初始请求
                     rangeHeader = "bytes=0-"
                 }
                 headers.toMutableMap().apply {
@@ -112,6 +208,7 @@ object ProxyServer {
 
 
 
+
                 response.setHeader("Connection", "keep-alive")
                 response.setHeader(
                     "Content-Length", (finalEndPoint - startPoint + 1).toString()
@@ -129,22 +226,20 @@ object ProxyServer {
 
 
                 // 启动生产者协程下载数据
-
                 val producerJob = mutableListOf<Job>()
 
                 while (currentStart <= finalEndPoint) {
                     producerJob.clear()
-                    // 创建通道用于接收数据块
-
+                    // 创建通道用于接收数据
                     for (i in 0 until THREAD_NUM) {
 
                         if (currentStart > finalEndPoint) break
                         val chunkStart = currentStart
                         val chunkEnd = minOf(currentStart + partSize - 1, finalEndPoint)
                         producerJob += CoroutineScope(Dispatchers.IO).launch {
-                            // 异步下载数据块
+                            // 异步下载数据
                             val data = getVideoStream(chunkStart, chunkEnd, url, headers)
-                            //如果是0开始，且检测到恶意头，那么就把数据截断
+                            //如果为0开始，且检测到恶意头，那么就把数据截断
                             if (chunkStart == 0L) {
                                 val offset = detectMaliciousPrefix(data)
                                 channels[i].send(data.copyOfRange(offset, data.size))
@@ -167,7 +262,7 @@ object ProxyServer {
             } catch (e: Exception) {
                 SpiderDebug.log("proxyAsync error: ${e.message}")
                 e.printStackTrace()
-                response.write("proxyAsync error: ${e.message}")
+                response.write("proxyAsync error: ${e.message}".toByteArray(Charsets.UTF_8))
 
             } finally {
                 // channels.forEach { it.close() }
@@ -180,7 +275,7 @@ object ProxyServer {
 
 
         val buffer = ByteArray(64) // 读取前64字节足够
-        ByteArrayInputStream(data).use { fis ->
+        ByteArrayInputStream(buffer).use { fis ->
             fis.read(buffer)
         }
 
@@ -192,14 +287,14 @@ object ProxyServer {
         // 在后续位置查找合法魔数（比如最多跳过前256字节）
         val searchLimit = minOf(256, data.size)
         val searchBuffer = ByteArray(searchLimit)
-        ByteArrayInputStream(data).use { fis ->
+        ByteArrayInputStream(searchBuffer).use { fis ->
             fis.read(searchBuffer)
         }
 
-        // 尝试从偏移1开始查找合法视频头
+        // 尝试从偏移量开始查找合法视频头
         for (offset in 1 until searchLimit - 16) {
             if (isValidVideoHeader(searchBuffer, offset)) {
-                SpiderDebug.log("发现合法视频头位于偏移 $offset，疑似被插入恶意前缀！")
+                SpiderDebug.log("发现合法视频头位于偏移量 $offset，疑似被插入恶意前缀")
                 return offset
             }
         }
@@ -217,7 +312,7 @@ object ProxyServer {
             data[offset + 6].toInt() == 0x79 && // 'y'
             data[offset + 7].toInt() == 0x70     // 'p'
         ) {
-            // 还可进一步校验前4字节是否为合法 size（>=8 且合理）
+            // 还可进一步校验前4字节是否为合理 size 值（=8 且合理）
             val size =
                 (data[offset].toLong() and 0xFF shl 24) or (data[offset + 1].toLong() and 0xFF shl 16) or (data[offset + 2].toLong() and 0xFF shl 8) or (data[offset + 3].toLong() and 0xFF)
             if (size >= 8 && size <= 0x100000) return true
@@ -338,7 +433,7 @@ private val infos = mutableMapOf<String, Array<Any>>()
 var ser: io.ktor.server.engine.ApplicationEngine? = null
 var port = 10010
 
-//每个片1MB
+//每个分片1MB
 private val partSize = 1024 * 1024 * 1
 fun init() {
 
@@ -353,7 +448,7 @@ get("/") {
 call.respondText("ktor running on $port", ContentType.Text.Plain)
 }
 get("/proxy") {
-SpiderDebug.log("代理中: ${call.parameters["url"]}")
+SpiderDebug.log("代理请求: ${call.parameters["url"]}")
 
 
 val url = Util.base64Decode(call.parameters["url"])
@@ -377,8 +472,8 @@ ser?.stop()
 SpiderDebug.log("ktorServer start on $port")
 }
 
- */
-/** 启动服务器 *//*
+*/
+/** 启动服务	*/*
 
     fun start() {
 
@@ -386,8 +481,9 @@ SpiderDebug.log("ktorServer start on $port")
     }
 
 
+
     */
-/** 停止服务器 *//*
+/** 停止服务	*/*
 
     fun stop() {
         ser?.stop(1_000, 2_000)
@@ -395,10 +491,10 @@ SpiderDebug.log("ktorServer start on $port")
 
 
 
+
     */
 /**
- * 获取是否分片信息，顺带请求一个1MB块
- *//*
+ * 获取是否分片信息，顺带请求一MB	*/*
 
     @Throws(java.lang.Exception::class)
     fun getInfo(url: String?, headers: Map<String, String>): Array<Any> {
@@ -418,9 +514,8 @@ SpiderDebug.log("ktorServer start on $port")
 
 
             var rangeHeader = call.request.headers[HttpHeaders.Range]
-            //没有range头
+            //没有range请求			如果为null，则处理初始请求
             if (rangeHeader.isNullOrEmpty()) {
-                // 处理初始请求
                 rangeHeader = "bytes=0-"
             }
             headers.toMutableMap().apply {
@@ -449,20 +544,18 @@ SpiderDebug.log("ktorServer start on $port")
 
 
                 // 启动生产者协程下载数据
-
                 val producerJob = mutableListOf<Job>()
 
                 while (currentStart <= finalEndPoint) {
                     producerJob.clear()
-                    // 创建通道用于接收数据块
-
+                    // 创建通道用于接收数据
                     for (i in 0 until THREAD_NUM) {
 
                         if (currentStart > finalEndPoint) break
                         val chunkStart = currentStart
                         val chunkEnd = minOf(currentStart + partSize - 1, finalEndPoint)
                         producerJob += CoroutineScope(Dispatchers.IO).launch {
-                            // 异步下载数据块
+                            // 异步下载数据
                             val data = getVideoStream(chunkStart, chunkEnd, url, headers)
                             channels[i].send(data)
 
@@ -476,6 +569,8 @@ SpiderDebug.log("ktorServer start on $port")
                         writeFully(ByteBuffer.wrap(data))
                     }
                 }
+
+
 
 
             }
