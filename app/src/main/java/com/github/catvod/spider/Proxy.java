@@ -17,7 +17,6 @@ import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,11 +26,17 @@ public class Proxy {
 
     private static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
-    /**
-     * IPTV 缓存锁，用于非阻塞返回。
-     * getCacheData() 是同步方法，会等待爬虫完成；但这里用 ConcurrentHashMap 保证读取安全。
-     */
-    private static final Map<String, Object> iptvLock = new ConcurrentHashMap<>();
+    // IPTV 状态标记（和 ProxyIPTV 同步）
+    private static volatile boolean iptvLoading = false;
+    private static volatile boolean iptvComplete = false;
+
+    public static void setIptvLoading(boolean loading) {
+        iptvLoading = loading;
+    }
+
+    public static void setIptvComplete(boolean complete) {
+        iptvComplete = complete;
+    }
 
     public static int getPort() {
         return PROXY_PORT;
@@ -206,12 +211,17 @@ public class Proxy {
         try {
             String tid = params.get("tid");
             
-            // 检查爬虫是否已完成
-            Boolean isComplete = (Boolean) iptvLock.get("complete");
-            if (!Boolean.TRUE.equals(isComplete)) {
-                // 爬虫还在运行，非阻塞返回空内容，避免卡住 TVBox
+            // 同步 ProxyIPTV 的运行状态
+            boolean isLoading = ProxyIPTV.isLoading();
+            boolean isComplete = ProxyIPTV.isComplete();
+
+            if (isLoading) {
+                setIptvLoading(true);
                 log("⏳ IPTV 爬虫运行中，暂不返回数据");
                 return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
+            } else if (isComplete) {
+                setIptvComplete(true);
+                setIptvLoading(false);
             }
 
             Map<String, List<String>> data = ProxyIPTV.getCacheData();
