@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ProxyIPTV extends Spider {
 
     private static final String HOST = "https://tonkiang.us";
-    private static final long CACHE_EXPIRE_MS = 24 * 60 * 60 * 1000; // 24小时过期
+    private static final long CACHE_EXPIRE_MS = 24 * 60 * 60 * 1000; // 24小时 过期
     private static final String CACHE_KEY_TIME = "iptv_cache_time";
     private static final String CACHE_KEY_DATA = "iptv_cache_data";
     private static final File CACHE_FILE = new File(Environment.getExternalStorageDirectory(), "TV/iptv_cache.json");
