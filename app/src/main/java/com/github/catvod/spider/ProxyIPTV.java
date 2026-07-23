@@ -9,8 +9,6 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 
 import org.jsoup.Jsoup;
@@ -22,10 +20,10 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ProxyIPTV extends Spider {
@@ -38,6 +36,7 @@ public class ProxyIPTV extends Spider {
 
     private static final Map<String, List<String>> cacheData = new ConcurrentHashMap<>();
     private static volatile boolean loading = false;
+    private static volatile boolean complete = false;
     private static volatile long lastCrawlTime = 0;
 
     /**
@@ -46,23 +45,35 @@ public class ProxyIPTV extends Spider {
     public static synchronized Map<String, List<String>> getCacheData() {
         if (cacheData.isEmpty() && !loading) {
             loading = true;
+            complete = false;
             new Thread(() -> {
                 try {
                     crawlAll();
                 } finally {
                     loading = false;
+                    complete = true;
                 }
             }, "IPTV-Crawler").start();
         }
         return cacheData;
     }
 
+    /** 爬虫是否正在运行 */
+    public static boolean isLoading() {
+        return loading;
+    }
+
+    /** 爬虫是否已完成 */
+    public static boolean isComplete() {
+        return complete;
+    }
+
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
 
-        // 优先读本地缓存
-        loadCacheFromFile();
+        // 优先读本地缓存（静态方法）
+        ProxyIPTV.loadCacheFromFile();
 
         // 异步启动爬虫更新，不影响其他爬虫
         Init.execute(new Runnable() {
@@ -119,7 +130,7 @@ public class ProxyIPTV extends Spider {
     /**
      * 从本地缓存文件加载数据
      */
-    private void loadCacheFromFile() {
+    private static void loadCacheFromFile() {
         try {
             if (!CACHE_FILE.exists()) return;
 
@@ -148,6 +159,7 @@ public class ProxyIPTV extends Spider {
             if (parsed != null && !parsed.isEmpty()) {
                 cacheData.clear();
                 cacheData.putAll(parsed);
+                lastCrawlTime = System.currentTimeMillis();
                 Proxy.log("✅ IPTV 从缓存加载成功，共 " + cacheData.size() + " 个分组");
             }
         } catch (Exception e) {
@@ -158,7 +170,7 @@ public class ProxyIPTV extends Spider {
     /**
      * 保存数据到本地缓存文件
      */
-    private void saveCacheToFile() {
+    private static void saveCacheToFile() {
         try {
             CACHE_FILE.getParentFile().mkdirs();
             String json = Json.toJson(cacheData);
@@ -168,7 +180,7 @@ public class ProxyIPTV extends Spider {
             }
 
             // 同时保存到 SharedPreferences
-            Prefers.putLong(CACHE_KEY_TIME, System.currentTimeMillis());
+            Prefers.put(CACHE_KEY_TIME, System.currentTimeMillis());
 
             long totalChannels = 0;
             for (List<String> channels : cacheData.values()) {
@@ -214,9 +226,14 @@ public class ProxyIPTV extends Spider {
         cacheData.clear();
         cacheData.putAll(newCacheData);
         lastCrawlTime = System.currentTimeMillis();
+        complete = true;
+        loading = false;
+
+        long totalChannels = getTotalChannels();
+        Proxy.log("✅ IPTV 爬虫完成，共加载 " + totalChannels + " 个频道");
 
         // 保存到本地文件
-        ProxyIPTV.this.saveCacheToFile();
+        saveCacheToFile();
     }
 
     private static void parseAndSort(String html, Map<String, List<String>> targetMap) {
@@ -241,6 +258,14 @@ public class ProxyIPTV extends Spider {
                 targetMap.get("other").add(item);
             }
         }
+    }
+
+    private static long getTotalChannels() {
+        long total = 0;
+        for (List<String> channels : cacheData.values()) {
+            total += channels.size();
+        }
+        return total;
     }
 
     private static String getParam(String url, String name) {
