@@ -76,7 +76,7 @@ public class ProxyIPTV extends Spider {
         // 优先读本地缓存（静态方法）
         ProxyIPTV.loadCacheFromFile();
 
-        // 异步启动爬虫更新不影响其他爬虫
+        // 异步启动爬虫更新，不影响其他爬虫
         Init.execute(new Runnable() {
             @Override
             public void run() {
@@ -183,12 +183,7 @@ public class ProxyIPTV extends Spider {
             // 同时保存到 SharedPreferences
             Prefers.put(CACHE_KEY_TIME, System.currentTimeMillis());
 
-            long totalChannels = 0;
-            for (List<String> channels : cacheData.values()) {
-                totalChannels += channels.size();
-            }
-
-            Proxy.log("✅ IPTV 爬虫完成，共加载 " + totalChannels + " 个频道");
+            Proxy.log("💾 IPTV 缓存已写入本地文件");
         } catch (Exception e) {
             Proxy.log("❌ IPTV 保存缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
@@ -203,7 +198,9 @@ public class ProxyIPTV extends Spider {
         String[] sources = {"iptvhotelx.php", "iptvproxy.php"};
         for (String php : sources) {
             try {
-                String html = OkHttp.string(HOST + "/" + php);
+                Map<String, String> listHeaders = buildBrowserHeaders(HOST + "/");
+                okhttp3.Response listResp = OkHttp.newCall(HOST + "/" + php, listHeaders);
+                String html = listResp.body() != null ? listResp.body().string() : null;
                 Proxy.log("🔍 IPTV 请求 " + php + " 完成，html长度=" + (html == null ? "null" : html.length()));
 
                 Document doc = Jsoup.parse(html == null ? "" : html);
@@ -213,15 +210,28 @@ public class ProxyIPTV extends Spider {
                 int count = 0;
                 for (Element div : doc.select("div.result")) {
                     if (count >= 3) break;
+                    if (div.text().contains("暂时失效")) continue;
                     Element a = div.selectFirst("a[href*=channellist.html?ip=]");
                     if (a == null) continue;
 
                     String href = a.attr("href");
                     String ip = getParam(href, "ip");
                     String tk = getParam(href, "tk");
-                    String detailUrl = HOST + "/getall26.php?ip=" + ip + "&tk=" + tk;
-                    String detail = OkHttp.string(detailUrl);
-                    Proxy.log("🔍 IPTV 详情页 " + detailUrl + " html长度=" + (detail == null ? "null" : detail.length()));
+                    String p = getParam(href, "p");
+                    if (p == null || p.isEmpty()) p = "1";
+                    if (ip.isEmpty() || tk.isEmpty()) continue;
+
+                    String detailUrl = HOST + "/getall26.php?ip=" + ip + "&c=&tk=" + tk + "&p=" + p;
+                    String channelReferer = HOST + "/channellist.html?ip=" + ip + "&tk=" + tk + "&p=" + p;
+
+                    Map<String, String> detailHeaders = buildBrowserHeaders(channelReferer);
+                    okhttp3.Response detailResp = OkHttp.newCall(detailUrl, detailHeaders);
+                    String detail = detailResp.body() != null ? detailResp.body().string() : null;
+                    int detailLen = detail == null ? 0 : detail.length();
+                    Proxy.log("🔍 IPTV 详情页 " + detailUrl + " html长度=" + detailLen);
+                    if (detailLen > 0 && detailLen < 500) {
+                        Proxy.log("🔍 IPTV 详情页短响应内容: <pre>" + detail.replace("<", "&lt;") + "</pre>");
+                    }
 
                     parseAndSort(detail, newCacheData);
                     count++;
@@ -275,6 +285,15 @@ public class ProxyIPTV extends Spider {
             total += channels.size();
         }
         return total;
+    }
+
+    private static Map<String, String> buildBrowserHeaders(String referer) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+        if (referer != null) headers.put("Referer", referer);
+        return headers;
     }
 
     private static String getParam(String url, String name) {
