@@ -164,7 +164,7 @@ public class ProxyIPTV extends Spider {
                 Proxy.log("✅ IPTV 从缓存加载成功，共 " + cacheData.size() + " 个分组");
             }
         } catch (Exception e) {
-            Proxy.log("❌ IPTV 加载缓存失败: " + e.getMessage());
+            Proxy.log("❌ IPTV 加载缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
     }
 
@@ -190,7 +190,7 @@ public class ProxyIPTV extends Spider {
 
             Proxy.log("✅ IPTV 爬虫完成，共加载 " + totalChannels + " 个频道");
         } catch (Exception e) {
-            Proxy.log("❌ IPTV 保存缓存失败: " + e.getMessage());
+            Proxy.log("❌ IPTV 保存缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
     }
 
@@ -204,7 +204,12 @@ public class ProxyIPTV extends Spider {
         for (String php : sources) {
             try {
                 String html = OkHttp.string(HOST + "/" + php);
-                Document doc = Jsoup.parse(html);
+                Proxy.log("🔍 IPTV 请求 " + php + " 完成，html长度=" + (html == null ? "null" : html.length()));
+
+                Document doc = Jsoup.parse(html == null ? "" : html);
+                int resultCount = doc.select("div.result").size();
+                Proxy.log("🔍 IPTV " + php + " 匹配到 div.result 数量=" + resultCount);
+
                 int count = 0;
                 for (Element div : doc.select("div.result")) {
                     if (count >= 3) break;
@@ -216,11 +221,14 @@ public class ProxyIPTV extends Spider {
                     String tk = getParam(href, "tk");
                     String detailUrl = HOST + "/getall26.php?ip=" + ip + "&tk=" + tk;
                     String detail = OkHttp.string(detailUrl);
+                    Proxy.log("🔍 IPTV 详情页 " + detailUrl + " html长度=" + (detail == null ? "null" : detail.length()));
 
                     parseAndSort(detail, newCacheData);
                     count++;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Proxy.log("❌ IPTV 抓取 " + php + " 失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
+            }
         }
 
         // 使用新的缓存数据替换旧数据
