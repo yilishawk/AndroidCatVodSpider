@@ -54,6 +54,15 @@ public class Proxy {
           .append("<span class='msg'>").append(msg).append("</span></div>");
     }
 
+    /**
+     * 将异常的完整堆栈转成可在日志面板里显示的字符串（换行替换为 <br>）
+     */
+    public static String getStackTrace(Throwable t) {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        t.printStackTrace(new java.io.PrintWriter(sw));
+        return sw.toString().replace("\n", "<br>");
+    }
+
     public static Object[] proxy(Map<String, String> params) {
         String action = params.get("do");
 
@@ -238,7 +247,7 @@ public class Proxy {
             byte[] bytes = txt.toString().getBytes("UTF-8");
             return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
         } catch (Exception e) {
-            log("❌ iptv 失败: " + e.getMessage());
+            log("❌ iptv 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
             return errorResponse(500, e.getMessage());
         }
     }
