@@ -76,7 +76,7 @@ public class ProxyIPTV extends Spider {
         // 优先读本地缓存（静态方法）
         ProxyIPTV.loadCacheFromFile();
 
-        // 异步启动爬虫更新，不影响其他爬虫
+        // 异步启动爬虫更新不影响其他爬虫
         Init.execute(new Runnable() {
             @Override
             public void run() {
