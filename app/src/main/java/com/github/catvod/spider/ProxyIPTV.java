@@ -297,10 +297,19 @@ public class ProxyIPTV extends Spider {
     }
 
     private static String getParam(String url, String name) {
-        int start = url.indexOf(name + "=");
+        if (url == null || name == null) return "";
+        String key1 = "?" + name + "=";
+        String key2 = "&" + name + "=";
+        int start = url.indexOf(key1);
+        int keyLen = key1.length();
+        if (start == -1) {
+            start = url.indexOf(key2);
+            keyLen = key2.length();
+        }
         if (start == -1) return "";
+        start += keyLen;
         int end = url.indexOf("&", start);
         if (end == -1) end = url.length();
-        return url.substring(start + name.length() + 1, end);
+        return url.substring(start, end);
     }
 }
