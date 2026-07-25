@@ -245,13 +245,13 @@ public class ProxyIPTV extends Spider {
                             int subLen = subContent == null ? 0 : subContent.length();
                             Proxy.log("🔍 IPTV 订阅链接(" + subLink[1] + ") " + subLink[0] + " 长度=" + subLen);
 
-                            int before = countChannels(newCacheData);
+                            long before = countChannels(newCacheData);
                             if ("m".equals(subLink[1])) {
                                 parseM3uContent(subContent, newCacheData);
                             } else {
                                 parseTxtContent(subContent, newCacheData);
                             }
-                            int added = countChannels(newCacheData) - before;
+                            long added = countChannels(newCacheData) - before;
                             Proxy.log("🔍 IPTV 订阅解析新增频道=" + added);
                             gotFromSubscription = added > 0;
                         } catch (Exception e) {
