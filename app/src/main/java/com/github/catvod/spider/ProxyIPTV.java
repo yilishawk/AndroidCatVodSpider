@@ -26,6 +26,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class ProxyIPTV extends Spider {
 
@@ -233,7 +235,32 @@ public class ProxyIPTV extends Spider {
                         Proxy.log("🔍 IPTV 详情页短响应内容: <pre>" + detail.replace("<", "&lt;") + "</pre>");
                     }
 
-                    parseAndSort(detail, newCacheData);
+                    String[] subLink = extractSubscribeLink(detail);
+                    boolean gotFromSubscription = false;
+                    if (subLink != null) {
+                        try {
+                            Map<String, String> subHeaders = buildBrowserHeaders(detailUrl);
+                            okhttp3.Response subResp = OkHttp.newCall(subLink[0], subHeaders);
+                            String subContent = subResp.body() != null ? subResp.body().string() : null;
+                            int subLen = subContent == null ? 0 : subContent.length();
+                            Proxy.log("🔍 IPTV 订阅链接(" + subLink[1] + ") " + subLink[0] + " 长度=" + subLen);
+
+                            int before = countChannels(newCacheData);
+                            if ("m".equals(subLink[1])) {
+                                parseM3uContent(subContent, newCacheData);
+                            } else {
+                                parseTxtContent(subContent, newCacheData);
+                            }
+                            int added = countChannels(newCacheData) - before;
+                            Proxy.log("🔍 IPTV 订阅解析新增频道=" + added);
+                            gotFromSubscription = added > 0;
+                        } catch (Exception e) {
+                            Proxy.log("❌ IPTV 订阅链接请求失败: " + e.getMessage());
+                        }
+                    }
+                    if (!gotFromSubscription) {
+                        parseAndSort(detail, newCacheData);
+                    }
                     count++;
                 }
             } catch (Exception e) {
@@ -258,33 +285,115 @@ public class ProxyIPTV extends Spider {
     private static void parseAndSort(String html, Map<String, List<String>> targetMap) {
         if (html == null || html.isEmpty()) return;
         Document doc = Jsoup.parse(html);
+        int resultDivCount = 0;
+        int nameFoundCount = 0;
+        int urlFoundCount = 0;
+        int appendedCount = 0;
         for (Element div : doc.select("div.result")) {
+            resultDivCount++;
             String name = "";
             Element tip = div.selectFirst("div.tip");
             if (tip != null) name = tip.text().trim();
+            if (!name.isEmpty()) nameFoundCount++;
 
             Element td = div.selectFirst("div.m3u8 td");
             if (name.isEmpty() || td == null) continue;
             String url = td.text().trim();
             if (!url.startsWith("http")) continue;
+            urlFoundCount++;
 
-            String item = name + "$" + url;
-            if (name.contains("CCTV") || name.contains("央视")) {
-                targetMap.get("cctv").add(item);
-            } else if (name.contains("卫视")) {
-                targetMap.get("sat").add(item);
-            } else {
-                targetMap.get("other").add(item);
+            addChannel(targetMap, name, url);
+            appendedCount++;
+        }
+        Proxy.log("🔍 parseAndSort: div.result总数=" + resultDivCount
+                + " 取到名称=" + nameFoundCount
+                + " 取到地址=" + urlFoundCount
+                + " 成功加入=" + appendedCount);
+    }
+
+    /**
+     * 从详情页 HTML 里提取订阅链接（copytodr('url','m'|'t')），优先 m3u，其次 txt
+     * 返回 {url, type}，找不到返回 null
+     */
+    private static String[] extractSubscribeLink(String detailHtml) {
+        if (detailHtml == null) return null;
+        Pattern pattern = Pattern.compile("copytodr\\('([^']+)'\\s*,\\s*'([tm])'\\)");
+        Matcher matcher = pattern.matcher(detailHtml);
+        String txtUrl = null;
+        String m3uUrl = null;
+        while (matcher.find()) {
+            String url = matcher.group(1);
+            String type = matcher.group(2);
+            if ("m".equals(type) && m3uUrl == null) m3uUrl = url;
+            if ("t".equals(type) && txtUrl == null) txtUrl = url;
+        }
+        if (m3uUrl != null) return new String[]{m3uUrl, "m"};
+        if (txtUrl != null) return new String[]{txtUrl, "t"};
+        return null;
+    }
+
+    /**
+     * 解析标准 M3U 播放列表：#EXTINF:-1 ...,频道名 后紧跟一行播放地址
+     */
+    private static void parseM3uContent(String content, Map<String, List<String>> targetMap) {
+        if (content == null || content.isEmpty()) return;
+        String[] lines = content.split("\r?\n");
+        String pendingName = null;
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            if (trimmed.startsWith("#EXTINF")) {
+                int commaIdx = trimmed.lastIndexOf(',');
+                pendingName = commaIdx >= 0 ? trimmed.substring(commaIdx + 1).trim() : null;
+            } else if (trimmed.startsWith("#")) {
+                // 其他 M3U 标签行，忽略
+            } else if (pendingName != null && trimmed.startsWith("http")) {
+                addChannel(targetMap, pendingName, trimmed);
+                pendingName = null;
             }
         }
     }
 
-    private static long getTotalChannels() {
+    /**
+     * 解析 TVBox 标准 txt 格式：分组,#genre# 或 频道名,地址
+     * 分组行按站点原分组，我们统一按频道名重新归类到 cctv/sat/other，忽略 #genre# 行
+     */
+    private static void parseTxtContent(String content, Map<String, List<String>> targetMap) {
+        if (content == null || content.isEmpty()) return;
+        String[] lines = content.split("\r?\n");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.contains("#genre#")) continue;
+            int idx = trimmed.indexOf(',');
+            if (idx < 0) continue;
+            String name = trimmed.substring(0, idx).trim();
+            String url = trimmed.substring(idx + 1).trim();
+            if (name.isEmpty() || !url.startsWith("http")) continue;
+            addChannel(targetMap, name, url);
+        }
+    }
+
+    private static void addChannel(Map<String, List<String>> targetMap, String name, String url) {
+        String item = name + "$" + url;
+        if (name.contains("CCTV") || name.contains("央视")) {
+            targetMap.get("cctv").add(item);
+        } else if (name.contains("卫视")) {
+            targetMap.get("sat").add(item);
+        } else {
+            targetMap.get("other").add(item);
+        }
+    }
+
+    private static long countChannels(Map<String, List<String>> map) {
         long total = 0;
-        for (List<String> channels : cacheData.values()) {
+        for (List<String> channels : map.values()) {
             total += channels.size();
         }
         return total;
+    }
+
+    private static long getTotalChannels() {
+        return countChannels(cacheData);
     }
 
     private static Map<String, String> buildBrowserHeaders(String referer) {
