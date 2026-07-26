@@ -22,7 +22,6 @@ import java.io.FileOutputStream;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,56 +32,81 @@ public class ProxyIPTV extends Spider {
 
     private static final String HOST = "https://tonkiang.us";
     private static final long CACHE_EXPIRE_MS = 24 * 60 * 60 * 1000; // 24小时 过期
-    private static final String CACHE_KEY_TIME = "iptv_cache_time";
-    private static final String CACHE_KEY_DATA = "iptv_cache_data";
-    private static final File CACHE_FILE = new File(Environment.getExternalStorageDirectory(), "TV/iptv_cache.json");
 
-    private static final Map<String, List<String>> cacheData = new ConcurrentHashMap<>();
-    private static volatile boolean loading = false;
-    private static volatile boolean complete = false;
-    private static volatile long lastCrawlTime = 0;
+    private static final File CACHE_FILE_PROXY = new File(Environment.getExternalStorageDirectory(), "TV/iptv_cache_proxy.json");
+    private static final File CACHE_FILE_HOTEL = new File(Environment.getExternalStorageDirectory(), "TV/iptv_cache_hotel.json");
+    private static final String CACHE_KEY_TIME_PROXY = "iptv_cache_time_proxy";
+    private static final String CACHE_KEY_TIME_HOTEL = "iptv_cache_time_hotel";
 
     /**
-     * 供 Proxy.java 静态调用:直接返回缓存数据，不阻塞、不触发爬取
+     * 单个源（iptvproxy.php / iptvhotelx.php）各自独立的缓存与状态。
+     * format = "m3u"：该源本轮判定为有订阅链接，m3uContent 是合并后的原始 m3u 文本
+     * format = "txt"：该源本轮判定为没有订阅链接，txtData 是 cctv/sat/other 分类后的频道
      */
-    public static synchronized Map<String, List<String>> getCacheData() {
-        if (cacheData.isEmpty() && !loading) {
-            loading = true;
-            complete = false;
-            new Thread(() -> {
-                try {
-                    crawlAll();
-                } finally {
-                    loading = false;
-                    complete = true;
-                }
-            }, "IPTV-Crawler").start();
+    public static class SourceCache {
+        public final String php;
+        public volatile String format = "txt";
+        public volatile String m3uContent = null;
+        public final Map<String, List<String>> txtData = new ConcurrentHashMap<>();
+        public volatile boolean loading = false;
+        public volatile boolean complete = false;
+
+        SourceCache(String php) {
+            this.php = php;
+            txtData.put("cctv", new ArrayList<>());
+            txtData.put("sat", new ArrayList<>());
+            txtData.put("other", new ArrayList<>());
         }
-        return cacheData;
+
+        boolean isEmpty() {
+            if ("m3u".equals(format)) return m3uContent == null || m3uContent.isEmpty();
+            return countChannels(txtData) == 0;
+        }
     }
 
-    /** 爬虫是否正在运行 */
+    private static final SourceCache PROXY_CACHE = new SourceCache("iptvproxy.php");
+    private static final SourceCache HOTEL_CACHE = new SourceCache("iptvhotelx.php");
+
+    /** 供 Proxy.java 调用：iptvproxy.php 源，不阻塞、按需触发爬取 */
+    public static SourceCache getProxyCache() {
+        triggerCrawlIfNeeded(PROXY_CACHE, CACHE_FILE_PROXY, CACHE_KEY_TIME_PROXY);
+        return PROXY_CACHE;
+    }
+
+    /** 供 Proxy.java 调用：iptvhotelx.php 源，不阻塞、按需触发爬取 */
+    public static SourceCache getHotelCache() {
+        triggerCrawlIfNeeded(HOTEL_CACHE, CACHE_FILE_HOTEL, CACHE_KEY_TIME_HOTEL);
+        return HOTEL_CACHE;
+    }
+
+    /** @deprecated 兼容旧调用方（ProxyServer.kt），等价于 getProxyCache().txtData */
+    public static Map<String, List<String>> getCacheData() {
+        return getProxyCache().txtData;
+    }
+
+    /** @deprecated 兼容旧调用方，等价于 iptvproxy.php 源的 loading 状态 */
     public static boolean isLoading() {
-        return loading;
+        return PROXY_CACHE.loading;
     }
 
-    /** 爬虫是否已完成 */
+    /** @deprecated 兼容旧调用方，等价于 iptvproxy.php 源的 complete 状态 */
     public static boolean isComplete() {
-        return complete;
+        return PROXY_CACHE.complete;
     }
 
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
 
-        // 优先读本地缓存（静态方法）
-        ProxyIPTV.loadCacheFromFile();
+        loadCacheFromFile(PROXY_CACHE, CACHE_FILE_PROXY, CACHE_KEY_TIME_PROXY);
+        loadCacheFromFile(HOTEL_CACHE, CACHE_FILE_HOTEL, CACHE_KEY_TIME_HOTEL);
 
-        // 异步启动爬虫更新，不影响其他爬虫
+        // 异步启动两个源的爬虫更新，不影响其他爬虫
         Init.execute(new Runnable() {
             @Override
             public void run() {
-                crawlAll();
+                triggerCrawlIfNeeded(PROXY_CACHE, CACHE_FILE_PROXY, CACHE_KEY_TIME_PROXY);
+                triggerCrawlIfNeeded(HOTEL_CACHE, CACHE_FILE_HOTEL, CACHE_KEY_TIME_HOTEL);
             }
         });
     }
@@ -99,7 +123,7 @@ public class ProxyIPTV extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        List<String> channels = cacheData.getOrDefault(tid, new ArrayList<>());
+        List<String> channels = PROXY_CACHE.txtData.getOrDefault(tid, new ArrayList<>());
         List<Vod> list = new ArrayList<>();
 
         for (String line : channels) {
@@ -130,15 +154,19 @@ public class ProxyIPTV extends Spider {
         return Result.get().url(id).parse(0).string();
     }
 
-    /**
-     * 从本地缓存文件加载数据
-     */
-    private static void loadCacheFromFile() {
+    /** 序列化用的载体：把某个源的完整缓存状态存到本地文件 */
+    private static class CachePayload {
+        String format;
+        String m3uContent;
+        Map<String, List<String>> txtData;
+    }
+
+    private static void loadCacheFromFile(SourceCache cache, File file, String timeKey) {
         try {
-            if (!CACHE_FILE.exists()) return;
+            if (!file.exists()) return;
 
             String json = "";
-            try (FileInputStream fis = new FileInputStream(CACHE_FILE)) {
+            try (FileInputStream fis = new FileInputStream(file)) {
                 byte[] data = new byte[fis.available()];
                 int read = fis.read(data);
                 if (read > 0) {
@@ -148,138 +176,155 @@ public class ProxyIPTV extends Spider {
 
             if (json.isEmpty()) return;
 
-            // 检查缓存是否过期
             long now = System.currentTimeMillis();
-            long cacheTime = Prefers.getLong(CACHE_KEY_TIME);
+            long cacheTime = Prefers.getLong(timeKey);
             if (now - cacheTime > CACHE_EXPIRE_MS) {
-                Proxy.log("🔄 IPTV 缓存过期，将重新爬取");
+                Proxy.log("🔄 IPTV[" + cache.php + "] 缓存过期，将重新爬取");
                 return;
             }
 
-            // 解析 JSON 数据
-            Type type = new TypeToken<Map<String, List<String>>>() {}.getType();
-            LinkedHashMap<String, List<String>> parsed = Json.parseSafe(json, type);
-            if (parsed != null && !parsed.isEmpty()) {
-                cacheData.clear();
-                cacheData.putAll(parsed);
-                lastCrawlTime = System.currentTimeMillis();
-                Proxy.log("✅ IPTV 从缓存加载成功，共 " + cacheData.size() + " 个分组");
+            Type type = new TypeToken<CachePayload>() {}.getType();
+            CachePayload payload = Json.parseSafe(json, type);
+            if (payload != null) {
+                cache.format = payload.format != null ? payload.format : "txt";
+                cache.m3uContent = payload.m3uContent;
+                cache.txtData.clear();
+                if (payload.txtData != null) cache.txtData.putAll(payload.txtData);
+                Proxy.log("✅ IPTV[" + cache.php + "] 从缓存加载成功，格式=" + cache.format);
             }
         } catch (Exception e) {
-            Proxy.log("❌ IPTV 加载缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
+            Proxy.log("❌ IPTV[" + cache.php + "] 加载缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
     }
 
-    /**
-     * 保存数据到本地缓存文件
-     */
-    private static void saveCacheToFile() {
+    private static void saveCacheToFile(SourceCache cache, File file, String timeKey) {
         try {
-            CACHE_FILE.getParentFile().mkdirs();
-            String json = Json.toJson(cacheData);
-            try (FileOutputStream fos = new FileOutputStream(CACHE_FILE)) {
+            file.getParentFile().mkdirs();
+            CachePayload payload = new CachePayload();
+            payload.format = cache.format;
+            payload.m3uContent = cache.m3uContent;
+            payload.txtData = cache.txtData;
+            String json = Json.toJson(payload);
+            try (FileOutputStream fos = new FileOutputStream(file)) {
                 fos.write(json.getBytes("UTF-8"));
                 fos.flush();
             }
-
-            // 同时保存到 SharedPreferences
-            Prefers.put(CACHE_KEY_TIME, System.currentTimeMillis());
-
-            Proxy.log("💾 IPTV 缓存已写入本地文件");
+            Prefers.put(timeKey, System.currentTimeMillis());
+            Proxy.log("💾 IPTV[" + cache.php + "] 缓存已写入本地文件");
         } catch (Exception e) {
-            Proxy.log("❌ IPTV 保存缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
+            Proxy.log("❌ IPTV[" + cache.php + "] 保存缓存失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
     }
 
-    private static synchronized void crawlAll() {
-        Map<String, List<String>> newCacheData = new ConcurrentHashMap<>();
-        newCacheData.put("cctv", new ArrayList<>());
-        newCacheData.put("sat", new ArrayList<>());
-        newCacheData.put("other", new ArrayList<>());
-
-        String[] sources = {"iptvhotelx.php", "iptvproxy.php"};
-        for (String php : sources) {
+    private static synchronized void triggerCrawlIfNeeded(SourceCache cache, File file, String timeKey) {
+        if (!cache.isEmpty() || cache.loading) return;
+        cache.loading = true;
+        cache.complete = false;
+        new Thread(() -> {
             try {
-                Map<String, String> listHeaders = buildBrowserHeaders(HOST + "/");
-                okhttp3.Response listResp = OkHttp.newCall(HOST + "/" + php, listHeaders);
-                String html = listResp.body() != null ? listResp.body().string() : null;
-                Proxy.log("🔍 IPTV 请求 " + php + " 完成，html长度=" + (html == null ? "null" : html.length()));
+                crawlSource(cache, file, timeKey);
+            } finally {
+                cache.loading = false;
+                cache.complete = true;
+            }
+        }, "IPTV-Crawler-" + cache.php).start();
+    }
 
-                Document doc = Jsoup.parse(html == null ? "" : html);
-                int resultCount = doc.select("div.result").size();
-                Proxy.log("🔍 IPTV " + php + " 匹配到 div.result 数量=" + resultCount);
+    /**
+     * 抓取单个源（iptvhotelx.php 或 iptvproxy.php）的前 3 个 IP。
+     * 用第一个 IP 的详情页判断本轮格式：有订阅链接 -> m3u，没有 -> txt；后两个 IP 复用同一判定。
+     */
+    private static void crawlSource(SourceCache cache, File file, String timeKey) {
+        List<String> m3uBlocks = new ArrayList<>();
+        Map<String, List<String>> txtData = new ConcurrentHashMap<>();
+        txtData.put("cctv", new ArrayList<>());
+        txtData.put("sat", new ArrayList<>());
+        txtData.put("other", new ArrayList<>());
+        String detectedFormat = null;
 
-                int count = 0;
-                for (Element div : doc.select("div.result")) {
-                    if (count >= 3) break;
-                    if (div.text().contains("暂时失效")) continue;
-                    Element a = div.selectFirst("a[href*=channellist.html?ip=]");
-                    if (a == null) continue;
+        try {
+            Map<String, String> listHeaders = buildBrowserHeaders(HOST + "/");
+            okhttp3.Response listResp = OkHttp.newCall(HOST + "/" + cache.php, listHeaders);
+            String html = listResp.body() != null ? listResp.body().string() : null;
+            Proxy.log("🔍 IPTV[" + cache.php + "] 请求完成，html长度=" + (html == null ? "null" : html.length()));
 
-                    String href = a.attr("href");
-                    String ip = getParam(href, "ip");
-                    String tk = getParam(href, "tk");
-                    String p = getParam(href, "p");
-                    if (p == null || p.isEmpty()) p = "1";
-                    if (ip.isEmpty() || tk.isEmpty()) continue;
+            Document doc = Jsoup.parse(html == null ? "" : html);
+            int resultCount = doc.select("div.result").size();
+            Proxy.log("🔍 IPTV[" + cache.php + "] 匹配到 div.result 数量=" + resultCount);
 
-                    String detailUrl = HOST + "/getall26.php?ip=" + ip + "&c=&tk=" + tk + "&p=" + p;
-                    String channelReferer = HOST + "/channellist.html?ip=" + ip + "&tk=" + tk + "&p=" + p;
+            int count = 0;
+            for (Element div : doc.select("div.result")) {
+                if (count >= 3) break;
+                if (div.text().contains("暂时失效")) continue;
+                Element a = div.selectFirst("a[href*=channellist.html?ip=]");
+                if (a == null) continue;
 
-                    Map<String, String> detailHeaders = buildBrowserHeaders(channelReferer);
-                    okhttp3.Response detailResp = OkHttp.newCall(detailUrl, detailHeaders);
-                    String detail = detailResp.body() != null ? detailResp.body().string() : null;
-                    int detailLen = detail == null ? 0 : detail.length();
-                    Proxy.log("🔍 IPTV 详情页 " + detailUrl + " html长度=" + detailLen);
-                    if (detailLen > 0 && detailLen < 500) {
-                        Proxy.log("🔍 IPTV 详情页短响应内容: <pre>" + detail.replace("<", "&lt;") + "</pre>");
-                    }
+                String href = a.attr("href");
+                String ip = getParam(href, "ip");
+                String tk = getParam(href, "tk");
+                String p = getParam(href, "p");
+                if (p == null || p.isEmpty()) p = "1";
+                if (ip.isEmpty() || tk.isEmpty()) continue;
 
-                    String[] subLink = extractSubscribeLink(detail);
-                    boolean gotFromSubscription = false;
-                    if (subLink != null) {
+                String detailUrl = HOST + "/getall26.php?ip=" + ip + "&c=&tk=" + tk + "&p=" + p;
+                String channelReferer = HOST + "/channellist.html?ip=" + ip + "&tk=" + tk + "&p=" + p;
+
+                Map<String, String> detailHeaders = buildBrowserHeaders(channelReferer);
+                okhttp3.Response detailResp = OkHttp.newCall(detailUrl, detailHeaders);
+                String detail = detailResp.body() != null ? detailResp.body().string() : null;
+                int detailLen = detail == null ? 0 : detail.length();
+                Proxy.log("🔍 IPTV[" + cache.php + "] 详情页 " + detailUrl + " html长度=" + detailLen);
+                if (detailLen > 0 && detailLen < 500) {
+                    Proxy.log("🔍 IPTV[" + cache.php + "] 详情页短响应内容: <pre>" + detail.replace("<", "&lt;") + "</pre>");
+                }
+
+                String[] subLink = extractSubscribeLink(detail);
+
+                if (count == 0) {
+                    detectedFormat = subLink != null ? "m3u" : "txt";
+                    Proxy.log("🔍 IPTV[" + cache.php + "] 判定格式=" + detectedFormat);
+                }
+
+                if ("m3u".equals(detectedFormat)) {
+                    if (subLink != null && "m".equals(subLink[1])) {
                         try {
                             Map<String, String> subHeaders = buildBrowserHeaders(detailUrl);
                             okhttp3.Response subResp = OkHttp.newCall(subLink[0], subHeaders);
                             String subContent = subResp.body() != null ? subResp.body().string() : null;
-                            int subLen = subContent == null ? 0 : subContent.length();
-                            Proxy.log("🔍 IPTV 订阅链接(" + subLink[1] + ") " + subLink[0] + " 长度=" + subLen);
-
-                            long before = countChannels(newCacheData);
-                            if ("m".equals(subLink[1])) {
-                                parseM3uContent(subContent, newCacheData);
-                            } else {
-                                parseTxtContent(subContent, newCacheData);
+                            Proxy.log("🔍 IPTV[" + cache.php + "] 订阅链接 " + subLink[0] + " 长度=" + (subContent == null ? 0 : subContent.length()));
+                            if (subContent != null && !subContent.isEmpty()) {
+                                m3uBlocks.add(stripM3uHeader(subContent));
                             }
-                            long added = countChannels(newCacheData) - before;
-                            Proxy.log("🔍 IPTV 订阅解析新增频道=" + added);
-                            gotFromSubscription = added > 0;
                         } catch (Exception e) {
-                            Proxy.log("❌ IPTV 订阅链接请求失败: " + e.getMessage());
+                            Proxy.log("❌ IPTV[" + cache.php + "] 订阅链接请求失败: " + e.getMessage());
                         }
                     }
-                    if (!gotFromSubscription) {
-                        parseAndSort(detail, newCacheData);
-                    }
-                    count++;
+                    // 该源本轮判定为 m3u，但这个 IP 恰好没订阅链接（异常情况）：跳过，不降级到 txt，保持源内格式一致
+                } else {
+                    parseAndSort(detail, txtData);
                 }
-            } catch (Exception e) {
-                Proxy.log("❌ IPTV 抓取 " + php + " 失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
+                count++;
             }
+        } catch (Exception e) {
+            Proxy.log("❌ IPTV[" + cache.php + "] 抓取失败: " + e.getMessage() + "<br><pre>" + Proxy.getStackTrace(e) + "</pre>");
         }
 
-        // 使用新的缓存数据替换旧数据
-        cacheData.clear();
-        cacheData.putAll(newCacheData);
-        lastCrawlTime = System.currentTimeMillis();
-        complete = true;
-        loading = false;
+        if ("m3u".equals(detectedFormat) && !m3uBlocks.isEmpty()) {
+            StringBuilder merged = new StringBuilder("#EXTM3U\n");
+            for (String block : m3uBlocks) merged.append(block).append("\n");
+            cache.format = "m3u";
+            cache.m3uContent = merged.toString();
+            cache.txtData.clear();
+            Proxy.log("✅ IPTV[" + cache.php + "] 爬虫完成，格式=m3u，内容长度=" + cache.m3uContent.length());
+        } else {
+            cache.format = "txt";
+            cache.m3uContent = null;
+            cache.txtData.clear();
+            cache.txtData.putAll(txtData);
+            Proxy.log("✅ IPTV[" + cache.php + "] 爬虫完成，格式=txt，共加载 " + countChannels(cache.txtData) + " 个频道");
+        }
 
-        long totalChannels = getTotalChannels();
-        Proxy.log("✅ IPTV 爬虫完成，共加载 " + totalChannels + " 个频道");
-
-        // 保存到本地文件
-        saveCacheToFile();
+        saveCacheToFile(cache, file, timeKey);
     }
 
     private static void parseAndSort(String html, Map<String, List<String>> targetMap) {
@@ -332,45 +377,14 @@ public class ProxyIPTV extends Spider {
         return null;
     }
 
-    /**
-     * 解析标准 M3U 播放列表：#EXTINF:-1 ...,频道名 后紧跟一行播放地址
-     */
-    private static void parseM3uContent(String content, Map<String, List<String>> targetMap) {
-        if (content == null || content.isEmpty()) return;
-        String[] lines = content.split("\r?\n");
-        String pendingName = null;
-        for (String line : lines) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty()) continue;
-            if (trimmed.startsWith("#EXTINF")) {
-                int commaIdx = trimmed.lastIndexOf(',');
-                pendingName = commaIdx >= 0 ? trimmed.substring(commaIdx + 1).trim() : null;
-            } else if (trimmed.startsWith("#")) {
-                // 其他 M3U 标签行，忽略
-            } else if (pendingName != null && trimmed.startsWith("http")) {
-                addChannel(targetMap, pendingName, trimmed);
-                pendingName = null;
-            }
+    /** 去掉 m3u 内容的 #EXTM3U 头行，用于把多个源的 m3u 合并成一份 */
+    private static String stripM3uHeader(String content) {
+        if (content == null) return "";
+        String[] lines = content.split("\r?\n", 2);
+        if (lines.length > 0 && lines[0].trim().startsWith("#EXTM3U")) {
+            return lines.length > 1 ? lines[1] : "";
         }
-    }
-
-    /**
-     * 解析 TVBox 标准 txt 格式：分组,#genre# 或 频道名,地址
-     * 分组行按站点原分组，我们统一按频道名重新归类到 cctv/sat/other，忽略 #genre# 行
-     */
-    private static void parseTxtContent(String content, Map<String, List<String>> targetMap) {
-        if (content == null || content.isEmpty()) return;
-        String[] lines = content.split("\r?\n");
-        for (String line : lines) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty() || trimmed.contains("#genre#")) continue;
-            int idx = trimmed.indexOf(',');
-            if (idx < 0) continue;
-            String name = trimmed.substring(0, idx).trim();
-            String url = trimmed.substring(idx + 1).trim();
-            if (name.isEmpty() || !url.startsWith("http")) continue;
-            addChannel(targetMap, name, url);
-        }
+        return content;
     }
 
     private static void addChannel(Map<String, List<String>> targetMap, String name, String url) {
@@ -390,10 +404,6 @@ public class ProxyIPTV extends Spider {
             total += channels.size();
         }
         return total;
-    }
-
-    private static long getTotalChannels() {
-        return countChannels(cacheData);
     }
 
     private static Map<String, String> buildBrowserHeaders(String referer) {
