@@ -77,6 +77,7 @@ public class Proxy {
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
         if ("iptv".equals(action)) return handleIptv(params);
+        if ("iptv2".equals(action)) return handleIptvHotel(params);
 
         return errorResponse(400, "Unknown action: " + action);
     }
@@ -217,29 +218,35 @@ public class Proxy {
      * - 这样不影响其他爬虫或 TVBox 的其他请求
      */
     private static Object[] handleIptv(Map<String, String> params) {
-        try {
-            String tid = params.get("tid");
-            
-            // 同步 ProxyIPTV 的运行状态
-            boolean isLoading = ProxyIPTV.isLoading();
-            boolean isComplete = ProxyIPTV.isComplete();
+        ProxyIPTV.SourceCache cache = ProxyIPTV.getProxyCache();
+        setIptvLoading(cache.loading);
+        setIptvComplete(cache.complete);
+        return buildIptvResponse(params, cache);
+    }
 
-            if (isLoading) {
-                setIptvLoading(true);
-                log("⏳ IPTV 爬虫运行中，暂不返回数据");
+    private static Object[] handleIptvHotel(Map<String, String> params) {
+        ProxyIPTV.SourceCache cache = ProxyIPTV.getHotelCache();
+        return buildIptvResponse(params, cache);
+    }
+
+    private static Object[] buildIptvResponse(Map<String, String> params, ProxyIPTV.SourceCache cache) {
+        try {
+            if (cache.loading) {
+                log("⏳ IPTV[" + cache.php + "] 爬虫运行中，暂不返回数据");
                 return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
-            } else if (isComplete) {
-                setIptvComplete(true);
-                setIptvLoading(false);
             }
 
-            Map<String, List<String>> data = ProxyIPTV.getCacheData();
+            if ("m3u".equals(cache.format) && cache.m3uContent != null) {
+                byte[] bytes = cache.m3uContent.getBytes("UTF-8");
+                return new Object[]{200, "audio/x-mpegurl; charset=utf-8", new ByteArrayInputStream(bytes)};
+            }
 
+            String tid = params.get("tid");
             StringBuilder txt = new StringBuilder();
             if (tid != null && !tid.isEmpty()) {
-                appendTxtGroup(txt, tid, data.get(tid));
+                appendTxtGroup(txt, tid, cache.txtData.get(tid));
             } else {
-                for (Map.Entry<String, List<String>> entry : data.entrySet()) {
+                for (Map.Entry<String, List<String>> entry : cache.txtData.entrySet()) {
                     appendTxtGroup(txt, entry.getKey(), entry.getValue());
                 }
             }
@@ -247,7 +254,7 @@ public class Proxy {
             byte[] bytes = txt.toString().getBytes("UTF-8");
             return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
         } catch (Exception e) {
-            log("❌ iptv 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
+            log("❌ iptv[" + cache.php + "] 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
             return errorResponse(500, e.getMessage());
         }
     }
