@@ -78,6 +78,7 @@ public class Proxy {
         if ("proxy".equals(action)) return handleCommonProxy(params);
         if ("iptv".equals(action)) return handleIptv(params);
         if ("iptv2".equals(action)) return handleIptvHotel(params);
+        if ("iptvzb".equals(action)) return handleIptvZb(params);
 
         return errorResponse(400, "Unknown action: " + action);
     }
@@ -227,6 +228,23 @@ public class Proxy {
     private static Object[] handleIptvHotel(Map<String, String> params) {
         ProxyIPTV.SourceCache cache = ProxyIPTV.getHotelCache();
         return buildIptvResponse(params, cache);
+    }
+
+    private static Object[] handleIptvZb(Map<String, String> params) {
+        try {
+            if (TaoIPTV.isLoading()) {
+                log("⏳ IPTV[taoiptv] 爬虫运行中，暂不返回数据");
+                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
+            }
+
+            String keyword = params.get("kw");
+            String txt = TaoIPTV.getCache(keyword);
+            byte[] bytes = (txt == null ? "" : txt).getBytes("UTF-8");
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            log("❌ iptvzb 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
+            return errorResponse(500, e.getMessage());
+        }
     }
 
     private static Object[] buildIptvResponse(Map<String, String> params, ProxyIPTV.SourceCache cache) {
