@@ -67,6 +67,18 @@ public class ProxyIPTV extends Spider {
     private static final SourceCache PROXY_CACHE = new SourceCache("iptvproxy.php");
     private static final SourceCache HOTEL_CACHE = new SourceCache("iptvhotelx.php");
 
+    static {
+        // class 被加载时就异步预热两个源，尽量让第一次 do=iptv 请求也能拿到数据
+        // 如果此时 Context 还没就绪导致 Prefers 读写异常，下面 catch 住，不让静态块本身抛出
+        // （静态块抛异常会导致这个 class 永久加载失败，风险比"等一下"更大，所以必须兜底）
+        try {
+            triggerCrawlIfNeeded(PROXY_CACHE, CACHE_FILE_PROXY, CACHE_KEY_TIME_PROXY);
+            triggerCrawlIfNeeded(HOTEL_CACHE, CACHE_FILE_HOTEL, CACHE_KEY_TIME_HOTEL);
+        } catch (Throwable t) {
+            // 静态预热失败不影响后续 init()/getProxyCache()/getHotelCache() 正常按需触发
+        }
+    }
+
     /** 供 Proxy.java 调用：iptvproxy.php 源，不阻塞、按需触发爬取 */
     public static SourceCache getProxyCache() {
         triggerCrawlIfNeeded(PROXY_CACHE, CACHE_FILE_PROXY, CACHE_KEY_TIME_PROXY);
@@ -163,6 +175,7 @@ public class ProxyIPTV extends Spider {
 
     private static void loadCacheFromFile(SourceCache cache, File file, String timeKey) {
         try {
+            if (!cache.isEmpty()) return; // 已有数据（比如静态预热的爬虫已经跑完），不要用旧文件覆盖
             if (!file.exists()) return;
 
             String json = "";
