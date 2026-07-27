@@ -26,6 +26,18 @@ public class Proxy {
 
     public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
 
+    // 类加载时立即异步预热 IPTV 缓存，避免第一次 do=iptv 请求才开始抓取
+    static {
+        new Thread(() -> {
+            try {
+                log("🔥 Proxy 类已加载，开始预热 IPTV 缓存...");
+                ProxyIPTV.getCacheData();
+            } catch (Throwable t) {
+                log("❌ IPTV 预热失败: " + t.getMessage() + "<br><pre>" + getStackTrace(t) + "</pre>");
+            }
+        }, "IPTV-Preload").start();
+    }
+
     // IPTV 状态标记（和 ProxyIPTV 同步）
     private static volatile boolean iptvLoading = false;
     private static volatile boolean iptvComplete = false;
