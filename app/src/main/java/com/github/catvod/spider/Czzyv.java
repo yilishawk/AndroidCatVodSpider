@@ -14,6 +14,7 @@ import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 
 import org.jsoup.Jsoup;
@@ -27,16 +28,13 @@ import java.util.regex.*;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Response;
-import java.net.CookieManager;
-import java.net.CookiePolicy;
-import okhttp3.JavaNetCookieJar;
 
 public class Czzyv extends Spider {
 
     private static final String HOST = "https://czzy.top";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-    // 分类映射（国产剧排第一）
+    // 分类映射
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
     static {
         CATEGORY_MAP.put("国产剧", "gcj");
@@ -48,28 +46,27 @@ public class Czzyv extends Spider {
         CATEGORY_MAP.put("豆瓣电影Top250", "dbtop250");
     }
 
-    // ---------- 全局 OkHttpClient（与系统 CookieManager 共享） ----------
     private static OkHttpClient httpClient;
+    private WebView webView;
+    private FrameLayout container;
 
     private void logger(String msg) {
-        try { Proxy.log("[Czzyv] " + msg); } catch (Exception ignored) {}
+        SpiderDebug.log("[Czzyv] " + msg);
     }
 
-    // ---------- 构建请求头 ----------
-    private Map<String, String> getHeaders(String referer) {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", UA);
-        headers.put("Referer", TextUtils.isEmpty(referer) ? HOST + "/" : referer);
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-        return headers;
+    // 获取当前 Cookie（从 android.webkit.CookieManager）
+    private String getCookie() {
+        try {
+            return CookieManager.getInstance().getCookie(HOST);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
-    // ---------- 统一 GET 请求（使用共享 Cookie 的 httpClient） ----------
+    // 统一 GET 请求（自动携带 Cookie）
     private String get(String url, String referer) {
         try {
             if (httpClient == null) {
-                // 降级：如果没有初始化，创建一个基本 client（一般不会发生）
                 httpClient = new OkHttpClient.Builder().build();
             }
             okhttp3.Request.Builder builder = new okhttp3.Request.Builder()
@@ -80,8 +77,19 @@ public class Czzyv extends Spider {
             if (!TextUtils.isEmpty(referer)) {
                 builder.header("Referer", referer);
             }
+            // 手动添加 Cookie
+            String cookie = getCookie();
+            if (!TextUtils.isEmpty(cookie)) {
+                builder.header("Cookie", cookie);
+            }
             try (Response response = httpClient.newCall(builder.build()).execute()) {
-                return response.body() != null ? response.body().string() : "";
+                int code = response.code();
+                String body = response.body() != null ? response.body().string() : "";
+                logger("请求 " + url + " → 状态码: " + code + ", 长度: " + body.length());
+                if (code != 200) {
+                    logger("⚠️ 非200响应，可能被拦截，前200字符: " + (body.length() > 200 ? body.substring(0, 200) : body));
+                }
+                return body;
             }
         } catch (Exception e) {
             logger("请求失败: " + url + " → " + e.getMessage());
@@ -89,7 +97,7 @@ public class Czzyv extends Spider {
         }
     }
 
-    // ---------- 带自定义 Headers 的 GET（用于播放页 iframe 请求） ----------
+    // 带自定义 Headers 的 GET（用于 iframe 请求）
     private String getWithHeaders(String url, Map<String, String> headers) {
         try {
             if (httpClient == null) {
@@ -98,6 +106,11 @@ public class Czzyv extends Spider {
             okhttp3.Request.Builder builder = new okhttp3.Request.Builder().url(url);
             for (Map.Entry<String, String> entry : headers.entrySet()) {
                 builder.header(entry.getKey(), entry.getValue());
+            }
+            // 手动添加 Cookie
+            String cookie = getCookie();
+            if (!TextUtils.isEmpty(cookie)) {
+                builder.header("Cookie", cookie);
             }
             try (Response response = httpClient.newCall(builder.build()).execute()) {
                 return response.body() != null ? response.body().string() : "";
@@ -108,7 +121,7 @@ public class Czzyv extends Spider {
         }
     }
 
-    // ---------- 检测是否被 WAF 拦截 ----------
+    // 检测是否被 WAF 拦截
     private boolean isWAFBlocked(String html) {
         if (TextUtils.isEmpty(html)) return true;
         String lowerHtml = html.toLowerCase();
@@ -121,10 +134,7 @@ public class Czzyv extends Spider {
                 || lowerHtml.contains("waf");
     }
 
-    // ---------- 静默 WebView 验证 ----------
-    private WebView webView;
-    private FrameLayout container;
-
+    // 静默 WebView 验证
     private void silentWAFVerify() {
         try {
             container = new FrameLayout(Init.context());
@@ -152,7 +162,6 @@ public class Czzyv extends Spider {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 页面加载完成: " + url);
-                    // 不在这里主动销毁，等待轮询获取 Cookie
                 }
 
                 @Override
@@ -176,19 +185,19 @@ public class Czzyv extends Spider {
         }
     }
 
-    // ---------- 等待验证 Cookie 就绪 ----------
+    // 等待验证 Cookie 就绪
     private void waitForWAFCookie() {
         try {
             long start = System.currentTimeMillis();
             while (System.currentTimeMillis() - start < 20000) {
-                String cookie = CookieManager.getInstance().getCookie(HOST);
+                String cookie = getCookie();
+                logger("当前 Cookie: " + (cookie != null ? cookie : "null"));
                 if (!TextUtils.isEmpty(cookie) &&
                         (cookie.contains("cf_clearance") ||
                                 cookie.contains("雷池") ||
                                 cookie.contains("waf_verify") ||
                                 cookie.contains("_waf_captcha"))) {
                     logger("✅ 验证 Cookie 已就绪");
-                    // 销毁 WebView 和容器
                     destroyWebView();
                     return;
                 }
@@ -216,30 +225,21 @@ public class Czzyv extends Spider {
         } catch (Exception ignored) {}
     }
 
-    // ---------- 生命周期 init ----------
+    // ---------- 生命周期 ----------
     @Override
     public void init(Context context, String extend) {
         logger("🚀 初始化...");
 
-        // 1. 初始化系统 CookieManager
-        if (CookieManager.getDefault() == null) {
-            CookieManager.setDefault(new CookieManager(null, CookiePolicy.ACCEPT_ALL));
-        }
-        java.net.CookieManager systemCookieManager = CookieManager.getDefault();
+        // 初始化 OkHttpClient（默认）
+        httpClient = new OkHttpClient.Builder().build();
 
-        // 2. 构建 OkHttpClient，使用系统 CookieManager（实现共享）
-        httpClient = new OkHttpClient.Builder()
-                .cookieJar(new JavaNetCookieJar(systemCookieManager))
-                .build();
-
-        // 3. 检查是否需要验证
+        // 测试首页是否需要验证
         String testHtml = get(HOST, "");
         if (!isWAFBlocked(testHtml)) {
-            logger("✅ 无需验证，直接通过");
+            logger("✅ 无需验证，直接通过，首页内容长度: " + testHtml.length());
             return;
         }
 
-        // 4. 需要验证 → 启动 WebView 并等待 Cookie
         logger("⚠️ 检测到雷池/CF 盾，启动静默验证...");
         silentWAFVerify();
         waitForWAFCookie();
@@ -306,6 +306,7 @@ public class Czzyv extends Spider {
                 list.add(vod);
             }
 
+            logger("分类 " + tid + " 第" + page + "页，获取到 " + list.size() + " 个视频");
             return Result.string(list);
         } catch (Exception e) {
             logger("分类异常: " + e.getMessage());
@@ -456,11 +457,11 @@ public class Czzyv extends Spider {
             String videoUrl = extractVideoUrlFromPlayPage(playUrl);
 
             if (TextUtils.isEmpty(videoUrl)) {
-                logger("未找到视频地址，交由壳子嗅探");
+                logger("⚠️ 未提取到视频地址，将启用壳子嗅探");
                 return Result.get().parse(1).url(playUrl).string();
             }
 
-            logger("真实视频地址: " + videoUrl);
+            logger("✅ 获取到视频地址: " + videoUrl);
 
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
