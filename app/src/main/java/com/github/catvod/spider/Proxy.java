@@ -23,7 +23,7 @@ public class Proxy {
 
     private static final int PROXY_PORT = 9978;
 
-    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
+    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動---</div>");
 
     public static int getPort() {
         return PROXY_PORT;
