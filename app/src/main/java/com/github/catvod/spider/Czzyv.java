@@ -33,7 +33,6 @@ import okhttp3.Response;
 public class Czzyv extends Spider {
 
     private static final String HOST = "https://czzy.top";
-    // 完整桌面 Chrome 149 UA（与指纹匹配）
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
@@ -56,7 +55,6 @@ public class Czzyv extends Spider {
         SpiderDebug.log("[Czzyv] " + msg);
     }
 
-    // 只从 WebView 获取 Cookie，不硬编码
     private String getCookie() {
         try {
             String cookie = CookieManager.getInstance().getCookie(HOST);
@@ -69,7 +67,6 @@ public class Czzyv extends Spider {
         }
     }
 
-    // 统一 GET 请求（携带完整指纹头 + 动态 Cookie）
     private String get(String url, String referer) {
         try {
             if (httpClient == null) {
@@ -145,17 +142,14 @@ public class Czzyv extends Spider {
                 || lower.contains("雷池") || lower.contains("验证中心") || lower.contains("waf");
     }
 
-    // ---------- 生命周期 ----------
     @Override
     public void init(Context context, String extend) {
         logger("🚀 初始化...");
-        // 清除旧 Cookie
         CookieManager.getInstance().removeAllCookies(null);
         CookieManager.getInstance().flush();
 
         httpClient = new OkHttpClient.Builder().build();
 
-        // 尝试直接访问
         String testHtml = get(HOST, "");
         if (!isWAFBlocked(testHtml)) {
             logger("✅ 无需验证，直接通过");
@@ -163,7 +157,6 @@ public class Czzyv extends Spider {
         }
 
         logger("⚠️ 检测到雷池/CF 盾，启动静默验证...");
-        // 最多重试3次
         for (int attempt = 1; attempt <= 3; attempt++) {
             logger("🔄 第 " + attempt + " 次尝试获取 Cookie...");
             CountDownLatch latch = new CountDownLatch(1);
@@ -181,7 +174,6 @@ public class Czzyv extends Spider {
                 }
             } catch (InterruptedException ignored) {}
 
-            // 等待 Cookie 就绪
             boolean got = waitForCookie(20);
             if (got) {
                 logger("✅ 成功获取 Cookie，验证通过");
@@ -195,7 +187,6 @@ public class Czzyv extends Spider {
         logger("❌ 所有尝试均未获取到有效 Cookie，后续请求可能失败");
     }
 
-    // 启动 WebView（增强指纹）
     private void startSilentWAFVerify(CountDownLatch latch) {
         try {
             container = new FrameLayout(Init.context());
@@ -221,9 +212,9 @@ public class Czzyv extends Spider {
             settings.setAllowFileAccess(false);
             settings.setAllowContentAccess(false);
             settings.setLoadsImagesAutomatically(true);
+            // 以下两行在 Android 9+ 可能已废弃，但保留兼容（若编译报错可删除）
+            // 这里保留 database 开启，但 AppCache 已移除，故不设置
             settings.setDatabaseEnabled(true);
-            settings.setAppCacheEnabled(true);
-            settings.setAppCachePath(Init.context().getCacheDir().getAbsolutePath());
 
             // 真实尺寸 1280x720
             webView.setAlpha(0f);
@@ -234,24 +225,20 @@ public class Czzyv extends Spider {
             CookieManager.getInstance().setAcceptCookie(true);
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-            // 注入 JS 隐藏 webdriver 属性
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 页面加载完成: " + url);
-                    // 注入 JS 修改 navigator 属性
                     view.evaluateJavascript(
                         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});" +
                         "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});" +
                         "Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN','zh','en']});",
                         null
                     );
-                    // 延迟刷新以触发挑战
                     view.postDelayed(() -> {
                         logger("🔄 刷新页面触发挑战...");
                         view.reload();
                     }, 2000);
-                    // 不释放 latch，由 waitForCookie 控制
                 }
 
                 @Override
@@ -269,7 +256,6 @@ public class Czzyv extends Spider {
             }
             webView.loadUrl(HOST);
 
-            // 超时释放
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                 if (latch.getCount() > 0) {
                     logger("⏰ WebView 加载超时，释放锁");
@@ -283,7 +269,6 @@ public class Czzyv extends Spider {
         }
     }
 
-    // 轮询等待有效 Cookie
     private boolean waitForCookie(int maxWaitSeconds) {
         try {
             long start = System.currentTimeMillis();
@@ -319,7 +304,7 @@ public class Czzyv extends Spider {
         } catch (Exception ignored) {}
     }
 
-    // ---------- 以下为业务方法，保持不变 ----------
+    // ==================== 业务方法 ====================
     @Override
     public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
