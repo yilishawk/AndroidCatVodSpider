@@ -80,7 +80,7 @@ public class Czzyv extends Spider {
             if (!TextUtils.isEmpty(referer)) {
                 builder.header("Referer", referer);
             }
-            
+
             // 🔑 手动添加 Cookie（从 WebView 共享）
             String cookie = getCookie();
             if (!TextUtils.isEmpty(cookie)) {
@@ -89,7 +89,7 @@ public class Czzyv extends Spider {
             } else {
                 logger("⚠️ 无 Cookie");
             }
-            
+
             try (Response response = httpClient.newCall(builder.build()).execute()) {
                 int code = response.code();
                 String body = response.body() != null ? response.body().string() : "";
@@ -161,12 +161,15 @@ public class Czzyv extends Spider {
         }
 
         logger("⚠️ 检测到雷池/CF 盾，启动静默验证...");
-        
+
         // 使用 CountDownLatch 等待验证完成
         CountDownLatch latch = new CountDownLatch(1);
-        
+
         // 切换到主线程执行 WebView 操作
-        Init.run(() -> {
+        // 不再依赖 Init.run() 的实现细节——WebView 内部会 new Handler()，
+        // 必须运行在已经 prepare() 过 Looper 的线程上，主线程的 Looper 系统保证已就绪，
+        // 直接用它来 post，规避了 "Attempt to read from field ... Looper.mQueue" 这个 NPE。
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
             try {
                 startSilentWAFVerify(latch);
             } catch (Exception e) {
@@ -258,14 +261,14 @@ public class Czzyv extends Spider {
         try {
             long start = System.currentTimeMillis();
             int maxWait = 20; // 最多等 20 秒
-            
+
             while (System.currentTimeMillis() - start < maxWait * 1000) {
                 String cookie = getCookie();
                 logger("🔍 轮询 Cookie (" + (System.currentTimeMillis() - start) / 1000 + "s): " + (cookie != null ? cookie.substring(0, Math.min(50, cookie.length())) + "..." : "null"));
-                
+
                 if (!TextUtils.isEmpty(cookie)) {
                     // 检查是否有雷池验证凭证
-                    if (cookie.contains("sl-challenge-jwt") || 
+                    if (cookie.contains("sl-challenge-jwt") ||
                         cookie.contains("sl_jwt_session") ||
                         cookie.contains("cf_clearance") ||
                         cookie.contains("waf_verify")) {
@@ -275,19 +278,19 @@ public class Czzyv extends Spider {
                         return;
                     }
                 }
-                
+
                 Thread.sleep(500);
             }
-            
+
             logger("⏰ 等待验证 Cookie 超时（" + maxWait + "秒），后续请求可能失败");
             destroyWebView();
-            
+
             // 即使超时，如果已经有 Cookie 也尝试继续
             String finalCookie = getCookie();
             if (!TextUtils.isEmpty(finalCookie)) {
                 logger("⚠️ 虽然有 Cookie 但可能未完成验证: " + finalCookie.substring(0, Math.min(50, finalCookie.length())));
             }
-            
+
         } catch (Exception e) {
             logger("等待异常: " + e.getMessage());
         }
