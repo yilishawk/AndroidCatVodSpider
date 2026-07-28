@@ -15,7 +15,6 @@ import java.io.ByteArrayInputStream;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,30 +24,6 @@ public class Proxy {
     private static final int PROXY_PORT = 9978;
 
     public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動 ---</div>");
-
-    // 类加载时立即异步预热 IPTV 缓存，避免第一次 do=iptv 请求才开始抓取
-    static {
-        new Thread(() -> {
-            try {
-                log("🔥 Proxy 类已加载，开始预热 IPTV 缓存...");
-                ProxyIPTV.getCacheData();
-            } catch (Throwable t) {
-                log("❌ IPTV 预热失败: " + t.getMessage() + "<br><pre>" + getStackTrace(t) + "</pre>");
-            }
-        }, "IPTV-Preload").start();
-    }
-
-    // IPTV 状态标记（和 ProxyIPTV 同步）
-    private static volatile boolean iptvLoading = false;
-    private static volatile boolean iptvComplete = false;
-
-    public static void setIptvLoading(boolean loading) {
-        iptvLoading = loading;
-    }
-
-    public static void setIptvComplete(boolean complete) {
-        iptvComplete = complete;
-    }
 
     public static int getPort() {
         return PROXY_PORT;
@@ -88,8 +63,6 @@ public class Proxy {
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
-        if ("iptv".equals(action)) return handleIptv(params);
-        if ("iptv2".equals(action)) return handleIptvHotel(params);
         if ("iptvzb".equals(action)) return handleIptvZb(params);
 
         return errorResponse(400, "Unknown action: " + action);
@@ -218,29 +191,7 @@ public class Proxy {
         }
     }
 
-    // ====================== IPTV 直播源代理 ======================
-
-    /**
-     * 将 ProxyIPTV 爬取到的直播源数据按 TVBox 标准 TXT 格式原样返回（分组,#genre# + 频道名,地址）。
-     * 用法: http://127.0.0.1:9978/proxy?do=iptv           返回全部分组
-     *      http://127.0.0.1:9978/proxy?do=iptv&tid=cctv   仅返回指定分组 (cctv/sat/other)
-     * 
-     * 【非阻塞设计】：
-     * - 如果爬虫已完成，直接返回内存中的数据（毫秒级）
-     * - 如果爬虫还在运行，立即返回空响应，不等待爬取完成
-     * - 这样不影响其他爬虫或 TVBox 的其他请求
-     */
-    private static Object[] handleIptv(Map<String, String> params) {
-        ProxyIPTV.SourceCache cache = ProxyIPTV.getProxyCache();
-        setIptvLoading(cache.loading);
-        setIptvComplete(cache.complete);
-        return buildIptvResponse(params, cache);
-    }
-
-    private static Object[] handleIptvHotel(Map<String, String> params) {
-        ProxyIPTV.SourceCache cache = ProxyIPTV.getHotelCache();
-        return buildIptvResponse(params, cache);
-    }
+    // ====================== IPTV 直播源代理（taoiptv，走 TaoIPTV） ======================
 
     private static Object[] handleIptvZb(Map<String, String> params) {
         try {
@@ -256,46 +207,6 @@ public class Proxy {
         } catch (Exception e) {
             log("❌ iptvzb 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
             return errorResponse(500, e.getMessage());
-        }
-    }
-
-    private static Object[] buildIptvResponse(Map<String, String> params, ProxyIPTV.SourceCache cache) {
-        try {
-            if (cache.loading) {
-                log("⏳ IPTV[" + cache.php + "] 爬虫运行中，暂不返回数据");
-                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
-            }
-
-            if ("m3u".equals(cache.format) && cache.m3uContent != null) {
-                byte[] bytes = cache.m3uContent.getBytes("UTF-8");
-                return new Object[]{200, "audio/x-mpegurl; charset=utf-8", new ByteArrayInputStream(bytes)};
-            }
-
-            String tid = params.get("tid");
-            StringBuilder txt = new StringBuilder();
-            if (tid != null && !tid.isEmpty()) {
-                appendTxtGroup(txt, tid, cache.txtData.get(tid));
-            } else {
-                for (Map.Entry<String, List<String>> entry : cache.txtData.entrySet()) {
-                    appendTxtGroup(txt, entry.getKey(), entry.getValue());
-                }
-            }
-
-            byte[] bytes = txt.toString().getBytes("UTF-8");
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
-        } catch (Exception e) {
-            log("❌ iptv[" + cache.php + "] 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
-            return errorResponse(500, e.getMessage());
-        }
-    }
-
-    private static void appendTxtGroup(StringBuilder txt, String group, List<String> channels) {
-        if (channels == null || channels.isEmpty()) return;
-        txt.append(group).append(",#genre#\n");
-        for (String line : channels) {
-            // cacheData 里存的就是 "name$url"，这里只替换分隔符为逗号，不做其他改动
-            String item = line.replaceFirst("\\$", ",");
-            txt.append(item).append("\n");
         }
     }
 
