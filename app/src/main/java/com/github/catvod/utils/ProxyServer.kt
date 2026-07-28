@@ -39,13 +39,9 @@ object ProxyServer {
                 }
                 httpServer?.addRoutes("/proxy") { req, response ->
                     try {
-                        val doAction = req.queryParams["do"]
                         val key = req.queryParams["key"]
 
-                        // IPTV 直播源接口
-                        if ("iptv" == doAction) {
-                            handleIptvRoute(req, response)
-                        } else if (key != null) {
+                        if (key != null) {
                             // 原有视频代理逻辑
                             val url = urlMap[key]
                             val header = headerMap[key]
@@ -70,54 +66,6 @@ object ProxyServer {
             }
         } while (port < 20000)
         SpiderDebug.log("启动服务 on $port")
-    }
-
-    /**
-     * 处理 /proxy?do=iptv 路由
-     */
-    private fun handleIptvRoute(req: AdvancedHttpServer.Request, response: AdvancedHttpServer.Response) {
-        try {
-            val tid = req.queryParams["tid"]
-
-            // 获取缓存数据
-            @Suppress("UNCHECKED_CAST")
-            val data = com.github.catvod.spider.ProxyIPTV.getCacheData() as? Map<String, List<String>> ?: emptyMap()
-
-            val txt = StringBuilder()
-
-            // 如果指定了 tid，只返回该分组
-            if (tid != null && !tid.isEmpty()) {
-                val channels = data[tid]
-                appendTxtGroup(txt, tid, channels)
-            } else {
-                // 返回所有分组
-                for ((group, channels) in data) {
-                    appendTxtGroup(txt, group, channels)
-                }
-            }
-
-            val bytes = txt.toString().toByteArray(Charsets.UTF_8)
-            response.setContentType("text/plain; charset=utf-8")
-            response.setHeader("Content-Length", bytes.size.toString())
-            response.start()
-            response.write(bytes)
-        } catch (e: Exception) {
-            SpiderDebug.log("iptv route error: ${e.message}")
-            e.printStackTrace()
-            response.setContentType("text/plain; charset=utf-8")
-            response.setStatusCode(500)
-            response.start()
-            response.write("Error: ${e.message}".toByteArray(Charsets.UTF_8))
-        }
-    }
-
-    private fun appendTxtGroup(txt: StringBuilder, group: String?, channels: List<String>?) {
-        if (channels == null || channels.isEmpty()) return
-        txt.append(group).append(",#genre#\n")
-        for (line in channels) {
-            val item = line.replaceFirst("\\$", ",")
-            txt.append(item).append("\n")
-        }
     }
 
     private fun handleLogsRoute(req: AdvancedHttpServer.Request, response: AdvancedHttpServer.Response) {
