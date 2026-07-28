@@ -15,7 +15,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttp;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -24,6 +23,8 @@ import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.*;
 
 import okhttp3.OkHttpClient;
@@ -49,6 +50,7 @@ public class Czzyv extends Spider {
     private static OkHttpClient httpClient;
     private WebView webView;
     private FrameLayout container;
+    private boolean cookieReady = false;
 
     private void logger(String msg) {
         SpiderDebug.log("[Czzyv] " + msg);
@@ -57,7 +59,8 @@ public class Czzyv extends Spider {
     // 获取当前 Cookie（从 android.webkit.CookieManager）
     private String getCookie() {
         try {
-            return CookieManager.getInstance().getCookie(HOST);
+            String cookie = CookieManager.getInstance().getCookie(HOST);
+            return cookie;
         } catch (Exception e) {
             return null;
         }
@@ -77,17 +80,25 @@ public class Czzyv extends Spider {
             if (!TextUtils.isEmpty(referer)) {
                 builder.header("Referer", referer);
             }
-            // 手动添加 Cookie
+            
+            // 🔑 手动添加 Cookie（从 WebView 共享）
             String cookie = getCookie();
             if (!TextUtils.isEmpty(cookie)) {
                 builder.header("Cookie", cookie);
+                logger("🍪 携带 Cookie: " + cookie.substring(0, Math.min(50, cookie.length())) + "...");
+            } else {
+                logger("⚠️ 无 Cookie");
             }
+            
             try (Response response = httpClient.newCall(builder.build()).execute()) {
                 int code = response.code();
                 String body = response.body() != null ? response.body().string() : "";
                 logger("请求 " + url + " → 状态码: " + code + ", 长度: " + body.length());
                 if (code != 200) {
-                    logger("⚠️ 非200响应，可能被拦截，前200字符: " + (body.length() > 200 ? body.substring(0, 200) : body));
+                    logger("⚠️ 非200响应，可能被拦截");
+                    if (body.length() > 200) {
+                        logger("前200字符: " + body.substring(0, 200));
+                    }
                 }
                 return body;
             }
@@ -134,8 +145,52 @@ public class Czzyv extends Spider {
                 || lowerHtml.contains("waf");
     }
 
-    // 静默 WebView 验证
-    private void silentWAFVerify() {
+    // ---------- 生命周期 ----------
+    @Override
+    public void init(Context context, String extend) {
+        logger("🚀 初始化...");
+
+        // 初始化 OkHttpClient
+        httpClient = new OkHttpClient.Builder().build();
+
+        // 先尝试直接访问首页
+        String testHtml = get(HOST, "");
+        if (!isWAFBlocked(testHtml)) {
+            logger("✅ 无需验证，直接通过");
+            return;
+        }
+
+        logger("⚠️ 检测到雷池/CF 盾，启动静默验证...");
+        
+        // 使用 CountDownLatch 等待验证完成
+        CountDownLatch latch = new CountDownLatch(1);
+        
+        // 切换到主线程执行 WebView 操作
+        Init.run(() -> {
+            try {
+                startSilentWAFVerify(latch);
+            } catch (Exception e) {
+                logger("🚨 静默验证启动失败: " + e.getMessage());
+                e.printStackTrace();
+                latch.countDown();
+            }
+        });
+
+        // 等待 WebView 加载完成（最多 30 秒）
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                logger("⏰ WebView 加载超时（30秒）");
+            }
+        } catch (InterruptedException e) {
+            logger("等待被中断");
+        }
+
+        // 等待 Cookie 就绪（轮询检测）
+        waitForWAFCookie();
+    }
+
+    // 在主线程启动 WebView
+    private void startSilentWAFVerify(CountDownLatch latch) {
         try {
             container = new FrameLayout(Init.context());
             container.setBackgroundColor(android.graphics.Color.TRANSPARENT);
@@ -152,9 +207,13 @@ public class Czzyv extends Spider {
             webView.setAlpha(0f);
             webView.setVisibility(View.VISIBLE);
 
-            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1, 1);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+            );
             webView.setLayoutParams(params);
 
+            // 启用 Cookie
             CookieManager.getInstance().setAcceptCookie(true);
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
@@ -162,11 +221,15 @@ public class Czzyv extends Spider {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 页面加载完成: " + url);
+                    String cookie = getCookie();
+                    logger("📦 当前 Cookie: " + (cookie != null ? cookie : "null"));
+                    latch.countDown();
                 }
 
                 @Override
                 public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                     logger("🚨 WebView 错误: " + errorCode + " - " + description);
+                    latch.countDown();
                 }
             });
 
@@ -176,35 +239,55 @@ public class Czzyv extends Spider {
                 ViewGroup root = (ViewGroup) Init.getActivity().getWindow().getDecorView();
                 root.addView(container);
                 logger("👻 启动静默验证（透明 WebView）→ " + HOST);
+            } else {
+                logger("⚠️ 无法获取 Activity，使用 WebView 直接加载");
+                // 即使没有 Activity，也尝试加载
             }
 
             webView.loadUrl(HOST);
 
         } catch (Exception e) {
-            logger("🚨 静默验证启动失败: " + e.getMessage());
+            logger("🚨 启动 WebView 失败: " + e.getMessage());
+            e.printStackTrace();
+            latch.countDown();
         }
     }
 
-    // 等待验证 Cookie 就绪
+    // 轮询等待验证 Cookie 就绪
     private void waitForWAFCookie() {
         try {
             long start = System.currentTimeMillis();
-            while (System.currentTimeMillis() - start < 20000) {
+            int maxWait = 20; // 最多等 20 秒
+            
+            while (System.currentTimeMillis() - start < maxWait * 1000) {
                 String cookie = getCookie();
-                logger("当前 Cookie: " + (cookie != null ? cookie : "null"));
-                if (!TextUtils.isEmpty(cookie) &&
-                        (cookie.contains("cf_clearance") ||
-                                cookie.contains("雷池") ||
-                                cookie.contains("waf_verify") ||
-                                cookie.contains("_waf_captcha"))) {
-                    logger("✅ 验证 Cookie 已就绪");
-                    destroyWebView();
-                    return;
+                logger("🔍 轮询 Cookie (" + (System.currentTimeMillis() - start) / 1000 + "s): " + (cookie != null ? cookie.substring(0, Math.min(50, cookie.length())) + "..." : "null"));
+                
+                if (!TextUtils.isEmpty(cookie)) {
+                    // 检查是否有雷池验证凭证
+                    if (cookie.contains("sl-challenge-jwt") || 
+                        cookie.contains("sl_jwt_session") ||
+                        cookie.contains("cf_clearance") ||
+                        cookie.contains("waf_verify")) {
+                        logger("✅ 验证 Cookie 已就绪");
+                        cookieReady = true;
+                        destroyWebView();
+                        return;
+                    }
                 }
+                
                 Thread.sleep(500);
             }
-            logger("⏰ 等待验证 Cookie 超时，后续请求可能失败");
+            
+            logger("⏰ 等待验证 Cookie 超时（" + maxWait + "秒），后续请求可能失败");
             destroyWebView();
+            
+            // 即使超时，如果已经有 Cookie 也尝试继续
+            String finalCookie = getCookie();
+            if (!TextUtils.isEmpty(finalCookie)) {
+                logger("⚠️ 虽然有 Cookie 但可能未完成验证: " + finalCookie.substring(0, Math.min(50, finalCookie.length())));
+            }
+            
         } catch (Exception e) {
             logger("等待异常: " + e.getMessage());
         }
@@ -218,31 +301,13 @@ public class Czzyv extends Spider {
             }
             if (container != null) {
                 ViewGroup parent = (ViewGroup) container.getParent();
-                if (parent != null) parent.removeView(container);
+                if (parent != null) {
+                    parent.removeView(container);
+                }
                 container = null;
             }
             logger("🔒 WebView 已销毁");
         } catch (Exception ignored) {}
-    }
-
-    // ---------- 生命周期 ----------
-    @Override
-    public void init(Context context, String extend) {
-        logger("🚀 初始化...");
-
-        // 初始化 OkHttpClient（默认）
-        httpClient = new OkHttpClient.Builder().build();
-
-        // 测试首页是否需要验证
-        String testHtml = get(HOST, "");
-        if (!isWAFBlocked(testHtml)) {
-            logger("✅ 无需验证，直接通过，首页内容长度: " + testHtml.length());
-            return;
-        }
-
-        logger("⚠️ 检测到雷池/CF 盾，启动静默验证...");
-        silentWAFVerify();
-        waitForWAFCookie();
     }
 
     // ---------- 首页分类 ----------
