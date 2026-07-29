@@ -13,13 +13,10 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.net.URL;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -108,9 +105,9 @@ public class PPnix extends Spider {
             }
         }
 
-        int count = videos.size() > 0 ? page + 1 : page; // 简单估算总页数
+        int count = videos.size() > 0 ? page + 1 : page;
         int limit = videos.size();
-        int total = 0; // 0 会被框架规范化为 Integer.MAX_VALUE，表示未知
+        int total = 0;
 
         return Result.get()
                 .vod(videos)
@@ -157,7 +154,7 @@ public class PPnix extends Spider {
             if (pic.startsWith("/")) pic = host + pic;
         }
 
-        // 导演、演员、地区、简介 (Jsoup 不支持 :contains 选择器，手动遍历)
+        // 导演、演员、地区、简介
         String director = "";
         String actor = "";
         String area = "";
@@ -232,7 +229,6 @@ public class PPnix extends Spider {
         vod.setVodArea(area);
         vod.setVodYear(year);
         vod.setVodRemarks(year.isEmpty() ? "" : year + "年");
-        // 注意：上述 setter 均为常见字段，实际以项目 Vod.java 为准，缺失字段请对照调整
 
         return Result.get().vod(vod).string();
     }
@@ -252,20 +248,7 @@ public class PPnix extends Spider {
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String m3u8Url = id.startsWith("http") ? id : host + id;
 
-        // 模拟 Service Worker 域名替换
-        try {
-            URL urlObj = new URL(m3u8Url);
-            String hostName = urlObj.getHost();
-            if (hostName.contains("ipfs.ppnix.com")) {
-                int randNum = new Random().nextInt(16) + 1;
-                String newHost = randNum + ".ppnix.com";
-                m3u8Url = m3u8Url.replace(hostName, newHost);
-            }
-        } catch (Exception e) {
-            // 解析失败则保持原样
-        }
-
-        // 构造 Referer 和 Origin
+        // 构造更合理的 Referer
         String referer = host + "/";
         String origin = host;
         Matcher m = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
@@ -274,13 +257,26 @@ public class PPnix extends Spider {
             referer = host + "/cn/tv/" + infoid + ".html";
         }
 
+        // 实时预请求 key（防止密钥变更，同时让 key 进入缓存）
+        try {
+            Map<String, String> keyHeaders = new HashMap<>(baseHeaders);
+            keyHeaders.put("Referer", host + "/");
+            keyHeaders.put("Origin", host);
+            OkHttp.string(host + "/info/m3u8/key", keyHeaders);
+        } catch (Exception e) {
+            // 忽略，不影响主流程
+        }
+
+        // 构造请求头
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", commonUa);
         headers.put("Referer", referer);
         headers.put("Origin", origin);
         headers.put("Accept", "*/*");
-        // 不设置 Accept-Encoding，由 OkHttp 自动处理解压
 
-        return Result.get().url(m3u8Url).header(headers).string();
+        return Result.get()
+                .url(m3u8Url)
+                .header(headers)
+                .string();
     }
 }
