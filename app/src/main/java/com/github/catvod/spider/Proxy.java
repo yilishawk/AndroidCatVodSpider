@@ -182,11 +182,20 @@ public class Proxy {
                 return errorResponse(500, "key empty");
             }
             keyHex = keyHex.trim();
+
+            if (isCloudflareChallenge(keyHex)) {
+                log("🛡️ ppnixKey 疑似被 Cloudflare 拦截（返回的是挑战页而非 key），前200字符: "
+                        + keyHex.substring(0, Math.min(200, keyHex.length())));
+                return errorResponse(403, "blocked by cloudflare challenge");
+            }
+
             log("🔑 获取到 key hex: " + keyHex);
 
             byte[] keyBytes = hexStringToByteArray(keyHex);
             if (keyBytes == null || keyBytes.length != 16) {
-                log("❌ key 长度不正确: " + (keyBytes == null ? 0 : keyBytes.length));
+                log("❌ key 长度不正确: " + (keyBytes == null ? 0 : keyBytes.length)
+                        + "，原始内容长度=" + keyHex.length()
+                        + "，前200字符: " + keyHex.substring(0, Math.min(200, keyHex.length())));
                 return errorResponse(500, "invalid key length");
             }
 
@@ -195,6 +204,22 @@ public class Proxy {
             log("❌ ppnixKey 失败: " + e.getMessage());
             return errorResponse(500, e.getMessage());
         }
+    }
+
+    /**
+     * 粗略判断响应是否为 Cloudflare（或类似 WAF）的 JS 挑战页，而不是期望的十六进制 key。
+     * 判断依据：非纯十六进制字符 且 命中常见挑战页关键词。
+     */
+    private static boolean isCloudflareChallenge(String content) {
+        if (content == null || content.isEmpty()) return false;
+        if (content.matches("^[0-9a-fA-F]+$")) return false; // 纯十六进制，正常 key，直接放行
+        String lower = content.toLowerCase();
+        return lower.contains("cf-browser-verification")
+                || lower.contains("just a moment")
+                || lower.contains("checking your browser")
+                || lower.contains("challenge-platform")
+                || lower.contains("cf-chl")
+                || lower.contains("<html");
     }
 
     private static byte[] hexStringToByteArray(String hex) {
