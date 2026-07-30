@@ -13,6 +13,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -26,14 +27,13 @@ public class PPnix extends Spider {
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     private Map<String, String> baseHeaders;
 
-    private boolean unlocked = false; // 密码是否验证通过
+    private boolean unlocked = false;
 
     @Override
     public void init(android.content.Context context, String extend) throws Exception {
         baseHeaders = new HashMap<>();
         baseHeaders.put("User-Agent", commonUa);
         baseHeaders.put("Referer", host + "/");
-        // 注意：不设置 Accept-Encoding，避免 OkHttp 自动解压失效
 
         unlocked = PasswordGate.ensureUnlocked(context);
         if (!unlocked) {
@@ -131,7 +131,6 @@ public class PPnix extends Spider {
 
         Document doc = Jsoup.parse(html);
 
-        // 标题与年份
         Element titleElem = doc.selectFirst("h1.product-title");
         String name = "";
         String year = "";
@@ -146,7 +145,6 @@ public class PPnix extends Spider {
             }
         }
 
-        // 封面
         Element picElem = doc.selectFirst(".product-header img.thumb");
         String pic = "";
         if (picElem != null) {
@@ -154,7 +152,6 @@ public class PPnix extends Spider {
             if (pic.startsWith("/")) pic = host + pic;
         }
 
-        // 导演、演员、地区、简介
         String director = "";
         String actor = "";
         String area = "";
@@ -184,7 +181,6 @@ public class PPnix extends Spider {
             }
         }
 
-        // 从 script 提取 infoid 和 m3u8 数组
         String infoid = null;
         List<String> episodeNumbers = new ArrayList<>();
         for (Element script : doc.select("script")) {
@@ -237,7 +233,6 @@ public class PPnix extends Spider {
     public String searchContent(String key, boolean quick) throws Exception {
         if (!unlocked) return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
 
-        // 未实现搜索，返回空列表
         return Result.get()
                 .vod(new ArrayList<>())
                 .page(1, 1, 0, 0)
@@ -248,34 +243,23 @@ public class PPnix extends Spider {
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String m3u8Url = id.startsWith("http") ? id : host + id;
 
-        // 构造更合理的 Referer
         String referer = host + "/";
-        String origin = host;
         Matcher m = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
         if (m.find()) {
-            String infoid = m.group(1);
-            referer = host + "/cn/tv/" + infoid + ".html";
+            referer = host + "/cn/tv/" + m.group(1) + ".html";
         }
 
-        // 实时预请求 key（防止密钥变更，同时让 key 进入缓存）
-        try {
-            Map<String, String> keyHeaders = new HashMap<>(baseHeaders);
-            keyHeaders.put("Referer", host + "/");
-            keyHeaders.put("Origin", host);
-            OkHttp.string(host + "/info/m3u8/key", keyHeaders);
-        } catch (Exception e) {
-            // 忽略，不影响主流程
-        }
-
-        // 构造请求头
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", commonUa);
         headers.put("Referer", referer);
-        headers.put("Origin", origin);
+        headers.put("Origin", host);
         headers.put("Accept", "*/*");
 
+        // 走本地代理，由代理负责改写 KEY + hex 转二进制
+        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + URLEncoder.encode(m3u8Url, "UTF-8");
+
         return Result.get()
-                .url(m3u8Url)
+                .url(proxyUrl)
                 .header(headers)
                 .string();
     }
