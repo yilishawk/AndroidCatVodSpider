@@ -39,7 +39,6 @@ public class Czzyv extends Spider {
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     private static WebView sharedWebView;
-    private static final Object webViewLock = new Object();
 
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
 
@@ -77,12 +76,11 @@ public class Czzyv extends Spider {
         return headers;
     }
 
-    // 更严格的盾检测，减少误判
+    // 更严格的盾检测 + 评分制
     private boolean isWAFBlocked(String html) {
-        if (TextUtils.isEmpty(html) || html.length() < 500) return true;
+        if (TextUtils.isEmpty(html) || html.length() < 800) return true;
         String lower = html.toLowerCase();
 
-        // 强特征（同时出现多个才判定为盾）
         int score = 0;
         if (lower.contains("cf-browser-verification")) score += 2;
         if (lower.contains("just a moment")) score += 2;
@@ -92,6 +90,8 @@ public class Czzyv extends Spider {
         if (lower.contains("验证中心")) score += 2;
         if (lower.contains("window._cf_chl_opt")) score += 2;
         if (lower.contains("managed_checking_msg")) score += 1;
+        if (lower.contains("cf-challenge")) score += 2;
+        if (lower.contains("turnstile")) score += 2;
 
         return score >= 2;
     }
@@ -153,7 +153,7 @@ public class Czzyv extends Spider {
     }
 
     /**
-     * 核心：用 WebView 真实导航页面，然后提取 outerHTML（比纯 fetch 更抗盾）
+     * 用 WebView 真实导航页面，然后提取 outerHTML
      */
     private String getViaWebView(String targetUrl, String referer) {
         initSharedWebView();
@@ -168,13 +168,12 @@ public class Czzyv extends Spider {
                 return;
             }
 
-            // 临时替换 WebViewClient 来监听这次导航
             sharedWebView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 目标页加载完成: " + url);
 
-                    // 再额外等一会，让可能的挑战脚本跑完
+                    // 额外等待，给挑战脚本时间
                     view.postDelayed(() -> {
                         if (finished.get()) return;
                         view.evaluateJavascript(
@@ -205,7 +204,7 @@ public class Czzyv extends Spider {
                                         latch.countDown();
                                     }
                                 });
-                    }, 1800); // 额外等待 1.8 秒给挑战脚本
+                    }, 2500); // 等待 2.5 秒
                 }
             });
 
@@ -214,14 +213,14 @@ public class Czzyv extends Spider {
         });
 
         try {
-            boolean ok = latch.await(20, TimeUnit.SECONDS);
+            boolean ok = latch.await(22, TimeUnit.SECONDS);
             if (!ok) {
                 logger("⏰ WebView 导航总超时");
             }
         } catch (InterruptedException ignored) {
         }
 
-        // 恢复一个简单的 WebViewClient
+        // 恢复简单 WebViewClient
         Init.run(() -> {
             if (sharedWebView != null) {
                 sharedWebView.setWebViewClient(new WebViewClient() {
@@ -254,6 +253,11 @@ public class Czzyv extends Spider {
                 logger("❌ WebView 代理返回空数据");
             } else if (isWAFBlocked(html)) {
                 logger("❌ WebView 返回内容仍被判定为盾页面（长度: " + html.length() + "）");
+
+                // 打印前 400 字符预览，方便判断真盾还是误判
+                String preview = html.length() > 400 ? html.substring(0, 400) : html;
+                preview = preview.replace("\n", " ").replace("\r", " ");
+                logger("📄 内容预览: " + preview);
             } else {
                 logger("✅ WebView 代理成功，数据长度: " + html.length());
             }
@@ -313,9 +317,9 @@ public class Czzyv extends Spider {
         logger("🚀 初始化 Spider 插件...");
         initSharedWebView();
 
-        // 给 WebView 一点时间先加载首页过盾
+        // 给 WebView 时间先加载首页
         try {
-            Thread.sleep(2500);
+            Thread.sleep(3000);
         } catch (InterruptedException ignored) {
         }
 
