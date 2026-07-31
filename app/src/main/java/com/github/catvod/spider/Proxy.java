@@ -52,6 +52,7 @@ public class Proxy {
         log("📨 [Proxy] 收到请求: " + params);
         if ("getPoster".equals(action)) return handleGetPoster(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
+        if ("proxySegment".equals(action)) return handleProxySegment(params);
         if ("ppnixKey".equals(action)) return handlePpnixKey(params);
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
@@ -134,8 +135,8 @@ public class Proxy {
                 return errorResponse(500, "m3u8 empty");
             }
 
-            // 替换 IPFS 域名
-            content = replacePpnixDomain(content);
+            // 分片地址改为经本地代理转发，代理内部会在多个编号域名间自动重试
+            content = proxifySegments(content);
 
             // 把 KEY 指向本地二进制转换接口
             String localKeyUrl = getUrl() + "?do=ppnixKey";
@@ -143,7 +144,7 @@ public class Proxy {
             content = content.replace("URI='../key'", "URI=\"" + localKeyUrl + "\"");
             content = content.replace("URI=\"https://www.ppnix.com/info/m3u8/key\"", "URI=\"" + localKeyUrl + "\"");
 
-            log("✅ proxyM3u8 处理完成，KEY 已指向本地二进制接口");
+            log("✅ proxyM3u8 处理完成，分片已指向本地代理，KEY 已指向本地二进制接口");
 
             byte[] bytes = content.getBytes("UTF-8");
             return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
@@ -153,18 +154,89 @@ public class Proxy {
         }
     }
 
-    private static String replacePpnixDomain(String m3u8Content) {
+    /**
+     * 把 m3u8 里 ipfs.ppnix.com 的分片地址，改写成指向本地 do=proxySegment 接口，
+     * 由服务端在多个编号域名（1-16.ppnix.com）间自动重试，规避单一网关变慢/跳转导致的超时。
+     */
+    private static String proxifySegments(String m3u8Content) {
         if (m3u8Content == null || !m3u8Content.contains("ipfs.ppnix.com")) return m3u8Content;
         Pattern pattern = Pattern.compile("(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)");
         Matcher matcher = pattern.matcher(m3u8Content);
         StringBuffer out = new StringBuffer();
-        while (matcher.find()) {
-            int randomNum = (int) (Math.random() * 16) + 1;
-            String replacement = matcher.group(1) + randomNum + ".ppnix.com" + matcher.group(2);
-            matcher.appendReplacement(out, replacement);
+        try {
+            while (matcher.find()) {
+                int randomNum = (int) (Math.random() * 16) + 1;
+                String candidateUrl = matcher.group(1) + randomNum + ".ppnix.com" + matcher.group(2);
+                String proxied = getUrl() + "?do=proxySegment&url=" + URLEncoder.encode(candidateUrl, "UTF-8");
+                matcher.appendReplacement(out, Matcher.quoteReplacement(proxied));
+            }
+            matcher.appendTail(out);
+        } catch (Exception e) {
+            log("❌ proxifySegments 失败，回退为原始内容: " + e.getMessage());
+            return m3u8Content;
         }
-        matcher.appendTail(out);
         return out.toString();
+    }
+
+    // ====================== 分片代理（多编号域名自动重试） ======================
+    private static Object[] handleProxySegment(Map<String, String> params) {
+        String url = params.get("url");
+        if (url == null) return errorResponse(400, "Missing url");
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Referer", "https://www.ppnix.com/");
+        headers.put("Origin", "https://www.ppnix.com");
+        headers.put("Accept", "*/*");
+
+        for (String candidate : buildSegmentCandidates(url)) {
+            try {
+                okhttp3.Response resp = OkHttp.newCall(candidate, headers);
+                if (resp == null || resp.body() == null) continue;
+                if (!resp.isSuccessful()) {
+                    log("⚠️ 分片候选失败 (状态码 " + resp.code() + "): " + candidate);
+                    continue;
+                }
+                String contentType = resp.header("Content-Type", "video/mp2t");
+                log("✅ 分片命中: " + candidate);
+                return new Object[]{200, contentType, resp.body().byteStream()};
+            } catch (Exception e) {
+                log("⚠️ 分片候选异常，换下一个域名重试: " + candidate + " → " + e.getMessage());
+            }
+        }
+
+        log("❌ 分片所有候选域名均失败: " + url);
+        return errorResponse(502, "all segment candidates failed");
+    }
+
+    /**
+     * 根据原始分片 URL（形如 https://N.ppnix.com/ipfs/xxx），构造重试候选列表：
+     * 1. 原始 URL 本身（保留站点自己的负载均衡选择）
+     * 2. 其余 1-16 编号域名，随机顺序
+     * 3. 最后兜底用 ipfs.ppnix.com 直连
+     */
+    private static java.util.List<String> buildSegmentCandidates(String originalUrl) {
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        candidates.add(originalUrl);
+
+        Pattern hostPattern = Pattern.compile("(https?://)[\\w.-]+\\.ppnix\\.com(/.*)");
+        Matcher m = hostPattern.matcher(originalUrl);
+        if (!m.matches()) {
+            return candidates;
+        }
+        String scheme = m.group(1);
+        String path = m.group(2);
+
+        java.util.List<Integer> nums = new java.util.ArrayList<>();
+        for (int i = 1; i <= 16; i++) nums.add(i);
+        java.util.Collections.shuffle(nums);
+        for (int n : nums) {
+            String candidate = scheme + n + ".ppnix.com" + path;
+            if (!candidate.equals(originalUrl)) candidates.add(candidate);
+        }
+
+        candidates.add(scheme + "ipfs.ppnix.com" + path);
+        return candidates;
     }
 
     // ====================== PPnix AES Key 转换（hex → 二进制） ======================
