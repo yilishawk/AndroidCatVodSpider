@@ -76,7 +76,7 @@ public class Czzyv extends Spider {
         return headers;
     }
 
-    // 更严格的盾检测 + 评分制
+    // 更严格的盾检测+ 评分制
     private boolean isWAFBlocked(String html) {
         if (TextUtils.isEmpty(html) || html.length() < 800) return true;
         String lower = html.toLowerCase();
