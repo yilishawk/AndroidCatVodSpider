@@ -76,7 +76,6 @@ public class Czzyv extends Spider {
         return headers;
     }
 
-    // 更严格的盾检测+ 评分制
     private boolean isWAFBlocked(String html) {
         if (TextUtils.isEmpty(html) || html.length() < 800) return true;
         String lower = html.toLowerCase();
@@ -92,6 +91,8 @@ public class Czzyv extends Spider {
         if (lower.contains("managed_checking_msg")) score += 1;
         if (lower.contains("cf-challenge")) score += 2;
         if (lower.contains("turnstile")) score += 2;
+        if (lower.contains("safeline")) score += 2;
+        if (lower.contains("/.safeline/")) score += 2;
 
         return score >= 2;
     }
@@ -152,9 +153,6 @@ public class Czzyv extends Spider {
         });
     }
 
-    /**
-     * 用 WebView 真实导航页面，然后提取 outerHTML
-     */
     private String getViaWebView(String targetUrl, String referer) {
         initSharedWebView();
         final String[] result = {""};
@@ -173,7 +171,6 @@ public class Czzyv extends Spider {
                 public void onPageFinished(WebView view, String url) {
                     logger("🌐 目标页加载完成: " + url);
 
-                    // 额外等待，给挑战脚本时间
                     view.postDelayed(() -> {
                         if (finished.get()) return;
                         view.evaluateJavascript(
@@ -204,7 +201,7 @@ public class Czzyv extends Spider {
                                         latch.countDown();
                                     }
                                 });
-                    }, 2500); // 等待 2.5 秒
+                    }, 2500);
                 }
             });
 
@@ -220,7 +217,6 @@ public class Czzyv extends Spider {
         } catch (InterruptedException ignored) {
         }
 
-        // 恢复简单 WebViewClient
         Init.run(() -> {
             if (sharedWebView != null) {
                 sharedWebView.setWebViewClient(new WebViewClient() {
@@ -253,8 +249,6 @@ public class Czzyv extends Spider {
                 logger("❌ WebView 代理返回空数据");
             } else if (isWAFBlocked(html)) {
                 logger("❌ WebView 返回内容仍被判定为盾页面（长度: " + html.length() + "）");
-
-                // 打印前 400 字符预览，方便判断真盾还是误判
                 String preview = html.length() > 400 ? html.substring(0, 400) : html;
                 preview = preview.replace("\n", " ").replace("\r", " ");
                 logger("📄 内容预览: " + preview);
@@ -264,10 +258,6 @@ public class Czzyv extends Spider {
         }
         return html;
     }
-
-    // ──────────────────────────────────────────────
-    // 视频地址提取
-    // ──────────────────────────────────────────────
 
     private String extractMysvgValue(String html) {
         if (TextUtils.isEmpty(html)) return null;
@@ -308,16 +298,11 @@ public class Czzyv extends Spider {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // 生命周期
-    // ──────────────────────────────────────────────
-
     @Override
     public void init(Context context, String extend) {
         logger("🚀 初始化 Spider 插件...");
         initSharedWebView();
 
-        // 给 WebView 时间先加载首页
         try {
             Thread.sleep(3000);
         } catch (InterruptedException ignored) {
@@ -330,10 +315,6 @@ public class Czzyv extends Spider {
             logger("⚠️ 仍收到盾页面，后续请求将优先走 WebView 导航");
         }
     }
-
-    // ──────────────────────────────────────────────
-    // 业务接口
-    // ──────────────────────────────────────────────
 
     @Override
     public String homeContent(boolean filter) {
@@ -489,6 +470,7 @@ public class Czzyv extends Spider {
 
             logger("解析成功，真实视频地址: " + videoUrl);
 
+            // 已去掉 Referer，只保留 UA 和 Origin
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Origin", HOST);
