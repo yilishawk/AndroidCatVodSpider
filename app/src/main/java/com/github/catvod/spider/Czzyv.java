@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,10 +38,9 @@ public class Czzyv extends Spider {
     private static final String HOST = "https://czzy.top";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-    // 后台驻留的 WebView 实例（用于绕过雷池/CF 并代理请求）
     private static WebView sharedWebView;
+    private static final Object webViewLock = new Object();
 
-    // 分类映射（国产剧排第一）
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
 
     static {
@@ -67,7 +67,6 @@ public class Czzyv extends Spider {
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
 
-        // 将 WebView 刷出的 Cookie 实时同步给 OkHttp
         try {
             String cookie = CookieManager.getInstance().getCookie(HOST);
             if (!TextUtils.isEmpty(cookie)) {
@@ -75,29 +74,28 @@ public class Czzyv extends Spider {
             }
         } catch (Exception ignored) {
         }
-
         return headers;
     }
 
-    // ──────────────────────────────────────────────
-    // 雷池/CF 绕过与请求代理的核心
-    // ──────────────────────────────────────────────
-
+    // 更严格的盾检测，减少误判
     private boolean isWAFBlocked(String html) {
-        if (TextUtils.isEmpty(html)) return true;
-        String lowerHtml = html.toLowerCase();
-        return lowerHtml.contains("cf-browser-verification")
-                || lowerHtml.contains("just a moment")
-                || lowerHtml.contains("checking your browser")
-                || lowerHtml.contains("challenge-platform")
-                || lowerHtml.contains("雷池")
-                || lowerHtml.contains("验证中心")
-                || lowerHtml.contains("waf");
+        if (TextUtils.isEmpty(html) || html.length() < 500) return true;
+        String lower = html.toLowerCase();
+
+        // 强特征（同时出现多个才判定为盾）
+        int score = 0;
+        if (lower.contains("cf-browser-verification")) score += 2;
+        if (lower.contains("just a moment")) score += 2;
+        if (lower.contains("checking your browser")) score += 2;
+        if (lower.contains("challenge-platform")) score += 2;
+        if (lower.contains("雷池")) score += 2;
+        if (lower.contains("验证中心")) score += 2;
+        if (lower.contains("window._cf_chl_opt")) score += 2;
+        if (lower.contains("managed_checking_msg")) score += 1;
+
+        return score >= 2;
     }
 
-    /**
-     * 初始化共享的后台透明 WebView
-     */
     private void initSharedWebView() {
         if (sharedWebView != null) return;
 
@@ -115,11 +113,11 @@ public class Czzyv extends Spider {
                 settings.setLoadWithOverviewMode(true);
                 settings.setUseWideViewPort(true);
                 settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
                 sharedWebView.setAlpha(0.01f);
                 sharedWebView.setVisibility(View.VISIBLE);
-                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1, 1);
-                sharedWebView.setLayoutParams(params);
+                sharedWebView.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
 
                 CookieManager cookieManager = CookieManager.getInstance();
                 cookieManager.setAcceptCookie(true);
@@ -128,11 +126,8 @@ public class Czzyv extends Spider {
                 sharedWebView.setWebViewClient(new WebViewClient() {
                     @Override
                     public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                        super.onPageStarted(view, url, favicon);
-                        // 抹去 Android 原生 WebView 特征
                         view.evaluateJavascript(
-                                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});", null
-                        );
+                                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});", null);
                     }
 
                     @Override
@@ -145,7 +140,6 @@ public class Czzyv extends Spider {
                 });
 
                 container.addView(sharedWebView);
-
                 if (Init.getActivity() != null) {
                     ViewGroup root = (ViewGroup) Init.getActivity().getWindow().getDecorView();
                     root.addView(container);
@@ -159,115 +153,91 @@ public class Czzyv extends Spider {
     }
 
     /**
-     * 当 OkHttp 被阻断时，直接让 WebView 在后台发起 JS Fetch 请求（加强版）
+     * 核心：用 WebView 真实导航页面，然后提取 outerHTML（比纯 fetch 更抗盾）
      */
     private String getViaWebView(String targetUrl, String referer) {
         initSharedWebView();
         final String[] result = {""};
         final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicBoolean finished = new AtomicBoolean(false);
 
         Init.run(() -> {
             if (sharedWebView == null) {
-                logger("WebView 实例为空，无法代理");
+                logger("WebView 实例为空");
                 latch.countDown();
                 return;
             }
 
-            // 清空旧结果
-            sharedWebView.evaluateJavascript("window.androidResult = null;", null);
-
-            String ref = TextUtils.isEmpty(referer) ? HOST + "/" : referer;
-
-            String js = "(function() {" +
-                    "  window.androidResult = null;" +
-                    "  fetch('" + targetUrl.replace("'", "\\'") + "', {" +
-                    "    method: 'GET'," +
-                    "    headers: {" +
-                    "      'Referer': '" + ref.replace("'", "\\'") + "'," +
-                    "      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'," +
-                    "      'Accept-Language': 'zh-CN,zh;q=0.9'" +
-                    "    }," +
-                    "    credentials: 'include'" +
-                    "  })" +
-                    "  .then(function(res) { return res.text(); })" +
-                    "  .then(function(text) { window.androidResult = text; })" +
-                    "  .catch(function(err) { window.androidResult = 'ERROR:' + err; });" +
-                    "})();";
-
-            sharedWebView.evaluateJavascript(js, null);
-
-            android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
-            final int maxAttempts = 40; // 40 * 300ms ≈ 12 秒
-
-            Runnable checkRunnable = new Runnable() {
-                int attempts = 0;
-
+            // 临时替换 WebViewClient 来监听这次导航
+            sharedWebView.setWebViewClient(new WebViewClient() {
                 @Override
-                public void run() {
-                    attempts++;
-                    if (sharedWebView == null) {
-                        latch.countDown();
-                        return;
-                    }
+                public void onPageFinished(WebView view, String url) {
+                    logger("🌐 目标页加载完成: " + url);
 
-                    sharedWebView.evaluateJavascript(
-                            "(function(){ return window.androidResult; })();",
-                            value -> {
-                                try {
-                                    if (value != null && !value.equals("null") && !value.equals("\"\"") && value.length() > 10) {
-                                        String res = value;
-                                        if (res.startsWith("\"") && res.endsWith("\"")) {
-                                            res = res.substring(1, res.length() - 1);
-                                        }
-                                        // 更完整的反转义
-                                        res = res.replace("\\\"", "\"")
-                                                .replace("\\n", "\n")
-                                                .replace("\\r", "\r")
-                                                .replace("\\t", "\t")
-                                                .replace("\\\\", "\\")
-                                                .replace("\\/", "/");
+                    // 再额外等一会，让可能的挑战脚本跑完
+                    view.postDelayed(() -> {
+                        if (finished.get()) return;
+                        view.evaluateJavascript(
+                                "(function(){ return document.documentElement.outerHTML; })();",
+                                value -> {
+                                    try {
+                                        if (value != null && value.length() > 100) {
+                                            String res = value;
+                                            if (res.startsWith("\"") && res.endsWith("\"")) {
+                                                res = res.substring(1, res.length() - 1);
+                                            }
+                                            res = res.replace("\\\"", "\"")
+                                                    .replace("\\n", "\n")
+                                                    .replace("\\r", "\r")
+                                                    .replace("\\t", "\t")
+                                                    .replace("\\\\", "\\")
+                                                    .replace("\\/", "/");
 
-                                        if (res.startsWith("ERROR:")) {
-                                            logger("WebView fetch 出错: " + res);
-                                            result[0] = "";
-                                        } else {
                                             result[0] = res;
-                                            logger("WebView 成功返回数据，长度: " + res.length());
+                                            logger("WebView 导航提取成功，长度: " + res.length());
+                                        } else {
+                                            logger("outerHTML 为空");
                                         }
-                                        latch.countDown();
-                                    } else if (attempts < maxAttempts) {
-                                        handler.postDelayed(this, 300);
-                                    } else {
-                                        logger("⏰ WebView fetch 超时（已等待约12秒）");
+                                    } catch (Exception e) {
+                                        logger("解析 outerHTML 异常: " + e.getMessage());
+                                    } finally {
+                                        finished.set(true);
                                         latch.countDown();
                                     }
-                                } catch (Exception e) {
-                                    logger("解析 WebView 返回值异常: " + e.getMessage());
-                                    latch.countDown();
-                                }
-                            }
-                    );
+                                });
+                    }, 1800); // 额外等待 1.8 秒给挑战脚本
                 }
-            };
+            });
 
-            // 稍微延迟启动轮询，给 fetch 一点时间
-            handler.postDelayed(checkRunnable, 400);
+            logger("开始 WebView 导航: " + targetUrl);
+            sharedWebView.loadUrl(targetUrl);
         });
 
         try {
-            boolean finished = latch.await(15, TimeUnit.SECONDS);
-            if (!finished) {
-                logger("⏰ CountDownLatch 总超时");
+            boolean ok = latch.await(20, TimeUnit.SECONDS);
+            if (!ok) {
+                logger("⏰ WebView 导航总超时");
             }
         } catch (InterruptedException ignored) {
         }
 
+        // 恢复一个简单的 WebViewClient
+        Init.run(() -> {
+            if (sharedWebView != null) {
+                sharedWebView.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView view, String url) {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                            CookieManager.getInstance().flush();
+                        }
+                    }
+                });
+            }
+        });
+
         return result[0] != null ? result[0] : "";
     }
 
-    /**
-     * 统一网络请求入口：自动检测并无缝切换
-     */
     private String get(String url, String referer) {
         String html = "";
         try {
@@ -277,13 +247,13 @@ public class Czzyv extends Spider {
         }
 
         if (isWAFBlocked(html)) {
-            logger("⚠️ OkHttp 被拦截，启动 WebView JS 代理获取: " + url);
+            logger("⚠️ OkHttp 被拦截，启动 WebView 导航代理: " + url);
             html = getViaWebView(url, referer);
 
             if (TextUtils.isEmpty(html)) {
-                logger("❌ WebView 代理也返回空数据");
+                logger("❌ WebView 代理返回空数据");
             } else if (isWAFBlocked(html)) {
-                logger("❌ WebView 返回的内容仍然是盾页面");
+                logger("❌ WebView 返回内容仍被判定为盾页面（长度: " + html.length() + "）");
             } else {
                 logger("✅ WebView 代理成功，数据长度: " + html.length());
             }
@@ -292,18 +262,14 @@ public class Czzyv extends Spider {
     }
 
     // ──────────────────────────────────────────────
-    // 视频播放与地址提取
+    // 视频地址提取
     // ──────────────────────────────────────────────
 
     private String extractMysvgValue(String html) {
         if (TextUtils.isEmpty(html)) return null;
-
-        Pattern mysvgPattern = Pattern.compile("const\\s+mysvg\\s*=\\s*['\"]([^'\"]+)['\"]");
-        Matcher mysvgMatcher = mysvgPattern.matcher(html);
-        if (mysvgMatcher.find()) {
-            return mysvgMatcher.group(1);
-        }
-        return null;
+        Pattern p = Pattern.compile("const\\s+mysvg\\s*=\\s*['\"]([^'\"]+)['\"]");
+        Matcher m = p.matcher(html);
+        return m.find() ? m.group(1) : null;
     }
 
     private String extractVideoUrlFromPlayPage(String playUrl) {
@@ -317,10 +283,7 @@ public class Czzyv extends Spider {
             if (iframeMatcher.find()) {
                 String iframeUrl = iframeMatcher.group(1);
                 logger("iframe URL: " + iframeUrl);
-
-                if (iframeUrl.startsWith("/")) {
-                    iframeUrl = HOST + iframeUrl;
-                }
+                if (iframeUrl.startsWith("/")) iframeUrl = HOST + iframeUrl;
 
                 String iframeHtml = get(iframeUrl, playUrl);
                 if (TextUtils.isEmpty(iframeHtml)) {
@@ -348,20 +311,24 @@ public class Czzyv extends Spider {
     @Override
     public void init(Context context, String extend) {
         logger("🚀 初始化 Spider 插件...");
-
-        // 预载初始化 WebView 引擎
         initSharedWebView();
+
+        // 给 WebView 一点时间先加载首页过盾
+        try {
+            Thread.sleep(2500);
+        } catch (InterruptedException ignored) {
+        }
 
         String testHtml = get(HOST, "");
         if (!isWAFBlocked(testHtml)) {
             logger("✅ 站点通畅，雷池/CF 验证通过");
         } else {
-            logger("⚠️ 收到盾页面拦截，将在后台尝试自动刷新 Session...");
+            logger("⚠️ 仍收到盾页面，后续请求将优先走 WebView 导航");
         }
     }
 
     // ──────────────────────────────────────────────
-    // 业务接口（首页/分类/详情/播放/搜索）
+    // 业务接口
     // ──────────────────────────────────────────────
 
     @Override
@@ -381,7 +348,9 @@ public class Czzyv extends Spider {
 
             logger("分类请求: " + tid + " 页码: " + page + " → " + url);
             String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) return Result.string(new ArrayList<>());
+            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) {
+                return Result.string(new ArrayList<>());
+            }
 
             Document doc = Jsoup.parse(html);
             Elements items = doc.select(".bt_img ul li");
@@ -393,7 +362,6 @@ public class Czzyv extends Spider {
 
                 String href = link.attr("href");
                 if (TextUtils.isEmpty(href)) continue;
-
                 String vodId = href.replace(HOST, "");
 
                 Element img = link.selectFirst("img");
@@ -415,7 +383,6 @@ public class Czzyv extends Spider {
                 vod.setVodRemarks(remarks);
                 list.add(vod);
             }
-
             return Result.string(list);
         } catch (Exception e) {
             logger("分类解析异常: " + e.getMessage());
@@ -431,7 +398,9 @@ public class Czzyv extends Spider {
 
             logger("详情页请求: " + url);
             String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) return Result.string(new ArrayList<>());
+            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) {
+                return Result.string(new ArrayList<>());
+            }
 
             Document doc = Jsoup.parse(html);
 
@@ -476,9 +445,7 @@ public class Czzyv extends Spider {
             List<String> playUrls = new ArrayList<>();
             Elements playLinks = doc.select(".paly_list_btn a");
             for (Element link : playLinks) {
-                String playHref = link.attr("href");
-                String episodeName = link.text();
-                playUrls.add(episodeName + "$" + playHref);
+                playUrls.add(link.text() + "$" + link.attr("href"));
             }
 
             Vod vod = new Vod();
@@ -496,7 +463,6 @@ public class Czzyv extends Spider {
                 vod.setVodPlayFrom("橙子影视");
                 vod.setVodPlayUrl(TextUtils.join("#", playUrls));
             }
-
             return Result.string(vod);
         } catch (Exception e) {
             logger("详情解析异常: " + e.getMessage());
@@ -513,7 +479,7 @@ public class Czzyv extends Spider {
             String videoUrl = extractVideoUrlFromPlayPage(playUrl);
 
             if (TextUtils.isEmpty(videoUrl)) {
-                logger("未能拦截提取到视频直链，交由播放器嗅探");
+                logger("未能提取到视频直链，交由播放器嗅探");
                 return Result.get().parse(1).url(playUrl).string();
             }
 
@@ -522,9 +488,9 @@ public class Czzyv extends Spider {
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Origin", HOST);
+            headers.put("Referer", playUrl);
 
             return Result.get().url(videoUrl).header(headers).string();
-
         } catch (Exception e) {
             logger("播放处理异常: " + e.getMessage());
             return Result.get().parse(1).url(id).string();
@@ -533,9 +499,7 @@ public class Czzyv extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        if (TextUtils.isEmpty(key)) {
-            return Result.string(new ArrayList<>());
-        }
+        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
         try {
             String url = HOST + "/boss1O1?q=" + URLEncoder.encode(key, "UTF-8");
             logger("搜索请求: " + url);
@@ -549,37 +513,25 @@ public class Czzyv extends Spider {
             logger("搜索页面长度: " + html.length());
 
             Document doc = Jsoup.parse(html);
-
-            // 尝试多种可能的选择器
             Elements items = doc.select(".search_list ul li");
-            if (items.isEmpty()) {
-                items = doc.select(".bt_img ul li");
-            }
-            if (items.isEmpty()) {
-                items = doc.select("ul li");
-            }
+            if (items.isEmpty()) items = doc.select(".bt_img ul li");
+            if (items.isEmpty()) items = doc.select("ul li");
 
             logger("找到候选条目数: " + items.size());
 
             List<Vod> resultList = new ArrayList<>();
-            String normalizedKey = normalizeName(key).toLowerCase();
+            String normalizedKey = key.trim().toLowerCase();
 
             for (Element item : items) {
                 Element titleLink = item.selectFirst("h3.dytit a");
-                if (titleLink == null) {
-                    titleLink = item.selectFirst("h3 a");
-                }
-                if (titleLink == null) {
-                    titleLink = item.selectFirst("a");
-                }
+                if (titleLink == null) titleLink = item.selectFirst("h3 a");
+                if (titleLink == null) titleLink = item.selectFirst("a");
                 if (titleLink == null) continue;
 
                 String title = titleLink.text().trim();
                 if (TextUtils.isEmpty(title)) continue;
 
-                String normTitle = normalizeName(title).toLowerCase();
-
-                // 放宽匹配：包含关系即可
+                String normTitle = title.toLowerCase();
                 if (!normTitle.contains(normalizedKey) && !normalizedKey.contains(normTitle)) {
                     continue;
                 }
@@ -609,10 +561,5 @@ public class Czzyv extends Spider {
             logger("搜索出现异常: " + e.getMessage());
             return Result.string(new ArrayList<>());
         }
-    }
-
-    private String normalizeName(String name) {
-        if (name == null) return "";
-        return name.trim();
     }
 }
