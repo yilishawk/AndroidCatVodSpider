@@ -10,7 +10,6 @@ import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.FreeProxy;
 
-import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,7 +29,8 @@ public class JavSiri extends Spider {
 
     private void logger(String msg) {
         try {
-            Proxy.log("[JavSiri] " + msg);
+            // 使用完整类名，避免和 java.net.Proxy 冲突
+            com.github.catvod.spider.Proxy.log("[JavSiri] " + msg);
         } catch (Exception e) {
             System.out.println("[JavSiri] " + msg);
         }
@@ -44,7 +44,7 @@ public class JavSiri extends Spider {
     }
 
     /**
-     * 带代理请求 + 详细日志
+     * 带代理请求：先直连，失败再换代理重试
      */
     private String getWithProxy(String url, int maxRetry) {
         logger("开始请求: " + url);
@@ -74,7 +74,7 @@ public class JavSiri extends Spider {
 
             logger("第 " + (i + 1) + " 次尝试代理: " + proxyStr);
             try {
-                Proxy proxy = FreeProxy.toProxy(proxyStr);
+                java.net.Proxy proxy = FreeProxy.toProxy(proxyStr);
                 OkHttpClient client = new OkHttpClient.Builder()
                         .proxy(proxy)
                         .connectTimeout(12, TimeUnit.SECONDS)
