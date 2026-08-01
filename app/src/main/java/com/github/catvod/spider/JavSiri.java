@@ -38,7 +38,7 @@ public class JavSiri extends Spider {
     }
 
     /**
-     * 带代理请求：先直连，失败再换代理重试
+     * 带代理请求:先直连，失败再换代理重试
      */
     private String getWithProxy(String url, int maxRetry) {
         // 1. 先尝试直连
