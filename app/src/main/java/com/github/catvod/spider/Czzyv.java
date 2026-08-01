@@ -2,13 +2,6 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
-import android.view.View;
-import android.view.ViewGroup;
-import android.webkit.CookieManager;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-import android.widget.FrameLayout;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
@@ -27,18 +20,15 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Czzyv extends Spider {
 
-    private static final String HOST = "https://www.4kcz.com";
+    // 默认备用域名
+    private static String HOST = "https://www.4kcz.com";
+    private static final String NAV_URL = "https://www.czzy.site/";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-    private static WebView sharedWebView;
 
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
 
@@ -59,204 +49,82 @@ public class Czzyv extends Spider {
         }
     }
 
-    private Map<String, String> getHeaders(String referer) {
+    /**
+     * 请求真实站点时，Referer 固定使用导航页，降低触发验证的概率
+     */
+    private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
-        headers.put("Referer", TextUtils.isEmpty(referer) ? HOST + "/" : referer);
+        headers.put("Referer", NAV_URL);          // 关键：始终带导航页 Referer
+        headers.put("Origin", HOST);
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-
-        try {
-            String cookie = CookieManager.getInstance().getCookie(HOST);
-            if (!TextUtils.isEmpty(cookie)) {
-                headers.put("Cookie", cookie);
-            }
-        } catch (Exception ignored) {
-        }
         return headers;
     }
 
-    private boolean isWAFBlocked(String html) {
-        if (TextUtils.isEmpty(html) || html.length() < 800) return true;
-        String lower = html.toLowerCase();
-
-        int score = 0;
-        if (lower.contains("cf-browser-verification")) score += 2;
-        if (lower.contains("just a moment")) score += 2;
-        if (lower.contains("checking your browser")) score += 2;
-        if (lower.contains("challenge-platform")) score += 2;
-        if (lower.contains("雷池")) score += 2;
-        if (lower.contains("验证中心")) score += 2;
-        if (lower.contains("window._cf_chl_opt")) score += 2;
-        if (lower.contains("managed_checking_msg")) score += 1;
-        if (lower.contains("cf-challenge")) score += 2;
-        if (lower.contains("turnstile")) score += 2;
-        if (lower.contains("safeline")) score += 2;
-        if (lower.contains("/.safeline/")) score += 2;
-
-        return score >= 2;
+    private String get(String url) {
+        try {
+            return OkHttp.string(url, getHeaders());
+        } catch (Exception e) {
+            logger("请求失败: " + e.getMessage());
+            return "";
+        }
     }
 
-    private void initSharedWebView() {
-        if (sharedWebView != null) return;
+    /**
+     * 从导航页提取最新可用域名
+     */
+    private void resolveHost() {
+        try {
+            logger("正在访问导航页获取最新域名: " + NAV_URL);
 
-        Init.run(() -> {
-            try {
-                FrameLayout container = new FrameLayout(Init.context());
-                container.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+            Map<String, String> navHeaders = new HashMap<>();
+            navHeaders.put("User-Agent", UA);
+            navHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            navHeaders.put("Accept-Language", "zh-CN,zh;q=0.9");
 
-                sharedWebView = new WebView(Init.context());
-                WebSettings settings = sharedWebView.getSettings();
-                settings.setJavaScriptEnabled(true);
-                settings.setDomStorageEnabled(true);
-                settings.setDatabaseEnabled(true);
-                settings.setUserAgentString(UA);
-                settings.setLoadWithOverviewMode(true);
-                settings.setUseWideViewPort(true);
-                settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-                settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-
-                sharedWebView.setAlpha(0.01f);
-                sharedWebView.setVisibility(View.VISIBLE);
-                sharedWebView.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
-
-                CookieManager cookieManager = CookieManager.getInstance();
-                cookieManager.setAcceptCookie(true);
-                cookieManager.setAcceptThirdPartyCookies(sharedWebView, true);
-
-                sharedWebView.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                        view.evaluateJavascript(
-                                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});", null);
-                    }
-
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        logger("🌐 WebView 载入完成: " + url);
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                            cookieManager.flush();
-                        }
-                    }
-                });
-
-                container.addView(sharedWebView);
-                if (Init.getActivity() != null) {
-                    ViewGroup root = (ViewGroup) Init.getActivity().getWindow().getDecorView();
-                    root.addView(container);
-                    logger("👻 启动后台透明 WebView 实例");
-                    sharedWebView.loadUrl(HOST);
-                }
-            } catch (Exception e) {
-                logger("🚨 初始化 WebView 异常: " + e.getMessage());
-            }
-        });
-    }
-
-    private String getViaWebView(String targetUrl, String referer) {
-        initSharedWebView();
-        final String[] result = {""};
-        final CountDownLatch latch = new CountDownLatch(1);
-        final AtomicBoolean finished = new AtomicBoolean(false);
-
-        Init.run(() -> {
-            if (sharedWebView == null) {
-                logger("WebView 实例为空");
-                latch.countDown();
+            String html = OkHttp.string(NAV_URL, navHeaders);
+            if (TextUtils.isEmpty(html)) {
+                logger("导航页获取失败，使用默认域名: " + HOST);
                 return;
             }
 
-            sharedWebView.setWebViewClient(new WebViewClient() {
-                @Override
-                public void onPageFinished(WebView view, String url) {
-                    logger("🌐 目标页加载完成: " + url);
+            Document doc = Jsoup.parse(html);
+            Elements links = doc.select("a");
 
-                    view.postDelayed(() -> {
-                        if (finished.get()) return;
-                        view.evaluateJavascript(
-                                "(function(){ return document.documentElement.outerHTML; })();",
-                                value -> {
-                                    try {
-                                        if (value != null && value.length() > 100) {
-                                            String res = value;
-                                            if (res.startsWith("\"") && res.endsWith("\"")) {
-                                                res = res.substring(1, res.length() - 1);
-                                            }
-                                            res = res.replace("\\\"", "\"")
-                                                    .replace("\\n", "\n")
-                                                    .replace("\\r", "\r")
-                                                    .replace("\\t", "\t")
-                                                    .replace("\\\\", "\\")
-                                                    .replace("\\/", "/");
-
-                                            result[0] = res;
-                                            logger("WebView 导航提取成功，长度: " + res.length());
-                                        } else {
-                                            logger("outerHTML 为空");
-                                        }
-                                    } catch (Exception e) {
-                                        logger("解析 outerHTML 异常: " + e.getMessage());
-                                    } finally {
-                                        finished.set(true);
-                                        latch.countDown();
-                                    }
-                                });
-                    }, 2500);
-                }
-            });
-
-            logger("开始 WebView 导航: " + targetUrl);
-            sharedWebView.loadUrl(targetUrl);
-        });
-
-        try {
-            boolean ok = latch.await(22, TimeUnit.SECONDS);
-            if (!ok) {
-                logger("⏰ WebView 导航总超时");
-            }
-        } catch (InterruptedException ignored) {
-        }
-
-        Init.run(() -> {
-            if (sharedWebView != null) {
-                sharedWebView.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                            CookieManager.getInstance().flush();
-                        }
+            // 1. 优先找「点击这里手动跳转」
+            for (Element a : links) {
+                String text = a.text().trim();
+                if (text.contains("点击这里手动跳转") || text.contains("手动跳转")) {
+                    String href = a.attr("href").trim();
+                    if (!TextUtils.isEmpty(href)) {
+                        if (href.startsWith("//")) href = "https:" + href;
+                        if (!href.startsWith("http")) href = "https://" + href;
+                        if (href.endsWith("/")) href = href.substring(0, href.length() - 1);
+                        HOST = href;
+                        logger("✅ 从导航页获取到最新域名: " + HOST);
+                        return;
                     }
-                });
+                }
             }
-        });
 
-        return result[0] != null ? result[0] : "";
-    }
+            // 2. 备用匹配
+            for (Element a : links) {
+                String href = a.attr("href").trim();
+                if (href.contains("4kcz.com") || href.contains("czzy.top") || href.contains("cz4k.com")) {
+                    if (href.startsWith("//")) href = "https:" + href;
+                    if (!href.startsWith("http")) href = "https://" + href;
+                    if (href.endsWith("/")) href = href.substring(0, href.length() - 1);
+                    HOST = href;
+                    logger("✅ 备用匹配到域名: " + HOST);
+                    return;
+                }
+            }
 
-    private String get(String url, String referer) {
-        String html = "";
-        try {
-            html = OkHttp.string(url, getHeaders(referer));
+            logger("未从导航页解析到新域名，继续使用默认: " + HOST);
         } catch (Exception e) {
-            logger("OkHttp 异常: " + e.getMessage());
+            logger("解析导航页异常: " + e.getMessage() + "，使用默认域名: " + HOST);
         }
-
-        if (isWAFBlocked(html)) {
-            logger("⚠️ OkHttp 被拦截，启动 WebView 导航代理: " + url);
-            html = getViaWebView(url, referer);
-
-            if (TextUtils.isEmpty(html)) {
-                logger("❌ WebView 代理返回空数据");
-            } else if (isWAFBlocked(html)) {
-                logger("❌ WebView 返回内容仍被判定为盾页面（长度: " + html.length() + "）");
-                String preview = html.length() > 400 ? html.substring(0, 400) : html;
-                preview = preview.replace("\n", " ").replace("\r", " ");
-                logger("📄 内容预览: " + preview);
-            } else {
-                logger("✅ WebView 代理成功，数据长度: " + html.length());
-            }
-        }
-        return html;
     }
 
     private String extractMysvgValue(String html) {
@@ -268,7 +136,7 @@ public class Czzyv extends Spider {
 
     private String extractVideoUrlFromPlayPage(String playUrl) {
         try {
-            String html = get(playUrl, HOST + "/");
+            String html = get(playUrl);
             if (TextUtils.isEmpty(html)) return null;
 
             Pattern iframePattern = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']");
@@ -279,7 +147,7 @@ public class Czzyv extends Spider {
                 logger("iframe URL: " + iframeUrl);
                 if (iframeUrl.startsWith("/")) iframeUrl = HOST + iframeUrl;
 
-                String iframeHtml = get(iframeUrl, playUrl);
+                String iframeHtml = get(iframeUrl);
                 if (TextUtils.isEmpty(iframeHtml)) {
                     logger("iframe 页面获取失败");
                     return null;
@@ -301,19 +169,8 @@ public class Czzyv extends Spider {
     @Override
     public void init(Context context, String extend) {
         logger("🚀 初始化 Spider 插件...");
-        initSharedWebView();
-
-        try {
-            Thread.sleep(3000);
-        } catch (InterruptedException ignored) {
-        }
-
-        String testHtml = get(HOST, "");
-        if (!isWAFBlocked(testHtml)) {
-            logger("✅ 站点通畅，雷池/CF 验证通过");
-        } else {
-            logger("⚠️ 仍收到盾页面，后续请求将优先走 WebView 导航");
-        }
+        resolveHost();
+        logger("当前使用域名: " + HOST);
     }
 
     @Override
@@ -332,8 +189,8 @@ public class Czzyv extends Spider {
             String url = (page == 1) ? HOST + "/" + tid : HOST + "/" + tid + "/page/" + page;
 
             logger("分类请求: " + tid + " 页码: " + page + " → " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) {
+            String html = get(url);
+            if (TextUtils.isEmpty(html)) {
                 return Result.string(new ArrayList<>());
             }
 
@@ -382,8 +239,8 @@ public class Czzyv extends Spider {
             String url = vodId.startsWith("http") ? vodId : HOST + vodId;
 
             logger("详情页请求: " + url);
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) {
+            String html = get(url);
+            if (TextUtils.isEmpty(html)) {
                 return Result.string(new ArrayList<>());
             }
 
@@ -470,7 +327,7 @@ public class Czzyv extends Spider {
 
             logger("解析成功，真实视频地址: " + videoUrl);
 
-            // 已去掉 Referer，只保留 UA 和 Origin
+            // 播放直链不带导航页 Referer，只保留 UA + Origin
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Origin", HOST);
@@ -489,9 +346,9 @@ public class Czzyv extends Spider {
             String url = HOST + "/boss1O1?q=" + URLEncoder.encode(key, "UTF-8");
             logger("搜索请求: " + url);
 
-            String html = get(url, HOST + "/");
-            if (TextUtils.isEmpty(html) || isWAFBlocked(html)) {
-                logger("搜索页面获取失败或仍被拦截");
+            String html = get(url);
+            if (TextUtils.isEmpty(html)) {
+                logger("搜索页面获取失败");
                 return Result.string(new ArrayList<>());
             }
 
