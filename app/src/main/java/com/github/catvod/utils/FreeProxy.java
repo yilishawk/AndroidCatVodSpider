@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class FreeProxy {
 
-    // Proxifly 官方 CDN 地址
+    // Proxifly 官方CDN 地址
     private static final String HTTP_TXT = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt";
     private static final String HTTPS_TXT = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/https/data.txt";
     private static final String ALL_JSON = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.json";
