@@ -2,34 +2,30 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
+import android.util.Base64;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.FreeProxy;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 
 public class JavSiri extends Spider {
 
     private static final String HOST = "https://javsiri.cc";
+    private static final String AZURE_PROXY = "https://azureserv.com/?__cpo=";
+
     private boolean unlocked = false;
 
     private void logger(String msg) {
         try {
-            // 使用完整类名，避免和 java.net.Proxy 冲突
             com.github.catvod.spider.Proxy.log("[JavSiri] " + msg);
         } catch (Exception e) {
             System.out.println("[JavSiri] " + msg);
@@ -38,104 +34,55 @@ public class JavSiri extends Spider {
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<String, String>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36");
-        headers.put("Referer", HOST + "/");
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
         return headers;
     }
 
     /**
-     * 带代理请求：先直连，失败再换代理重试
+     * 把目标 URL 转成 azureserv 代理地址
      */
-    private String getWithProxy(String url, int maxRetry) {
-        logger("开始请求: " + url);
-
-        // 1. 先直连
+    private String toAzureUrl(String targetUrl) {
         try {
-            String html = OkHttp.string(url, getHeaders());
+            String encoded = Base64.encodeToString(targetUrl.getBytes("UTF-8"), Base64.NO_WRAP);
+            return AZURE_PROXY + encoded;
+        } catch (Exception e) {
+            logger("Base64 编码失败: " + e.getMessage());
+            return targetUrl;
+        }
+    }
+
+    /**
+     * 通过 azureserv 代理请求页面
+     */
+    private String get(String targetUrl) {
+        String proxyUrl = toAzureUrl(targetUrl);
+        logger("请求: " + targetUrl);
+        logger("代理: " + proxyUrl);
+        try {
+            String html = OkHttp.string(proxyUrl, getHeaders());
             if (!TextUtils.isEmpty(html) && html.length() > 200) {
-                logger("直连成功，长度: " + html.length());
+                logger("成功，长度: " + html.length());
                 return html;
             }
-            logger("直连返回空或过短，长度: " + (html == null ? 0 : html.length()));
+            logger("返回空或过短，长度: " + (html == null ? 0 : html.length()));
         } catch (Exception e) {
-            logger("直连异常: " + e.getMessage());
+            logger("请求异常: " + e.getMessage());
         }
-
-        // 2. 代理重试
-        int proxyCount = FreeProxy.size();
-        logger("当前可用代理数量: " + proxyCount);
-
-        for (int i = 0; i < maxRetry; i++) {
-            String proxyStr = FreeProxy.getNext();
-            if (TextUtils.isEmpty(proxyStr)) {
-                logger("第 " + (i + 1) + " 次：没有更多代理");
-                break;
-            }
-
-            logger("第 " + (i + 1) + " 次尝试代理: " + proxyStr);
-            try {
-                java.net.Proxy proxy = FreeProxy.toProxy(proxyStr);
-                OkHttpClient client = new OkHttpClient.Builder()
-                        .proxy(proxy)
-                        .connectTimeout(12, TimeUnit.SECONDS)
-                        .readTimeout(15, TimeUnit.SECONDS)
-                        .writeTimeout(15, TimeUnit.SECONDS)
-                        .build();
-
-                Request.Builder rb = new Request.Builder().url(url);
-                Map<String, String> headers = getHeaders();
-                for (Map.Entry<String, String> e : headers.entrySet()) {
-                    rb.header(e.getKey(), e.getValue());
-                }
-
-                Response resp = client.newCall(rb.build()).execute();
-                int code = resp.code();
-                logger("代理响应码: " + code);
-
-                if (resp.isSuccessful() && resp.body() != null) {
-                    String body = resp.body().string();
-                    if (!TextUtils.isEmpty(body) && body.length() > 200) {
-                        logger("代理请求成功，长度: " + body.length());
-                        return body;
-                    }
-                    logger("代理返回内容过短，长度: " + (body == null ? 0 : body.length()));
-                } else {
-                    logger("代理请求失败，code=" + code);
-                }
-            } catch (Exception e) {
-                logger("代理异常 [" + proxyStr + "]: " + e.getMessage());
-            }
-        }
-
-        // 3. 最后再试一次直连
-        logger("所有代理失败，最后再试一次直连");
-        try {
-            String html = OkHttp.string(url, getHeaders());
-            logger("最终直连长度: " + (html == null ? 0 : html.length()));
-            return html == null ? "" : html;
-        } catch (Exception e) {
-            logger("最终直连也失败: " + e.getMessage());
-            return "";
-        }
+        return "";
     }
 
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
-        logger("🚀 初始化 JavSiri...");
+        logger("🚀 初始化 JavSiri（Azure 代理模式）...");
 
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
             throw new Exception("Password verification failed. Source initialization aborted.");
         }
         logger("密码门禁通过");
-
-        try {
-            FreeProxy.ensureLoaded();
-            logger("FreeProxy 加载完成，数量: " + FreeProxy.size());
-        } catch (Exception e) {
-            logger("FreeProxy 加载失败: " + e.getMessage());
-        }
     }
 
     @Override
@@ -180,7 +127,7 @@ public class JavSiri extends Spider {
         String url = HOST + "/zh/tags/" + tid + "/?mode=async&function=get_block&block_id=list_videos_common_videos_list&sort_by=post_date&from=" + page + "&_=" + System.currentTimeMillis();
         logger("分类请求 tid=" + tid + " page=" + page);
 
-        String html = getWithProxy(url, 5);
+        String html = get(url);
         List<Vod> list = parseVideoList(html);
         logger("分类解析结果数量: " + list.size());
 
@@ -202,7 +149,7 @@ public class JavSiri extends Spider {
         String detailUrl = HOST + "/zh/video/" + id;
         logger("详情请求: " + detailUrl);
 
-        String html = getWithProxy(detailUrl, 5);
+        String html = get(detailUrl);
         logger("详情页长度: " + (html == null ? 0 : html.length()));
 
         Vod vod = new Vod();
@@ -235,7 +182,7 @@ public class JavSiri extends Spider {
         String url = HOST + "/zh/search/" + key + "/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=" + key + "&category_ids=&sort_by=post_date&from_videos=1&from_albums=1&_" + System.currentTimeMillis();
         logger("搜索请求: " + key);
 
-        String html = getWithProxy(url, 5);
+        String html = get(url);
         List<Vod> list = parseVideoList(html);
         logger("搜索结果数量: " + list.size());
 
@@ -247,11 +194,12 @@ public class JavSiri extends Spider {
         String detailUrl = HOST + "/zh/video/" + id;
         logger("播放解析: " + detailUrl);
 
-        String html = getWithProxy(detailUrl, 5);
+        String html = get(detailUrl);
         logger("播放页长度: " + (html == null ? 0 : html.length()));
 
         String playUrl = "";
 
+        // 优先 720p
         Pattern pAltUrl = Pattern.compile("video_alt_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
         Matcher mAltUrl = pAltUrl.matcher(html == null ? "" : html);
         if (mAltUrl.find()) {
@@ -259,6 +207,7 @@ public class JavSiri extends Spider {
             logger("匹配到 720p: " + playUrl);
         }
 
+        // 降级 480p
         if (TextUtils.isEmpty(playUrl)) {
             Pattern pUrl = Pattern.compile("video_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
             Matcher mUrl = pUrl.matcher(html == null ? "" : html);
@@ -272,7 +221,12 @@ public class JavSiri extends Spider {
             logger("❌ 未提取到播放地址");
         }
 
-        return Result.get().url(playUrl).header(getHeaders()).string();
+        // 播放直链不走 azureserv，直接返回给播放器
+        Map<String, String> headers = new HashMap<String, String>();
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Referer", HOST + "/");
+
+        return Result.get().url(playUrl).header(headers).string();
     }
 
     private List<Vod> parseVideoList(String html) {
@@ -293,7 +247,6 @@ public class JavSiri extends Spider {
             Pattern pId = Pattern.compile("href=\"https://javsiri.cc/zh/video/([^/]+/[^/]+)/\"", Pattern.CASE_INSENSITIVE);
             Matcher mId = pId.matcher(block);
             if (!mId.find()) {
-                // 兼容相对路径
                 pId = Pattern.compile("href=\"/zh/video/([^/]+/[^/]+)/\"", Pattern.CASE_INSENSITIVE);
                 mId = pId.matcher(block);
                 if (!mId.find()) continue;
