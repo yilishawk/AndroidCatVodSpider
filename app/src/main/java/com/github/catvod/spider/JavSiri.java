@@ -26,9 +26,15 @@ import okhttp3.Response;
 public class JavSiri extends Spider {
 
     private static final String HOST = "https://javsiri.cc";
-
-    // 密码门禁状态
     private boolean unlocked = false;
+
+    private void logger(String msg) {
+        try {
+            Proxy.log("[JavSiri] " + msg);
+        } catch (Exception e) {
+            System.out.println("[JavSiri] " + msg);
+        }
+    }
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<String, String>();
@@ -38,23 +44,35 @@ public class JavSiri extends Spider {
     }
 
     /**
-     * 带代理请求:先直连，失败再换代理重试
+     * 带代理请求 + 详细日志
      */
     private String getWithProxy(String url, int maxRetry) {
-        // 1. 先尝试直连
+        logger("开始请求: " + url);
+
+        // 1. 先直连
         try {
             String html = OkHttp.string(url, getHeaders());
             if (!TextUtils.isEmpty(html) && html.length() > 200) {
+                logger("直连成功，长度: " + html.length());
                 return html;
             }
-        } catch (Exception ignored) {
+            logger("直连返回空或过短，长度: " + (html == null ? 0 : html.length()));
+        } catch (Exception e) {
+            logger("直连异常: " + e.getMessage());
         }
 
-        // 2. 直连失败，换代理重试
+        // 2. 代理重试
+        int proxyCount = FreeProxy.size();
+        logger("当前可用代理数量: " + proxyCount);
+
         for (int i = 0; i < maxRetry; i++) {
             String proxyStr = FreeProxy.getNext();
-            if (TextUtils.isEmpty(proxyStr)) break;
+            if (TextUtils.isEmpty(proxyStr)) {
+                logger("第 " + (i + 1) + " 次：没有更多代理");
+                break;
+            }
 
+            logger("第 " + (i + 1) + " 次尝试代理: " + proxyStr);
             try {
                 Proxy proxy = FreeProxy.toProxy(proxyStr);
                 OkHttpClient client = new OkHttpClient.Builder()
@@ -71,21 +89,32 @@ public class JavSiri extends Spider {
                 }
 
                 Response resp = client.newCall(rb.build()).execute();
+                int code = resp.code();
+                logger("代理响应码: " + code);
+
                 if (resp.isSuccessful() && resp.body() != null) {
                     String body = resp.body().string();
                     if (!TextUtils.isEmpty(body) && body.length() > 200) {
+                        logger("代理请求成功，长度: " + body.length());
                         return body;
                     }
+                    logger("代理返回内容过短，长度: " + (body == null ? 0 : body.length()));
+                } else {
+                    logger("代理请求失败，code=" + code);
                 }
             } catch (Exception e) {
-                // 当前代理失败，继续下一个
+                logger("代理异常 [" + proxyStr + "]: " + e.getMessage());
             }
         }
 
-        // 3. 全部失败，最后再试一次直连
+        // 3. 最后再试一次直连
+        logger("所有代理失败，最后再试一次直连");
         try {
-            return OkHttp.string(url, getHeaders());
+            String html = OkHttp.string(url, getHeaders());
+            logger("最终直连长度: " + (html == null ? 0 : html.length()));
+            return html == null ? "" : html;
         } catch (Exception e) {
+            logger("最终直连也失败: " + e.getMessage());
             return "";
         }
     }
@@ -93,16 +122,19 @@ public class JavSiri extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
+        logger("🚀 初始化 JavSiri...");
 
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
             throw new Exception("Password verification failed. Source initialization aborted.");
         }
+        logger("密码门禁通过");
 
-        // 预加载免费代理
         try {
             FreeProxy.ensureLoaded();
-        } catch (Exception ignored) {
+            logger("FreeProxy 加载完成，数量: " + FreeProxy.size());
+        } catch (Exception e) {
+            logger("FreeProxy 加载失败: " + e.getMessage());
         }
     }
 
@@ -133,6 +165,7 @@ public class JavSiri extends Spider {
         classes.add(new Class("hd", "HD高画质"));
         classes.add(new Class("masturbation", "撸管/自慰"));
 
+        logger("首页分类数量: " + classes.size());
         return Result.get().classes(classes).string();
     }
 
@@ -145,9 +178,11 @@ public class JavSiri extends Spider {
 
         int page = Integer.parseInt(pg);
         String url = HOST + "/zh/tags/" + tid + "/?mode=async&function=get_block&block_id=list_videos_common_videos_list&sort_by=post_date&from=" + page + "&_=" + System.currentTimeMillis();
-        String html = getWithProxy(url, 5);
+        logger("分类请求 tid=" + tid + " page=" + page);
 
+        String html = getWithProxy(url, 5);
         List<Vod> list = parseVideoList(html);
+        logger("分类解析结果数量: " + list.size());
 
         int totalPage = page;
         if (list.size() >= 10) {
@@ -165,18 +200,22 @@ public class JavSiri extends Spider {
 
         String id = ids.get(0);
         String detailUrl = HOST + "/zh/video/" + id;
+        logger("详情请求: " + detailUrl);
+
         String html = getWithProxy(detailUrl, 5);
+        logger("详情页长度: " + (html == null ? 0 : html.length()));
 
         Vod vod = new Vod();
         vod.setVodId(id);
 
         Pattern pTitle = Pattern.compile("video_title:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mTitle = pTitle.matcher(html);
+        Matcher mTitle = pTitle.matcher(html == null ? "" : html);
         String title = mTitle.find() ? mTitle.group(1) : "Video " + id;
         vod.setVodName(title);
+        logger("标题: " + title);
 
         Pattern pPic = Pattern.compile("preview_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mPic = pPic.matcher(html);
+        Matcher mPic = pPic.matcher(html == null ? "" : html);
         if (mPic.find()) {
             vod.setVodPic(mPic.group(1));
         }
@@ -194,56 +233,71 @@ public class JavSiri extends Spider {
         }
 
         String url = HOST + "/zh/search/" + key + "/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=" + key + "&category_ids=&sort_by=post_date&from_videos=1&from_albums=1&_" + System.currentTimeMillis();
-        String html = getWithProxy(url, 5);
+        logger("搜索请求: " + key);
 
+        String html = getWithProxy(url, 5);
         List<Vod> list = parseVideoList(html);
+        logger("搜索结果数量: " + list.size());
+
         return Result.get().vod(list).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String detailUrl = HOST + "/zh/video/" + id;
+        logger("播放解析: " + detailUrl);
+
         String html = getWithProxy(detailUrl, 5);
+        logger("播放页长度: " + (html == null ? 0 : html.length()));
 
         String playUrl = "";
 
-        // 优先 720p
         Pattern pAltUrl = Pattern.compile("video_alt_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mAltUrl = pAltUrl.matcher(html);
+        Matcher mAltUrl = pAltUrl.matcher(html == null ? "" : html);
         if (mAltUrl.find()) {
             playUrl = mAltUrl.group(1);
+            logger("匹配到 720p: " + playUrl);
         }
 
-        // 降级 480p
         if (TextUtils.isEmpty(playUrl)) {
             Pattern pUrl = Pattern.compile("video_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-            Matcher mUrl = pUrl.matcher(html);
+            Matcher mUrl = pUrl.matcher(html == null ? "" : html);
             if (mUrl.find()) {
                 playUrl = mUrl.group(1);
+                logger("匹配到 480p: " + playUrl);
             }
+        }
+
+        if (TextUtils.isEmpty(playUrl)) {
+            logger("❌ 未提取到播放地址");
         }
 
         return Result.get().url(playUrl).header(getHeaders()).string();
     }
 
-    /**
-     * 解析列表页视频
-     */
     private List<Vod> parseVideoList(String html) {
         List<Vod> list = new ArrayList<Vod>();
         if (TextUtils.isEmpty(html)) {
+            logger("parseVideoList: html 为空");
             return list;
         }
 
         Pattern pBlock = Pattern.compile("<div class=\"thumb thumb_rel item[^\"]*\">([\\s\\S]*?)</div>\\s*</div>", Pattern.CASE_INSENSITIVE);
         Matcher mBlock = pBlock.matcher(html);
 
+        int blockCount = 0;
         while (mBlock.find()) {
+            blockCount++;
             String block = mBlock.group(1);
 
             Pattern pId = Pattern.compile("href=\"https://javsiri.cc/zh/video/([^/]+/[^/]+)/\"", Pattern.CASE_INSENSITIVE);
             Matcher mId = pId.matcher(block);
-            if (!mId.find()) continue;
+            if (!mId.find()) {
+                // 兼容相对路径
+                pId = Pattern.compile("href=\"/zh/video/([^/]+/[^/]+)/\"", Pattern.CASE_INSENSITIVE);
+                mId = pId.matcher(block);
+                if (!mId.find()) continue;
+            }
             String id = mId.group(1);
 
             Pattern pImg = Pattern.compile("data-original=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
@@ -263,9 +317,10 @@ public class JavSiri extends Spider {
             vod.setVodName(title);
             vod.setVodPic(img);
             vod.setVodRemarks(duration);
-
             list.add(vod);
         }
+
+        logger("parseVideoList: 匹配到 block=" + blockCount + "，有效视频=" + list.size());
         return list;
     }
 }
