@@ -78,6 +78,7 @@ public class Bdys extends Spider {
     public String homeContent(boolean filter) throws Exception {
         try {
             List<Class> classes = new ArrayList<>();
+            // 使用你的 Class(id, name) 构造方法
             classes.add(new Class("1", "电视剧"));
             classes.add(new Class("0", "电影"));
 
@@ -85,16 +86,17 @@ public class Bdys extends Spider {
             if (filter) {
                 List<Filter> filterList = new ArrayList<>();
 
-                // 类型
+                // 分类/类型筛选
                 String[] typeNames = {"全部", "动作", "爱情", "喜剧", "科幻", "恐怖", "剧情", "动画", "悬疑", "犯罪", "古装", "奇幻", "美剧", "韩剧", "国产", "日剧"};
                 String[] typeValues = {"all", "dongzuo", "aiqing", "xiju", "kehuan", "kongbu", "juqing", "donghua", "xuanyi", "fanzui", "guzhuang", "qihuan", "meiju", "hanju", "guoju", "riju"};
                 List<Filter.Value> typeOptions = new ArrayList<>();
                 for (int i = 0; i < typeNames.length; i++) {
+                    // 使用 Filter.Value(n, v) 构造
                     typeOptions.add(new Filter.Value(typeNames[i], typeValues[i]));
                 }
                 filterList.add(new Filter("type_slug", "类型", typeOptions));
 
-                // 年份
+                // 年份筛选
                 List<Filter.Value> yearOptions = new ArrayList<>();
                 yearOptions.add(new Filter.Value("全部", ""));
                 for (int y = 2026; y >= 2015; y--) {
@@ -106,10 +108,11 @@ public class Bdys extends Spider {
                 filterMap.put("1", filterList);
             }
 
+            // 完全使用你的 Result.string(classes, filterMap) 静态工厂方法构建输出
             return Result.string(classes, filterMap);
         } catch (Exception e) {
             logger("homeContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.error(e.getMessage());
         }
     }
 
@@ -125,39 +128,53 @@ public class Bdys extends Spider {
                 url += "&year=" + extend.get("year");
             }
 
-            logger("分类请求: " + url);
+            logger("分类请求 URL: " + url);
             String html = OkHttp.string(url, getHeaders());
             if (TextUtils.isEmpty(html)) {
                 logger("⚠️ 分类请求返回空 HTML");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
             
-            // 兼容新版HTML的卡片节点结构
+            // 抓取 .movie-card 节点
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) {
-                cards = doc.select(".row-cards .card-sm"); // 保留旧选择器备用
+                cards = doc.select(".card-sm"); // 旧版节点备用
             }
-            logger("解析到列表节点数量: " + cards.size());
+            logger("匹配到的影片节点总数: " + cards.size());
 
             for (Element card : cards) {
                 Element a = card.selectFirst("a");
                 if (a == null) continue;
 
-                String vodId = a.attr("href");
-                
-                // 获取标题：优先取 card-info 里的 h4，取不到则取 <a> 标签的 title 属性
-                String name = card.select(".card-info h4").text().trim();
+                // 1. 获取 vod_id
+                String vodId = a.attr("href").trim();
+                if (TextUtils.isEmpty(vodId)) continue;
+
+                // 2. 提取片名（防止为空）
+                String name = "";
+                Element h4 = card.selectFirst(".card-info h4");
+                if (h4 != null) {
+                    name = h4.text().trim();
+                }
+                if (TextUtils.isEmpty(name) && a.hasAttr("title")) {
+                    String fullTitle = a.attr("title").trim();
+                    Matcher matcher = Pattern.compile("《(.*?)》").matcher(fullTitle);
+                    if (matcher.find()) {
+                        name = matcher.group(1);
+                    } else {
+                        name = fullTitle;
+                    }
+                }
                 if (TextUtils.isEmpty(name)) {
                     name = card.select(".text-truncate").text().trim();
                 }
-                if (TextUtils.isEmpty(name) && a.hasAttr("title")) {
-                    name = a.attr("title");
-                }
 
-                // 获取图片：优先从 data-src 读取，没有再读 src
+                if (TextUtils.isEmpty(name)) continue;
+
+                // 3. 提取图片
                 Element img = card.selectFirst("img");
                 String pic = "";
                 if (img != null) {
@@ -165,27 +182,27 @@ public class Bdys extends Spider {
                     pic = fixUrl(pic);
                 }
 
-                // 获取备注/集数/评分
-                String remark = card.select(".episode-badge").text().trim();
-                if (TextUtils.isEmpty(remark)) {
-                    remark = card.select(".rating-badge").text().trim();
-                }
-                if (TextUtils.isEmpty(remark)) {
-                    remark = card.select(".bg-pink").text().trim();
+                // 4. 提取更新状态
+                String remark = "";
+                Element episodeBadge = card.selectFirst(".episode-badge");
+                if (episodeBadge != null) {
+                    remark = episodeBadge.text().trim();
+                } else {
+                    Element ratingBadge = card.selectFirst(".rating-badge");
+                    if (ratingBadge != null) {
+                        remark = ratingBadge.text().trim();
+                    }
                 }
 
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(name);
-                vod.setVodPic(pic);
-                vod.setVodRemarks(remark);
-                list.add(vod);
+                // 直接使用带有 4 个参数的 Vod 构造函数构建
+                list.add(new Vod(vodId, name, pic, remark));
             }
 
+            logger("成功打包给 TVBox 的有效影视条数: " + list.size());
             return Result.string(list);
         } catch (Exception e) {
-            logger("categoryContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            logger("categoryContent 捕获异常: " + e.getMessage());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -199,31 +216,24 @@ public class Bdys extends Spider {
             String html = OkHttp.string(url, getHeaders());
             if (TextUtils.isEmpty(html)) {
                 logger("⚠️ 详情页响应为空");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
             Document doc = Jsoup.parse(html);
 
-            String name = doc.select("h2.d-sm-block").text().trim();
-            if (TextUtils.isEmpty(name)) name = doc.select("h1").text().trim();
+            String name = doc.select(".card-info h4, h2.d-sm-block, h1").text().trim();
 
-            Element imgElem = doc.selectFirst(".cover-lg-max-25 img");
-            if (imgElem == null) imgElem = doc.selectFirst(".movie-card img");
-            
+            Element imgElem = doc.selectFirst(".movie-card img, .cover-lg-max-25 img");
             String pic = "";
             if (imgElem != null) {
                 pic = imgElem.hasAttr("data-src") ? imgElem.attr("data-src") : imgElem.attr("src");
                 pic = fixUrl(pic);
             }
 
-            String content = doc.select("#synopsis .card-body").text().trim();
+            String content = doc.select("#synopsis .card-body, .synopsis").text().trim();
 
             // 播放列表解析
-            Elements playLinks = doc.select("#play-list a.btn-square");
-            if (playLinks.isEmpty()) {
-                playLinks = doc.select("#play-list a");
-            }
-            
+            Elements playLinks = doc.select("#play-list a");
             List<String> playPairs = new ArrayList<>();
             for (Element a : playLinks) {
                 String epName = a.text().trim();
@@ -244,10 +254,11 @@ public class Bdys extends Spider {
                 vod.setVodPlayUrl(TextUtils.join("#", playPairs));
             }
 
+            // 使用你的 Result.string(Vod item) 静态方法
             return Result.string(vod);
         } catch (Exception e) {
             logger("detailContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -259,7 +270,7 @@ public class Bdys extends Spider {
 
             String html = OkHttp.string(playUrl, getHeaders());
             
-            // 匹配 pid 用于加密验签 (备用)
+            // 匹配 pid 用于加密验签
             Matcher m = Pattern.compile("var pid\\s*=\\s*(\\d+)").matcher(html);
             if (m.find()) {
                 String pid = m.group(1);
@@ -270,8 +281,8 @@ public class Bdys extends Spider {
                 logger("提取到 PID: " + pid + " 签名: " + sg);
             }
 
-            // 兜底交由壳子内置播放器嗅探
             logger("交由播放器嗅探处理: " + playUrl);
+            // 完全匹配 Result.get().parse().url().string() 链式结构
             return Result.get().parse(1).url(playUrl).string();
         } catch (Exception e) {
             logger("playerContent 异常: " + e.getMessage());
@@ -281,7 +292,7 @@ public class Bdys extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
+        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<Vod>());
         try {
             String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
             logger("搜索请求 URL: " + searchUrl);
@@ -289,10 +300,9 @@ public class Bdys extends Spider {
             String jsonStr = OkHttp.string(searchUrl, getHeaders());
             if (TextUtils.isEmpty(jsonStr)) {
                 logger("⚠️ 搜索接口返回数据为空");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
-            logger("搜索返回原文: " + jsonStr);
             JSONArray jsonArray = new JSONArray(jsonStr);
             List<Vod> resultList = new ArrayList<>();
 
@@ -302,19 +312,15 @@ public class Bdys extends Spider {
                 String image = item.optString("image");
                 String href = item.optString("href");
 
-                Vod vod = new Vod();
-                vod.setVodId(href);
-                vod.setVodName(title);
-                vod.setVodPic(image);
-                vod.setVodRemarks("");
-                resultList.add(vod);
+                // 使用构造函数实例化 Vod
+                resultList.add(new Vod(href, title, image, ""));
             }
 
             logger("搜索成功解析出 " + resultList.size() + " 条记录");
             return Result.string(resultList);
         } catch (Exception e) {
             logger("searchContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
