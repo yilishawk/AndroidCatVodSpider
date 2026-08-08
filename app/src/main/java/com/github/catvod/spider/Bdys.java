@@ -33,8 +33,8 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class Bdys extends Spider {
 
-    private String host = "https://xl02.com.de";
-    private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    private String host = "https://v.xl.in.ua";
+    private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
 
     private void logger(String msg) {
         try {
@@ -55,6 +55,16 @@ public class Bdys extends Spider {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", commonUa);
         headers.put("Referer", host + "/");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
+        headers.put("sec-ch-ua-mobile", "?0");
+        headers.put("sec-ch-ua-platform", "\"Windows\"");
+        headers.put("sec-fetch-dest", "document");
+        headers.put("sec-fetch-mode", "navigate");
+        headers.put("sec-fetch-site", "same-origin");
+        headers.put("sec-fetch-user", "?1");
+        headers.put("upgrade-insecure-requests", "1");
         return headers;
     }
 
@@ -124,7 +134,12 @@ public class Bdys extends Spider {
 
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
-            Elements cards = doc.select(".row-cards .card-sm");
+            
+            // 兼容新版HTML的卡片节点结构
+            Elements cards = doc.select(".movie-card");
+            if (cards.isEmpty()) {
+                cards = doc.select(".row-cards .card-sm"); // 保留旧选择器备用
+            }
             logger("解析到列表节点数量: " + cards.size());
 
             for (Element card : cards) {
@@ -132,16 +147,32 @@ public class Bdys extends Spider {
                 if (a == null) continue;
 
                 String vodId = a.attr("href");
-                String name = card.select(".text-truncate").text().trim();
                 
+                // 获取标题：优先取 card-info 里的 h4，取不到则取 <a> 标签的 title 属性
+                String name = card.select(".card-info h4").text().trim();
+                if (TextUtils.isEmpty(name)) {
+                    name = card.select(".text-truncate").text().trim();
+                }
+                if (TextUtils.isEmpty(name) && a.hasAttr("title")) {
+                    name = a.attr("title");
+                }
+
+                // 获取图片：优先从 data-src 读取，没有再读 src
                 Element img = card.selectFirst("img");
                 String pic = "";
                 if (img != null) {
                     pic = img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src");
                     pic = fixUrl(pic);
                 }
-                
-                String remark = card.select(".bg-pink").text().trim();
+
+                // 获取备注/集数/评分
+                String remark = card.select(".episode-badge").text().trim();
+                if (TextUtils.isEmpty(remark)) {
+                    remark = card.select(".rating-badge").text().trim();
+                }
+                if (TextUtils.isEmpty(remark)) {
+                    remark = card.select(".bg-pink").text().trim();
+                }
 
                 Vod vod = new Vod();
                 vod.setVodId(vodId);
@@ -177,12 +208,22 @@ public class Bdys extends Spider {
             if (TextUtils.isEmpty(name)) name = doc.select("h1").text().trim();
 
             Element imgElem = doc.selectFirst(".cover-lg-max-25 img");
-            String pic = imgElem != null ? fixUrl(imgElem.attr("src")) : "";
+            if (imgElem == null) imgElem = doc.selectFirst(".movie-card img");
+            
+            String pic = "";
+            if (imgElem != null) {
+                pic = imgElem.hasAttr("data-src") ? imgElem.attr("data-src") : imgElem.attr("src");
+                pic = fixUrl(pic);
+            }
 
             String content = doc.select("#synopsis .card-body").text().trim();
 
             // 播放列表解析
             Elements playLinks = doc.select("#play-list a.btn-square");
+            if (playLinks.isEmpty()) {
+                playLinks = doc.select("#play-list a");
+            }
+            
             List<String> playPairs = new ArrayList<>();
             for (Element a : playLinks) {
                 String epName = a.text().trim();
