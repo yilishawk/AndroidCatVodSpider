@@ -21,7 +21,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class Bdys extends Spider {
 
-    private String host = "https://v.xlys.ltd.ua/";
+    private String host = "https://xl02.com.de/";
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     @Override
