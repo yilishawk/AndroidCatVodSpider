@@ -33,6 +33,9 @@ public class Bdys extends Spider {
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/147.0.7727.56 Safari/537.36";
 
+    /**
+     * 日志
+     */
     private void logger(String msg) {
         try {
             Proxy.log("[Bdys] " + msg);
@@ -68,7 +71,7 @@ public class Bdys extends Spider {
     }
 
     /**
-     * 主站请求头
+     * 请求头
      */
     private Map<String, String> getHeaders(String referer) {
 
@@ -79,9 +82,20 @@ public class Bdys extends Spider {
             referer = HOST + "/";
         }
 
-        headers.put("User-Agent", UA);
-        headers.put("Referer", referer);
-        headers.put("Origin", HOST);
+        headers.put(
+                "User-Agent",
+                UA
+        );
+
+        headers.put(
+                "Referer",
+                referer
+        );
+
+        headers.put(
+                "Origin",
+                HOST
+        );
 
         headers.put(
                 "Accept",
@@ -152,7 +166,7 @@ public class Bdys extends Spider {
     }
 
     /**
-     * HTTP GET
+     * GET
      */
     private String get(String url) {
         return get(url, HOST + "/");
@@ -164,7 +178,7 @@ public class Bdys extends Spider {
 
         try {
 
-            logger("================================");
+            logger("--------------------------------");
             logger("HTTP GET");
             logger("URL = " + url);
             logger("Referer = " + referer);
@@ -182,32 +196,42 @@ public class Bdys extends Spider {
                     headers.get("Origin")
             );
 
-            String body =
+            String html =
                     OkHttp.string(
                             url,
                             headers
                     );
 
-            if (TextUtils.isEmpty(body)) {
+            if (TextUtils.isEmpty(html)) {
 
-                logger("❌ HTTP 返回为空");
+                logger(
+                        "❌ HTTP 返回为空"
+                );
 
                 return "";
             }
 
             logger(
-                    "HTTP 返回长度 = " +
-                    body.length()
+                    "✅ HTTP 返回长度 = " +
+                    html.length()
             );
 
             String preview =
-                    body.replace("\n", " ")
-                            .replace("\r", " ")
-                            .trim();
+                    html.replace(
+                            "\n",
+                            " "
+                    ).replace(
+                            "\r",
+                            " "
+                    );
 
             if (preview.length() > 600) {
+
                 preview =
-                        preview.substring(0, 600);
+                        preview.substring(
+                                0,
+                                600
+                        );
             }
 
             logger(
@@ -215,19 +239,19 @@ public class Bdys extends Spider {
                     preview
             );
 
-            logger("================================");
+            logger("--------------------------------");
 
-            return body;
+            return html;
 
         } catch (Exception e) {
 
             logger(
-                    "❌ HTTP 异常 = " +
+                    "❌ HTTP 请求异常 = " +
                     e.getClass().getName()
             );
 
             logger(
-                    "❌ HTTP 异常信息 = " +
+                    "❌ 异常信息 = " +
                     e.getMessage()
             );
 
@@ -235,20 +259,24 @@ public class Bdys extends Spider {
         }
     }
 
+    /**
+     * 初始化
+     */
     @Override
     public void init(
             Context context,
             String extend) {
 
         logger("================================");
-        logger("Bdys 初始化");
+        logger("Bdys Spider 初始化");
         logger("HOST = " + HOST);
+        logger("UA = " + UA);
         logger("extend = " + extend);
         logger("================================");
     }
 
     /**
-     * 首页分类
+     * 首页
      */
     @Override
     public String homeContent(
@@ -257,17 +285,14 @@ public class Bdys extends Spider {
         try {
 
             logger("================================");
-            logger("homeContent");
+            logger("========== homeContent ==========");
             logger("filter = " + filter);
 
             List<Class> classes =
                     new ArrayList<>();
 
             /*
-             * 网站分类：
-             *
-             * type=1 -> 电视剧
-             * type=0 -> 电影
+             * 电视剧
              */
             classes.add(
                     new Class(
@@ -276,6 +301,9 @@ public class Bdys extends Spider {
                     )
             );
 
+            /*
+             * 电影
+             */
             classes.add(
                     new Class(
                             "0",
@@ -283,8 +311,13 @@ public class Bdys extends Spider {
                     )
             );
 
-            logger("电视剧 tid = 1");
-            logger("电影 tid = 0");
+            logger(
+                    "电视剧 tid = 1"
+            );
+
+            logger(
+                    "电影 tid = 0"
+            );
 
             LinkedHashMap<
                     String,
@@ -294,9 +327,12 @@ public class Bdys extends Spider {
 
             if (filter) {
 
-                List<Filter> filters =
+                List<Filter> filterList =
                         new ArrayList<>();
 
+                /*
+                 * 类型
+                 */
                 String[] typeNames = {
                         "全部",
                         "动作",
@@ -351,7 +387,7 @@ public class Bdys extends Spider {
                     );
                 }
 
-                filters.add(
+                filterList.add(
                         new Filter(
                                 "type_slug",
                                 "类型",
@@ -359,6 +395,9 @@ public class Bdys extends Spider {
                         )
                 );
 
+                /*
+                 * 年份
+                 */
                 List<Filter.Value>
                         yearOptions =
                         new ArrayList<>();
@@ -382,7 +421,7 @@ public class Bdys extends Spider {
                     );
                 }
 
-                filters.add(
+                filterList.add(
                         new Filter(
                                 "year",
                                 "年份",
@@ -392,12 +431,12 @@ public class Bdys extends Spider {
 
                 filterMap.put(
                         "0",
-                        filters
+                        filterList
                 );
 
                 filterMap.put(
                         "1",
-                        filters
+                        filterList
                 );
             }
 
@@ -408,12 +447,7 @@ public class Bdys extends Spider {
                     );
 
             logger(
-                    "homeContent 返回长度 = " +
-                    result.length()
-            );
-
-            logger(
-                    "homeContent JSON = " +
+                    "homeContent 返回 = " +
                     result
             );
 
@@ -436,6 +470,15 @@ public class Bdys extends Spider {
 
     /**
      * 分类
+     *
+     * 真实网页：
+     *
+     * <div class="xl-list-card">
+     *   <div class="xl-grid-container">
+     *     <div class="xl-movies-grid-8">
+     *       <div class="movie-card">
+     *         <a class="card-img"
+     *            href="/guoju/27044.htm">
      */
     @Override
     public String categoryContent(
@@ -451,16 +494,32 @@ public class Bdys extends Spider {
             logger("######## categoryContent ########");
             logger("################################");
 
-            logger("tid = [" + tid + "]");
-            logger("pg = [" + pg + "]");
-            logger("filter = [" + filter + "]");
+            logger(
+                    "tid = [" +
+                    tid +
+                    "]"
+            );
+
+            logger(
+                    "pg = [" +
+                    pg +
+                    "]"
+            );
+
+            logger(
+                    "filter = [" +
+                    filter +
+                    "]"
+            );
 
             /*
-             * 打印 extend
+             * extend
              */
             if (extend == null) {
 
-                logger("extend = null");
+                logger(
+                        "extend = null"
+                );
 
             } else {
 
@@ -493,6 +552,7 @@ public class Bdys extends Spider {
             try {
 
                 if (!TextUtils.isEmpty(pg)) {
+
                     page =
                             Integer.parseInt(pg);
                 }
@@ -500,7 +560,7 @@ public class Bdys extends Spider {
             } catch (Exception e) {
 
                 logger(
-                        "pg 解析失败，使用 page=1"
+                        "pg 转数字失败，使用 1"
                 );
             }
 
@@ -509,14 +569,17 @@ public class Bdys extends Spider {
             }
 
             /*
-             * 类型
+             * 类型 slug
              */
-            String typeSlug = "all";
+            String typeSlug =
+                    "all";
 
             if (extend != null) {
 
                 String value =
-                        extend.get("type_slug");
+                        extend.get(
+                                "type_slug"
+                        );
 
                 if (!TextUtils.isEmpty(value)) {
 
@@ -531,10 +594,15 @@ public class Bdys extends Spider {
             );
 
             /*
-             * 拼接 URL
+             * 分类 URL
              *
              * 电视剧：
+             *
              * https://v.xl.in.ua/s/all/1?type=1
+             *
+             * 电影：
+             *
+             * https://v.xl.in.ua/s/all/1?type=0
              */
             StringBuilder builder =
                     new StringBuilder();
@@ -568,12 +636,12 @@ public class Bdys extends Spider {
                 }
             }
 
-            String url =
+            String categoryUrl =
                     builder.toString();
 
             logger("--------------------------------");
             logger("最终分类 URL:");
-            logger(url);
+            logger(categoryUrl);
             logger("--------------------------------");
 
             /*
@@ -581,7 +649,7 @@ public class Bdys extends Spider {
              */
             String html =
                     get(
-                            url,
+                            categoryUrl,
                             HOST + "/"
                     );
 
@@ -596,29 +664,21 @@ public class Bdys extends Spider {
                 );
             }
 
-            /*
-             * Jsoup
-             */
-            Document doc =
-                    Jsoup.parse(html);
-
-            logger(
-                    "网页 title = " +
-                    doc.title()
-            );
-
             logger(
                     "HTML 长度 = " +
                     html.length()
             );
 
+            Document doc =
+                    Jsoup.parse(html);
+
+            logger(
+                    "HTML title = " +
+                    doc.title()
+            );
+
             /*
-             * 根据你提供的真实 HTML：
-             *
-             * .xl-list-card
-             *   .xl-grid-container
-             *     .xl-movies-grid-8
-             *       .movie-card
+             * 严格按照真实网页结构解析
              */
             Elements cards =
                     doc.select(
@@ -626,12 +686,12 @@ public class Bdys extends Spider {
                     );
 
             logger(
-                    ".xl-list-card .movie-card 数量 = " +
+                    ".xl-list-card .movie-card = " +
                     cards.size()
             );
 
             /*
-             * 如果没有找到，再尝试全局
+             * 备用
              */
             if (cards.isEmpty()) {
 
@@ -641,14 +701,13 @@ public class Bdys extends Spider {
                         );
 
                 logger(
-                        "备用 .movie-card 数量 = " +
+                        "备用 .movie-card = " +
                         cards.size()
                 );
             }
 
             /*
-             * 如果仍然没有：
-             * 打印几个关键节点数量
+             * 没找到卡片
              */
             if (cards.isEmpty()) {
 
@@ -684,23 +743,30 @@ public class Bdys extends Spider {
                         ).size()
                 );
 
-                logger(
-                        "a[href] = " +
-                        doc.select(
-                                "a[href]"
-                        ).size()
-                );
-
                 return Result.string(
                         new ArrayList<>()
                 );
             }
 
+            /*
+             * 最终列表
+             */
             List<Vod> list =
                     new ArrayList<>();
 
             /*
-             * 解析影片
+             * 用自己解析出来的 vodId 去重。
+             *
+             * 不调用 Vod 的任何 getter。
+             */
+            LinkedHashMap<
+                    String,
+                    Vod
+                    > unique =
+                    new LinkedHashMap<>();
+
+            /*
+             * 解析卡片
              */
             for (int i = 0;
                  i < cards.size();
@@ -713,12 +779,12 @@ public class Bdys extends Spider {
 
                     logger("--------------------------------");
                     logger(
-                            "解析影片 #" +
+                            "开始解析影片 #" +
                             i
                     );
 
                     /*
-                     * a.card-img
+                     * 链接
                      */
                     Element a =
                             card.selectFirst(
@@ -734,19 +800,19 @@ public class Bdys extends Spider {
                         continue;
                     }
 
-                    /*
-                     * href
-                     */
                     String href =
-                            a.attr("href")
-                                    .trim();
+                            a.attr(
+                                    "href"
+                            ).trim();
 
                     logger(
                             "href = " +
                             href
                     );
 
-                    if (TextUtils.isEmpty(href)) {
+                    if (TextUtils.isEmpty(
+                            href
+                    )) {
 
                         logger(
                                 "❌ href 为空"
@@ -756,16 +822,18 @@ public class Bdys extends Spider {
                     }
 
                     /*
-                     * 注意：
+                     * 这里保存完整 URL。
                      *
-                     * vod_id 保留网站原始路径。
+                     * 例如：
                      *
                      * /guoju/27044.htm
                      *
-                     * 这样最接近网站原始数据。
+                     * →
+                     *
+                     * https://v.xl.in.ua/guoju/27044.htm
                      */
                     String vodId =
-                            href;
+                            fixUrl(href);
 
                     logger(
                             "vodId = " +
@@ -773,7 +841,7 @@ public class Bdys extends Spider {
                     );
 
                     /*
-                     * 标题
+                     * 名称
                      */
                     String name = "";
 
@@ -785,28 +853,29 @@ public class Bdys extends Spider {
                     if (h4 != null) {
 
                         name =
-                                h4.text().trim();
+                                h4.text()
+                                        .trim();
                     }
 
                     /*
                      * 如果 h4 没有，
-                     * 使用 a 的 title
+                     * 从 title 获取。
                      */
-                    if (TextUtils.isEmpty(name)) {
+                    if (TextUtils.isEmpty(
+                            name
+                    )) {
 
-                        name =
+                        String title =
                                 a.attr(
                                         "title"
                                 ).trim();
-                    }
 
-                    /*
-                     * 最后使用 a 文本
-                     */
-                    if (TextUtils.isEmpty(name)) {
+                        if (!TextUtils.isEmpty(
+                                title
+                        )) {
 
-                        name =
-                                a.text().trim();
+                            name = title;
+                        }
                     }
 
                     logger(
@@ -814,7 +883,9 @@ public class Bdys extends Spider {
                             name
                     );
 
-                    if (TextUtils.isEmpty(name)) {
+                    if (TextUtils.isEmpty(
+                            name
+                    )) {
 
                         logger(
                                 "❌ name 为空"
@@ -882,30 +953,33 @@ public class Bdys extends Spider {
                      */
                     String remark = "";
 
-                    Element badge =
+                    Element episodeBadge =
                             card.selectFirst(
                                     ".episode-badge"
                             );
 
-                    if (badge != null) {
+                    if (episodeBadge != null) {
 
                         remark =
-                                badge.text().trim();
+                                episodeBadge
+                                        .text()
+                                        .trim();
                     }
 
                     if (TextUtils.isEmpty(
                             remark
                     )) {
 
-                        Element rating =
+                        Element ratingBadge =
                                 card.selectFirst(
                                         ".rating-badge"
                                 );
 
-                        if (rating != null) {
+                        if (ratingBadge != null) {
 
                             remark =
-                                    rating.text()
+                                    ratingBadge
+                                            .text()
                                             .trim();
                         }
                     }
@@ -914,6 +988,20 @@ public class Bdys extends Spider {
                             "remark = " +
                             remark
                     );
+
+                    /*
+                     * 去重
+                     */
+                    if (unique.containsKey(
+                            vodId
+                    )) {
+
+                        logger(
+                                "⚠️ 重复 vodId，跳过"
+                        );
+
+                        continue;
+                    }
 
                     /*
                      * 创建 Vod
@@ -926,10 +1014,33 @@ public class Bdys extends Spider {
                                     remark
                             );
 
-                    list.add(vod);
+                    unique.put(
+                            vodId,
+                            vod
+                    );
 
                     logger(
-                            "✅ Vod 加入 list"
+                            "✅ Vod 添加成功"
+                    );
+
+                    logger(
+                            "  vod_id = " +
+                            vodId
+                    );
+
+                    logger(
+                            "  vod_name = " +
+                            name
+                    );
+
+                    logger(
+                            "  vod_pic = " +
+                            pic
+                    );
+
+                    logger(
+                            "  vod_remarks = " +
+                            remark
                     );
 
                 } catch (Exception e) {
@@ -937,43 +1048,25 @@ public class Bdys extends Spider {
                     logger(
                             "❌ 影片 #" +
                             i +
-                            " 解析异常: " +
+                            " 解析异常"
+                    );
+
+                    logger(
+                            "Exception = " +
+                            e.getClass()
+                                    .getName()
+                    );
+
+                    logger(
+                            "Message = " +
                             e.getMessage()
                     );
                 }
             }
 
             /*
-             * 去重
+             * Map → List
              */
-            LinkedHashMap<
-                    String,
-                    Vod
-                    > unique =
-                    new LinkedHashMap<>();
-
-            for (Vod vod : list) {
-
-                if (vod == null) {
-                    continue;
-                }
-
-                String id =
-                        vod.getVodId();
-
-                if (TextUtils.isEmpty(id)) {
-                    continue;
-                }
-
-                if (!unique.containsKey(id)) {
-
-                    unique.put(
-                            id,
-                            vod
-                    );
-                }
-            }
-
             list =
                     new ArrayList<>(
                             unique.values()
@@ -981,54 +1074,32 @@ public class Bdys extends Spider {
 
             logger("--------------------------------");
             logger(
-                    "原始解析数量 = " +
+                    "分类解析完成"
+            );
+
+            logger(
+                    "最终 Vod 数量 = " +
                     list.size()
             );
 
             /*
-             * 逐条输出最终数据
+             * 这里不再调用：
+             *
+             * vod.getVodId()
+             * vod.getVodName()
+             * vod.getVodPic()
+             * vod.getVodRemarks()
+             *
+             * 因为你项目的 Vod.java 没有这些 getter。
              */
-            for (int i = 0;
-                 i < list.size();
-                 i++) {
-
-                Vod vod =
-                        list.get(i);
-
-                logger(
-                        "最终 Vod[" +
-                        i +
-                        "]"
-                );
-
-                logger(
-                        "  vod_id = " +
-                        vod.getVodId()
-                );
-
-                logger(
-                        "  vod_name = " +
-                        vod.getVodName()
-                );
-
-                logger(
-                        "  vod_pic = " +
-                        vod.getVodPic()
-                );
-
-                logger(
-                        "  vod_remarks = " +
-                        vod.getVodRemarks()
-                );
-            }
 
             /*
-             * 最关键：
-             * 直接打印 Result.string()
-             * 最终返回给 TVBox 的 JSON。
+             * Result JSON
              */
             String result =
-                    Result.string(list);
+                    Result.string(
+                            list
+                    );
 
             logger("--------------------------------");
             logger(
@@ -1042,11 +1113,9 @@ public class Bdys extends Spider {
             );
 
             logger(
-                    "最终 Vod 数量 = " +
-                    list.size()
+                    "######## categoryContent END ########"
             );
 
-            logger("######## categoryContent END ########");
             logger("################################");
 
             return result;
@@ -1129,7 +1198,7 @@ public class Bdys extends Spider {
             String html =
                     get(
                             url,
-                            HOST + "/"
+                            url
                     );
 
             if (TextUtils.isEmpty(html)) {
@@ -1167,29 +1236,39 @@ public class Bdys extends Spider {
                     );
 
             if (h4 != null) {
+
                 name =
-                        h4.text().trim();
+                        h4.text()
+                                .trim();
             }
 
             if (TextUtils.isEmpty(name)) {
 
                 Element h1 =
-                        doc.selectFirst("h1");
+                        doc.selectFirst(
+                                "h1"
+                        );
 
                 if (h1 != null) {
+
                     name =
-                            h1.text().trim();
+                            h1.text()
+                                    .trim();
                 }
             }
 
             if (TextUtils.isEmpty(name)) {
 
                 Element h2 =
-                        doc.selectFirst("h2");
+                        doc.selectFirst(
+                                "h2"
+                        );
 
                 if (h2 != null) {
+
                     name =
-                            h2.text().trim();
+                            h2.text()
+                                    .trim();
                 }
             }
 
@@ -1227,10 +1306,14 @@ public class Bdys extends Spider {
             if (img != null) {
 
                 String dataSrc =
-                        img.attr("data-src");
+                        img.attr(
+                                "data-src"
+                        );
 
                 String src =
-                        img.attr("src");
+                        img.attr(
+                                "src"
+                        );
 
                 if (!TextUtils.isEmpty(
                         dataSrc
@@ -1267,20 +1350,41 @@ public class Bdys extends Spider {
             if (synopsis != null) {
 
                 content =
-                        synopsis.text().trim();
+                        synopsis.text()
+                                .trim();
             }
 
-            if (TextUtils.isEmpty(content)) {
+            if (TextUtils.isEmpty(
+                    content
+            )) {
 
-                Element e =
+                Element synopsis2 =
                         doc.selectFirst(
                                 ".synopsis"
                         );
 
-                if (e != null) {
+                if (synopsis2 != null) {
 
                     content =
-                            e.text().trim();
+                            synopsis2.text()
+                                    .trim();
+                }
+            }
+
+            if (TextUtils.isEmpty(
+                    content
+            )) {
+
+                Element content2 =
+                        doc.selectFirst(
+                                ".movie-content"
+                        );
+
+                if (content2 != null) {
+
+                    content =
+                            content2.text()
+                                    .trim();
                 }
             }
 
@@ -1302,6 +1406,9 @@ public class Bdys extends Spider {
                     playLinks.size()
             );
 
+            /*
+             * 备用选择器
+             */
             if (playLinks.isEmpty()) {
 
                 playLinks =
@@ -1322,30 +1429,29 @@ public class Bdys extends Spider {
             }
 
             /*
-             * 如果仍然没有，
-             * 扫描所有 href，
-             * 但只保留疑似剧集链接。
+             * 最后扫描可能的剧集链接
              */
             if (playLinks.isEmpty()) {
 
-                Elements allLinks =
+                Elements all =
                         doc.select(
                                 "a[href]"
                         );
 
                 logger(
-                        "全页面 a[href] = " +
-                        allLinks.size()
+                        "页面全部 a[href] = " +
+                        all.size()
                 );
 
                 List<Element> candidates =
                         new ArrayList<>();
 
                 for (Element a :
-                        allLinks) {
+                        all) {
 
                     String text =
-                            a.text().trim();
+                            a.text()
+                                    .trim();
 
                     String href =
                             a.attr(
@@ -1364,9 +1470,6 @@ public class Bdys extends Spider {
                         continue;
                     }
 
-                    String lower =
-                            href.toLowerCase();
-
                     boolean episode =
                             text.matches(
                                     ".*第?\\d+集.*"
@@ -1383,6 +1486,9 @@ public class Bdys extends Spider {
                             text.matches(
                                     "\\d+"
                             );
+
+                    String lower =
+                            href.toLowerCase();
 
                     boolean playPath =
                             lower.contains(
@@ -1416,7 +1522,7 @@ public class Bdys extends Spider {
             }
 
             /*
-             * 播放列表
+             * 集数
              */
             List<String> playPairs =
                     new ArrayList<>();
@@ -1429,7 +1535,8 @@ public class Bdys extends Spider {
                         playLinks.get(i);
 
                 String epName =
-                        a.text().trim();
+                        a.text()
+                                .trim();
 
                 String epHref =
                         a.attr(
@@ -1453,8 +1560,15 @@ public class Bdys extends Spider {
                 if (TextUtils.isEmpty(
                         epHref
                 )) {
+
                     continue;
                 }
+
+                /*
+                 * 播放地址统一转绝对 URL
+                 */
+                epHref =
+                        fixUrl(epHref);
 
                 if (TextUtils.isEmpty(
                         epName
@@ -1473,58 +1587,30 @@ public class Bdys extends Spider {
                 );
             }
 
-            /*
-             * 去重
-             */
-            LinkedHashMap<
-                    String,
-                    String
-                    > uniquePlay =
-                    new LinkedHashMap<>();
-
-            for (String pair :
-                    playPairs) {
-
-                int p =
-                        pair.indexOf("$");
-
-                if (p <= 0) {
-                    continue;
-                }
-
-                String href =
-                        pair.substring(
-                                p + 1
-                        );
-
-                if (!uniquePlay.containsKey(
-                        href
-                )) {
-
-                    uniquePlay.put(
-                            href,
-                            pair
-                    );
-                }
-            }
-
-            playPairs =
-                    new ArrayList<>(
-                            uniquePlay.values()
-                    );
-
             logger(
                     "最终播放集数 = " +
                     playPairs.size()
             );
 
+            /*
+             * 创建详情 Vod
+             */
             Vod vod =
                     new Vod();
 
             vod.setVodId(id);
-            vod.setVodName(name);
-            vod.setVodPic(pic);
-            vod.setVodContent(content);
+
+            vod.setVodName(
+                    name
+            );
+
+            vod.setVodPic(
+                    pic
+            );
+
+            vod.setVodContent(
+                    content
+            );
 
             if (!playPairs.isEmpty()) {
 
@@ -1532,20 +1618,23 @@ public class Bdys extends Spider {
                         "哔嘀影视"
                 );
 
-                vod.setVodPlayUrl(
+                String playUrl =
                         TextUtils.join(
                                 "#",
                                 playPairs
-                        )
+                        );
+
+                vod.setVodPlayUrl(
+                        playUrl
                 );
 
                 logger(
-                        "播放源 = 哔嘀影视"
+                        "vodPlayFrom = 哔嘀影视"
                 );
 
                 logger(
-                        "播放URL = " +
-                        vod.getVodPlayUrl()
+                        "vodPlayUrl = " +
+                        playUrl
                 );
 
             } else {
@@ -1554,19 +1643,29 @@ public class Bdys extends Spider {
                         "⚠️ 没有找到播放地址"
                 );
 
-                vod.setVodPlayFrom("");
-                vod.setVodPlayUrl("");
+                vod.setVodPlayFrom(
+                        ""
+                );
+
+                vod.setVodPlayUrl(
+                        ""
+                );
             }
 
             String result =
-                    Result.string(vod);
+                    Result.string(
+                            vod
+                    );
 
             logger(
                     "详情 Result JSON = " +
                     result
             );
 
-            logger("######## detailContent END ########");
+            logger(
+                    "######## detailContent END ########"
+            );
+
             logger("################################");
 
             return result;
@@ -1622,18 +1721,31 @@ public class Bdys extends Spider {
                     fixUrl(id);
 
             logger(
-                    "playUrl = " +
+                    "最终播放 URL = " +
                     playUrl
             );
 
             String lower =
                     playUrl.toLowerCase();
 
-            if (lower.contains(".m3u8") ||
-                    lower.contains(".mp4") ||
-                    lower.contains(".mkv") ||
-                    lower.contains(".flv") ||
-                    lower.contains(".ts")) {
+            /*
+             * 直接媒体地址
+             */
+            if (lower.contains(
+                    ".m3u8"
+            ) ||
+                    lower.contains(
+                            ".mp4"
+                    ) ||
+                    lower.contains(
+                            ".mkv"
+                    ) ||
+                    lower.contains(
+                            ".flv"
+                    ) ||
+                    lower.contains(
+                            ".ts"
+                    )) {
 
                 logger(
                         "检测为直接媒体地址"
@@ -1642,7 +1754,9 @@ public class Bdys extends Spider {
                 String result =
                         Result.get()
                                 .parse(0)
-                                .url(playUrl)
+                                .url(
+                                        playUrl
+                                )
                                 .header(
                                         getHeaders(
                                                 HOST + "/"
@@ -1651,13 +1765,16 @@ public class Bdys extends Spider {
                                 .string();
 
                 logger(
-                        "player result = " +
+                        "player Result = " +
                         result
                 );
 
                 return result;
             }
 
+            /*
+             * 播放页面
+             */
             logger(
                     "检测为播放页面"
             );
@@ -1665,7 +1782,9 @@ public class Bdys extends Spider {
             String result =
                     Result.get()
                             .parse(1)
-                            .url(playUrl)
+                            .url(
+                                    playUrl
+                            )
                             .header(
                                     getHeaders(
                                             HOST + "/"
@@ -1674,7 +1793,7 @@ public class Bdys extends Spider {
                             .string();
 
             logger(
-                    "player result = " +
+                    "player Result = " +
                     result
             );
 
@@ -1742,6 +1861,10 @@ public class Bdys extends Spider {
                     searchUrl
             );
 
+            /*
+             * 搜索站不是主站，
+             * 所以不发送主站 Referer / Origin。
+             */
             Map<String, String>
                     headers =
                     new LinkedHashMap<>();
@@ -1756,16 +1879,18 @@ public class Bdys extends Spider {
                     "application/json,text/plain,*/*"
             );
 
-            String json =
+            String jsonStr =
                     OkHttp.string(
                             searchUrl,
                             headers
                     );
 
-            if (TextUtils.isEmpty(json)) {
+            if (TextUtils.isEmpty(
+                    jsonStr
+            )) {
 
                 logger(
-                        "❌ 搜索返回为空"
+                        "❌ 搜索响应为空"
                 );
 
                 return Result.string(
@@ -1774,12 +1899,12 @@ public class Bdys extends Spider {
             }
 
             logger(
-                    "搜索 JSON 长度 = " +
-                    json.length()
+                    "搜索响应长度 = " +
+                    jsonStr.length()
             );
 
             String preview =
-                    json.replace(
+                    jsonStr.replace(
                             "\n",
                             " "
                     ).replace(
@@ -1797,27 +1922,29 @@ public class Bdys extends Spider {
             }
 
             logger(
-                    "搜索 JSON 预览 = " +
+                    "搜索响应预览 = " +
                     preview
             );
 
-            JSONArray array =
-                    new JSONArray(json);
+            JSONArray jsonArray =
+                    new JSONArray(
+                            jsonStr
+                    );
 
             logger(
-                    "搜索结果数量 = " +
-                    array.length()
+                    "JSON 数量 = " +
+                    jsonArray.length()
             );
 
-            List<Vod> list =
+            List<Vod> resultList =
                     new ArrayList<>();
 
             for (int i = 0;
-                 i < array.length();
+                 i < jsonArray.length();
                  i++) {
 
                 JSONObject item =
-                        array.getJSONObject(i);
+                        jsonArray.getJSONObject(i);
 
                 String title =
                         item.optString(
@@ -1844,6 +1971,13 @@ public class Bdys extends Spider {
                 logger(
                         "搜索[" +
                         i +
+                        "] image = " +
+                        image
+                );
+
+                logger(
+                        "搜索[" +
+                        i +
                         "] href = " +
                         href
                 );
@@ -1854,12 +1988,13 @@ public class Bdys extends Spider {
                         TextUtils.isEmpty(
                                 href
                         )) {
+
                     continue;
                 }
 
-                list.add(
+                resultList.add(
                         new Vod(
-                                href,
+                                fixUrl(href),
                                 title,
                                 fixUrl(image),
                                 ""
@@ -1867,13 +2002,15 @@ public class Bdys extends Spider {
                 );
             }
 
-            String result =
-                    Result.string(list);
-
             logger(
-                    "搜索最终数量 = " +
-                    list.size()
+                    "搜索最终结果 = " +
+                    resultList.size()
             );
+
+            String result =
+                    Result.string(
+                            resultList
+                    );
 
             logger(
                     "搜索 Result JSON = " +
