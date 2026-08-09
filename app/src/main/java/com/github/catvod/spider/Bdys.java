@@ -4,6 +4,7 @@ import android.content.Context;
 import android.text.TextUtils;
 
 import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -21,6 +22,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -79,13 +81,33 @@ public class Bdys extends Spider {
             classes.add(new Class("1", "电视剧"));
             classes.add(new Class("0", "电影"));
 
-            // 筛选（类型/年份）暂时移除：原来的 Result.string(classes, filterMap) 重载
-            // 无法在项目里确认是否真实存在，为避免异常被吞掉导致分类整体不显示，
-            // 先只保留分类本身，用已确认可用的链式写法。
-            return Result.get().classes(classes).string();
+            LinkedHashMap<String, List<Filter>> filterMap = new LinkedHashMap<>();
+            if (filter) {
+                List<Filter> filterList = new ArrayList<>();
+
+                String[] typeNames = {"全部", "动作", "爱情", "喜剧", "科幻", "恐怖", "剧情", "动画", "悬疑", "犯罪", "古装", "奇幻", "美剧", "韩剧", "国产", "日剧"};
+                String[] typeValues = {"all", "dongzuo", "aiqing", "xiju", "kehuan", "kongbu", "juqing", "donghua", "xuanyi", "fanzui", "guzhuang", "qihuan", "meiju", "hanju", "guoju", "riju"};
+                List<Filter.Value> typeOptions = new ArrayList<>();
+                for (int i = 0; i < typeNames.length; i++) {
+                    typeOptions.add(new Filter.Value(typeNames[i], typeValues[i]));
+                }
+                filterList.add(new Filter("type_slug", "类型", typeOptions));
+
+                List<Filter.Value> yearOptions = new ArrayList<>();
+                yearOptions.add(new Filter.Value("全部", ""));
+                for (int y = 2026; y >= 2015; y--) {
+                    yearOptions.add(new Filter.Value(String.valueOf(y), String.valueOf(y)));
+                }
+                filterList.add(new Filter("year", "年份", yearOptions));
+
+                filterMap.put("0", filterList);
+                filterMap.put("1", filterList);
+            }
+
+            return Result.string(classes, filterMap);
         } catch (Exception e) {
             logger("homeContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.error(e.getMessage());
         }
     }
 
@@ -104,29 +126,24 @@ public class Bdys extends Spider {
             logger("分类请求 URL: " + url);
             String html = OkHttp.string(url, getHeaders());
             if (TextUtils.isEmpty(html)) {
-                logger("⚠️ 分类请求返回空 HTML");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
             
-            // 匹配新版 HTML 中的 .movie-card 节点
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) {
-                cards = doc.select(".card-sm"); // 旧版节点降级备用
+                cards = doc.select(".card-sm");
             }
-            logger("匹配到的影片节点总数: " + cards.size());
 
             for (Element card : cards) {
                 Element a = card.selectFirst("a");
                 if (a == null) continue;
 
-                // 1. 获取 vod_id（必须非空）
                 String vodId = a.attr("href").trim();
                 if (TextUtils.isEmpty(vodId)) continue;
 
-                // 2. 提取片名（多路径精准抓取，彻底避免标题为空）
                 String name = "";
                 Element h4 = card.selectFirst(".card-info h4");
                 if (h4 != null) {
@@ -134,7 +151,6 @@ public class Bdys extends Spider {
                 }
                 if (TextUtils.isEmpty(name) && a.hasAttr("title")) {
                     String fullTitle = a.attr("title").trim();
-                    // 如果 title 是 "2026国剧《天才，女友》更至14集..."，用正则提取书名号中的文字
                     Matcher matcher = Pattern.compile("《(.*?)》").matcher(fullTitle);
                     if (matcher.find()) {
                         name = matcher.group(1);
@@ -146,10 +162,8 @@ public class Bdys extends Spider {
                     name = card.select(".text-truncate").text().trim();
                 }
 
-                // 如果依然获取不到标题，跳过，防止扔给 TVBox 空记录
                 if (TextUtils.isEmpty(name)) continue;
 
-                // 3. 提取图片（优先取真实加载图 data-src）
                 Element img = card.selectFirst("img");
                 String pic = "";
                 if (img != null) {
@@ -157,7 +171,6 @@ public class Bdys extends Spider {
                     pic = fixUrl(pic);
                 }
 
-                // 4. 提取更新备注/角标（如：更至14集、完结）
                 String remark = "";
                 Element episodeBadge = card.selectFirst(".episode-badge");
                 if (episodeBadge != null) {
@@ -169,19 +182,13 @@ public class Bdys extends Spider {
                     }
                 }
 
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(name);
-                vod.setVodPic(pic);
-                vod.setVodRemarks(remark);
-                list.add(vod);
+                list.add(new Vod(vodId, name, pic, remark));
             }
 
-            logger("成功打包给 TVBox 的有效影视条数: " + list.size());
             return Result.string(list);
         } catch (Exception e) {
-            logger("categoryContent 捕获异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            logger("categoryContent 异常: " + e.getMessage());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -194,8 +201,7 @@ public class Bdys extends Spider {
 
             String html = OkHttp.string(url, getHeaders());
             if (TextUtils.isEmpty(html)) {
-                logger("⚠️ 详情页响应为空");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
             Document doc = Jsoup.parse(html);
@@ -211,7 +217,6 @@ public class Bdys extends Spider {
 
             String content = doc.select("#synopsis .card-body, .synopsis").text().trim();
 
-            // 播放列表解析
             Elements playLinks = doc.select("#play-list a");
             List<String> playPairs = new ArrayList<>();
             for (Element a : playLinks) {
@@ -236,7 +241,7 @@ public class Bdys extends Spider {
             return Result.string(vod);
         } catch (Exception e) {
             logger("detailContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
@@ -246,20 +251,7 @@ public class Bdys extends Spider {
             String playUrl = fixUrl(id);
             logger("播放页请求: " + playUrl);
 
-            String html = OkHttp.string(playUrl, getHeaders());
-            
-            // 匹配 pid 用于加密验签
-            Matcher m = Pattern.compile("var pid\\s*=\\s*(\\d+)").matcher(html);
-            if (m.find()) {
-                String pid = m.group(1);
-                long t = System.currentTimeMillis();
-                String plain = pid + "-" + t;
-                String md5 = Util.MD5(plain);
-                String sg = aesEcbEncrypt(plain, md5.substring(0, 16));
-                logger("提取到 PID: " + pid + " 签名: " + sg);
-            }
-
-            logger("交由播放器嗅探处理: " + playUrl);
+            // 直接交由播放器嗅探解析，不在子线程做过多同步 HTTP 堵塞操作
             return Result.get().parse(1).url(playUrl).string();
         } catch (Exception e) {
             logger("playerContent 异常: " + e.getMessage());
@@ -269,15 +261,14 @@ public class Bdys extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
+        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<Vod>());
         try {
             String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
             logger("搜索请求 URL: " + searchUrl);
 
             String jsonStr = OkHttp.string(searchUrl, getHeaders());
             if (TextUtils.isEmpty(jsonStr)) {
-                logger("⚠️ 搜索接口返回数据为空");
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
             JSONArray jsonArray = new JSONArray(jsonStr);
@@ -289,33 +280,13 @@ public class Bdys extends Spider {
                 String image = item.optString("image");
                 String href = item.optString("href");
 
-                Vod vod = new Vod();
-                vod.setVodId(href);
-                vod.setVodName(title);
-                vod.setVodPic(image);
-                vod.setVodRemarks("");
-                resultList.add(vod);
+                resultList.add(new Vod(href, title, image, ""));
             }
 
-            logger("搜索成功解析出 " + resultList.size() + " 条记录");
             return Result.string(resultList);
         } catch (Exception e) {
             logger("searchContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
-    }
-
-    private String aesEcbEncrypt(String plainText, String key) throws Exception {
-        SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "AES");
-        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-        byte[] encrypted = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
-        return bytesToHex(encrypted).toUpperCase();
-    }
-
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) sb.append(String.format("%02X", b));
-        return sb.toString();
     }
 }
