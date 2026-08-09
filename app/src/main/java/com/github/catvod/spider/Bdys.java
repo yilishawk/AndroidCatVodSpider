@@ -1,3 +1,14 @@
+对比 Czzyv.java 和之前写的 Bdys.java，就能明白为什么你的 Bdys 打印不出日志，而 Czzyv 却有日志了。
+关键区别分析
+ * 统一封装网络请求与日志点（核心原因）：
+   * Czzyv.java 的做法：它单独写了一个 get(url, referer) 私有方法。所有网络请求都统一走这个 get 方法，只要请求失败或报错，就会直接触发 logger("请求失败: " + e.getMessage())。
+   * Bdys.java 的做法：直接在各个方法内部调用 OkHttp.string(url, getHeaders())。一旦网络超速、或者请求超时抛出异常（例如 java.net.SocketTimeoutException），代码会直接跳到外层的 catch (Exception e) 块，中间过程完全没有打出任何 log！
+ * 请求头与安全校验处理：
+   * Czzyv 额外增加了 Cache-Control 和 Pragma 请求头，降低被服务端反爬阻断抛错的几率。
+借鉴 Czzyv 重构后的 Bdys.java
+按 Czzyv 的架构风格重构 Bdys：
+ * 提取统一的 get(url) 请求函数，并在请求前和请求失败时强制打 Log。
+ * 保持精简正则与提取逻辑不变，去除无用冗余逻辑。
 package com.github.catvod.spider;
 
 import android.content.Context;
@@ -9,7 +20,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -19,7 +29,6 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -28,13 +37,10 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
-
 public class Bdys extends Spider {
 
-    private String host = "https://v.xl.in.ua";
-    private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
+    private static String HOST = "https://v.xl.in.ua";
+    private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
 
     private void logger(String msg) {
         try {
@@ -48,15 +54,23 @@ public class Bdys extends Spider {
         if (path.startsWith("http://") || path.startsWith("https://")) return path;
         if (path.startsWith("//")) return "https:" + path;
         if (!path.startsWith("/")) path = "/" + path;
-        return host + path;
+        return HOST + path;
     }
 
-    private Map<String, String> getHeaders() {
+    /**
+     * 借鉴 Czzyv：根据抓包特征补全防盗链与 Request Header
+     */
+    private Map<String, String> getHeaders(String referer) {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", commonUa);
-        headers.put("Referer", host + "/");
+        headers.put("User-Agent", UA);
+        headers.put("Referer", TextUtils.isEmpty(referer) ? HOST + "/" : referer);
+        headers.put("Origin", HOST);
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headers.put("Cache-Control", "no-cache");
+        headers.put("Pragma", "no-cache");
+
+        // Chrome 安全校验参数
         headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
         headers.put("sec-ch-ua-mobile", "?0");
         headers.put("sec-ch-ua-platform", "\"Windows\"");
@@ -68,14 +82,36 @@ public class Bdys extends Spider {
         return headers;
     }
 
-    @Override
-    public void init(Context context, String extend) throws Exception {
-        super.init(context, extend);
-        logger("🚀 Bdys 插件初始化完成");
+    /**
+     * 借鉴 Czzyv：统一封装 HTTP GET 请求并自动捕获、打印日志
+     */
+    private String get(String url) {
+        return get(url, HOST + "/");
+    }
+
+    private String get(String url, String referer) {
+        try {
+            logger("🌐 发起 GET 请求: " + url);
+            String html = OkHttp.string(url, getHeaders(referer));
+            if (TextUtils.isEmpty(html)) {
+                logger("⚠️ 请求响应内容为空: " + url);
+                return "";
+            }
+            return html;
+        } catch (Exception e) {
+            logger("❌ 网络请求失败 (" + url + "): " + e.getMessage());
+            return "";
+        }
     }
 
     @Override
-    public String homeContent(boolean filter) throws Exception {
+    public void init(Context context, String extend) {
+        logger("🚀 初始化 Bdys Spider 插件...");
+        logger("当前激活主站域名: " + HOST);
+    }
+
+    @Override
+    public String homeContent(boolean filter) {
         try {
             List<Class> classes = new ArrayList<>();
             classes.add(new Class("1", "电视剧"));
@@ -107,36 +143,37 @@ public class Bdys extends Spider {
             return Result.string(classes, filterMap);
         } catch (Exception e) {
             logger("homeContent 异常: " + e.getMessage());
-            return Result.error(e.getMessage());
+            return Result.string(new ArrayList<>());
         }
     }
 
     @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             int page = Integer.parseInt(pg);
             String typeSlug = (extend != null && extend.containsKey("type_slug") && !TextUtils.isEmpty(extend.get("type_slug"))) 
                     ? extend.get("type_slug") : "all";
 
-            String url = host + "/s/" + typeSlug + "/" + page + "?type=" + tid;
+            String url = HOST + "/s/" + typeSlug + "/" + page + "?type=" + tid;
             if (extend != null && extend.containsKey("year") && !TextUtils.isEmpty(extend.get("year"))) {
                 url += "&year=" + extend.get("year");
             }
 
-            logger("分类请求 URL: " + url);
-            String html = OkHttp.string(url, getHeaders());
+            logger("分类请求: " + tid + " 页码: " + page + " → " + url);
+            String html = get(url);
             if (TextUtils.isEmpty(html)) {
-                return Result.string(new ArrayList<Vod>());
+                return Result.string(new ArrayList<>());
             }
 
             Document doc = Jsoup.parse(html);
-            List<Vod> list = new ArrayList<>();
-            
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) {
                 cards = doc.select(".card-sm");
             }
 
+            logger("找到候选节点条数: " + cards.size());
+
+            List<Vod> list = new ArrayList<>();
             for (Element card : cards) {
                 Element a = card.selectFirst("a");
                 if (a == null) continue;
@@ -185,23 +222,24 @@ public class Bdys extends Spider {
                 list.add(new Vod(vodId, name, pic, remark));
             }
 
+            logger("分类解析完成，成功打包条数: " + list.size());
             return Result.string(list);
         } catch (Exception e) {
-            logger("categoryContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<Vod>());
+            logger("分类解析异常: " + e.getMessage());
+            return Result.string(new ArrayList<>());
         }
     }
 
     @Override
-    public String detailContent(List<String> ids) throws Exception {
+    public String detailContent(List<String> ids) {
         try {
             String id = ids.get(0);
             String url = fixUrl(id);
-            logger("详情页请求: " + url);
 
-            String html = OkHttp.string(url, getHeaders());
+            logger("详情页请求: " + url);
+            String html = get(url);
             if (TextUtils.isEmpty(html)) {
-                return Result.string(new ArrayList<Vod>());
+                return Result.string(new ArrayList<>());
             }
 
             Document doc = Jsoup.parse(html);
@@ -238,37 +276,37 @@ public class Bdys extends Spider {
                 vod.setVodPlayUrl(TextUtils.join("#", playPairs));
             }
 
+            logger("详情解析完成: " + name + "，集数: " + playPairs.size());
             return Result.string(vod);
         } catch (Exception e) {
-            logger("detailContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<Vod>());
+            logger("详情解析异常: " + e.getMessage());
+            return Result.string(new ArrayList<>());
         }
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+    public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
             String playUrl = fixUrl(id);
-            logger("播放页请求: " + playUrl);
-
-            // 直接交由播放器嗅探解析，不在子线程做过多同步 HTTP 堵塞操作
+            logger("开始解析播放页: " + playUrl);
             return Result.get().parse(1).url(playUrl).string();
         } catch (Exception e) {
-            logger("playerContent 异常: " + e.getMessage());
+            logger("播放处理异常: " + e.getMessage());
             return Result.get().parse(1).url(id).string();
         }
     }
 
     @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<Vod>());
+    public String searchContent(String key, boolean quick) {
+        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
         try {
             String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
-            logger("搜索请求 URL: " + searchUrl);
+            logger("搜索请求: " + searchUrl);
 
-            String jsonStr = OkHttp.string(searchUrl, getHeaders());
+            String jsonStr = get(searchUrl);
             if (TextUtils.isEmpty(jsonStr)) {
-                return Result.string(new ArrayList<Vod>());
+                logger("搜索页面获取失败");
+                return Result.string(new ArrayList<>());
             }
 
             JSONArray jsonArray = new JSONArray(jsonStr);
@@ -283,10 +321,12 @@ public class Bdys extends Spider {
                 resultList.add(new Vod(href, title, image, ""));
             }
 
+            logger("搜索完成，成功匹配条数: " + resultList.size());
             return Result.string(resultList);
         } catch (Exception e) {
-            logger("searchContent 异常: " + e.getMessage());
-            return Result.string(new ArrayList<Vod>());
+            logger("搜索出现异常: " + e.getMessage());
+            return Result.string(new ArrayList<>());
         }
     }
 }
+
