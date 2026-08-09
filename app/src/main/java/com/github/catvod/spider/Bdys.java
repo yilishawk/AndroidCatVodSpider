@@ -1,14 +1,3 @@
-对比 Czzyv.java 和之前写的 Bdys.java，就能明白为什么你的 Bdys 打印不出日志，而 Czzyv 却有日志了。
-关键区别分析
- * 统一封装网络请求与日志点（核心原因）：
-   * Czzyv.java 的做法：它单独写了一个 get(url, referer) 私有方法。所有网络请求都统一走这个 get 方法，只要请求失败或报错，就会直接触发 logger("请求失败: " + e.getMessage())。
-   * Bdys.java 的做法：直接在各个方法内部调用 OkHttp.string(url, getHeaders())。一旦网络超速、或者请求超时抛出异常（例如 java.net.SocketTimeoutException），代码会直接跳到外层的 catch (Exception e) 块，中间过程完全没有打出任何 log！
- * 请求头与安全校验处理：
-   * Czzyv 额外增加了 Cache-Control 和 Pragma 请求头，降低被服务端反爬阻断抛错的几率。
-借鉴 Czzyv 重构后的 Bdys.java
-按 Czzyv 的架构风格重构 Bdys：
- * 提取统一的 get(url) 请求函数，并在请求前和请求失败时强制打 Log。
- * 保持精简正则与提取逻辑不变，去除无用冗余逻辑。
 package com.github.catvod.spider;
 
 import android.content.Context;
