@@ -18,6 +18,8 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -35,7 +38,6 @@ public class Bdys extends Spider {
 
     private String host = "https://v.xl.in.ua";
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
-    private String cookie = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
     private void logger(String msg) {
         try {
@@ -57,7 +59,7 @@ public class Bdys extends Spider {
         headers.put("User-Agent", commonUa);
         headers.put("Referer", host + "/");
         headers.put("Origin", host);
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
         headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
         headers.put("sec-ch-ua-mobile", "?0");
@@ -67,9 +69,34 @@ public class Bdys extends Spider {
         headers.put("sec-fetch-site", "same-origin");
         headers.put("sec-fetch-user", "?1");
         headers.put("upgrade-insecure-requests", "1");
-        headers.put("Cookie", cookie);
-        // 注意：不手动添加 Accept-Encoding，避免 OkHttp 拿到原始压缩数据无法自动解压缩导致页面乱码
         return headers;
+    }
+
+    /**
+     * 安全获取网页内容（防 Gzip 乱码与空数据）
+     */
+    private String fetchHtml(String url) {
+        try {
+            byte[] bytes = OkHttp.bytes(url, getHeaders());
+            if (bytes == null || bytes.length == 0) return "";
+            
+            // 自动检测 Gzip 魔数 (0x1f8b) 进行解压，防止 OkHttp 底层未解包
+            if (bytes.length > 2 && (bytes[0] == (byte) 0x1f && bytes[1] == (byte) 0x8b)) {
+                ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                GZIPInputStream gzis = new GZIPInputStream(bais);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buffer = new byte[1024];
+                int len;
+                while ((len = gzis.read(buffer)) > 0) {
+                    baos.write(buffer, 0, len);
+                }
+                bytes = baos.toByteArray();
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            logger("请求 HTML 异常: " + e.getMessage());
+            return "";
+        }
     }
 
     @Override
@@ -89,7 +116,6 @@ public class Bdys extends Spider {
             if (filter) {
                 List<Filter> filterList = new ArrayList<>();
 
-                // 类型
                 String[] typeNames = {"全部", "动作", "爱情", "喜剧", "科幻", "恐怖", "剧情", "动画", "悬疑", "犯罪", "古装", "奇幻", "美剧", "韩剧", "国产", "日剧"};
                 String[] typeValues = {"all", "dongzuo", "aiqing", "xiju", "kehuan", "kongbu", "juqing", "donghua", "xuanyi", "fanzui", "guzhuang", "qihuan", "meiju", "hanju", "guoju", "riju"};
                 List<Filter.Value> typeOptions = new ArrayList<>();
@@ -98,7 +124,6 @@ public class Bdys extends Spider {
                 }
                 filterList.add(new Filter("type_slug", "类型", typeOptions));
 
-                // 年份
                 List<Filter.Value> yearOptions = new ArrayList<>();
                 yearOptions.add(new Filter.Value("全部", ""));
                 for (int y = 2026; y >= 2015; y--) {
@@ -124,7 +149,6 @@ public class Bdys extends Spider {
             String typeSlug = (extend != null && extend.containsKey("type_slug") && !TextUtils.isEmpty(extend.get("type_slug"))) 
                     ? extend.get("type_slug") : "all";
 
-            // 正确的 Query 路径拼接
             StringBuilder sb = new StringBuilder(host).append("/s/").append(typeSlug).append("?type=").append(tid);
             if (page > 1) {
                 sb.append("&page=").append(page);
@@ -134,59 +158,60 @@ public class Bdys extends Spider {
             }
 
             String url = sb.toString();
-            logger("分类请求: " + url);
-            String html = OkHttp.string(url, getHeaders());
+            logger("分类请求 URL: " + url);
+            
+            String html = fetchHtml(url);
             if (TextUtils.isEmpty(html)) {
-                logger("⚠️ 分类请求返回空 HTML");
+                logger("⚠️ 无法获取分类页 HTML 内容");
                 return Result.string(new ArrayList<>());
             }
 
-            logger("响应 HTML 字节长度: " + html.length());
+            logger("HTML 真实获取长度: " + html.length());
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
             
+            // 宽松匹配：优先查找卡片，如为空尝试获取所有符合影视路由规则的 <a> 链接
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) {
-                cards = doc.select(".row-cards .card-sm");
+                cards = doc.select(".row .col, .row-cards .card-sm");
             }
-            logger("解析到列表节点数量: " + cards.size());
+            logger("找到列表节点数量: " + cards.size());
 
             for (Element card : cards) {
-                Element a = card.selectFirst("a.card-img");
-                if (a == null) a = card.selectFirst("a");
+                Element a = card.selectFirst("a[href]");
                 if (a == null) continue;
 
                 String vodId = a.attr("href");
+                if (TextUtils.isEmpty(vodId) || vodId.equals("#") || vodId.startsWith("javascript")) continue;
                 
-                String name = card.select(".card-info h4").text().trim();
-                if (TextUtils.isEmpty(name)) {
-                    name = card.select(".text-truncate").text().trim();
-                }
+                String name = card.select(".card-info h4, h4, .title").text().trim();
                 if (TextUtils.isEmpty(name) && a.hasAttr("title")) {
                     name = a.attr("title");
                 }
+                if (TextUtils.isEmpty(name)) {
+                    name = a.text().trim();
+                }
 
-                Element img = card.selectFirst("img.lazy");
-                if (img == null) img = card.selectFirst("img");
+                Element img = card.selectFirst("img");
                 String pic = "";
                 if (img != null) {
                     pic = img.hasAttr("data-src") ? img.attr("data-src") : img.attr("src");
                     pic = fixUrl(pic);
                 }
 
-                String remark = card.select(".episode-badge").text().trim();
-                if (TextUtils.isEmpty(remark)) {
-                    remark = card.select(".rating-badge").text().trim();
-                }
+                String remark = card.select(".episode-badge, .badge, .rating-badge").text().trim();
 
-                Vod vod = new Vod();
-                vod.setVodId(vodId);
-                vod.setVodName(name);
-                vod.setVodPic(pic);
-                vod.setVodRemarks(remark);
-                list.add(vod);
+                if (!TextUtils.isEmpty(name) && !TextUtils.isEmpty(vodId)) {
+                    Vod vod = new Vod();
+                    vod.setVodId(vodId);
+                    vod.setVodName(name);
+                    vod.setVodPic(pic);
+                    vod.setVodRemarks(remark);
+                    list.add(vod);
+                }
             }
 
+            logger("成功解析得到 VOD 数量: " + list.size());
             return Result.string(list);
         } catch (Exception e) {
             logger("categoryContent 异常: " + e.getMessage());
@@ -201,7 +226,7 @@ public class Bdys extends Spider {
             String url = fixUrl(id);
             logger("详情页请求: " + url);
 
-            String html = OkHttp.string(url, getHeaders());
+            String html = fetchHtml(url);
             if (TextUtils.isEmpty(html)) {
                 logger("⚠️ 详情页响应为空");
                 return Result.string(new ArrayList<>());
@@ -209,24 +234,18 @@ public class Bdys extends Spider {
 
             Document doc = Jsoup.parse(html);
 
-            String name = doc.select("h1").text().trim();
+            String name = doc.select("h1, h2").first() != null ? doc.select("h1, h2").first().text().trim() : "";
 
-            Element imgElem = doc.selectFirst(".cover-lg-max-25 img");
-            if (imgElem == null) imgElem = doc.selectFirst(".movie-card img");
-            
+            Element imgElem = doc.selectFirst(".cover-lg-max-25 img, .movie-card img, .poster img");
             String pic = "";
             if (imgElem != null) {
                 pic = imgElem.hasAttr("data-src") ? imgElem.attr("data-src") : imgElem.attr("src");
                 pic = fixUrl(pic);
             }
 
-            String content = doc.select(".desc").text().trim();
+            String content = doc.select(".desc, #synopsis").text().trim();
 
-            Elements playLinks = doc.select(".play-item");
-            if (playLinks.isEmpty()) {
-                playLinks = doc.select(".play-list a");
-            }
-            
+            Elements playLinks = doc.select(".play-item, .play-list a");
             List<String> playPairs = new ArrayList<>();
             for (Element a : playLinks) {
                 String epName = a.text().trim();
@@ -260,7 +279,7 @@ public class Bdys extends Spider {
             String playUrl = fixUrl(id);
             logger("播放页请求: " + playUrl);
 
-            String html = OkHttp.string(playUrl, getHeaders());
+            String html = fetchHtml(playUrl);
             if (TextUtils.isEmpty(html)) {
                 return Result.get().parse(1).url(playUrl).string();
             }
