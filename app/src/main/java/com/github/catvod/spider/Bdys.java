@@ -35,6 +35,7 @@ public class Bdys extends Spider {
 
     private String host = "https://v.xl.in.ua";
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
+    private String cookie = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
     private void logger(String msg) {
         try {
@@ -55,6 +56,7 @@ public class Bdys extends Spider {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", commonUa);
         headers.put("Referer", host + "/");
+        headers.put("Origin", host);
         headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
         headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
@@ -65,6 +67,8 @@ public class Bdys extends Spider {
         headers.put("sec-fetch-site", "same-origin");
         headers.put("sec-fetch-user", "?1");
         headers.put("upgrade-insecure-requests", "1");
+        headers.put("Cookie", cookie);
+        // 注意：不手动添加 Accept-Encoding，避免 OkHttp 拿到原始压缩数据无法自动解压缩导致页面乱码
         return headers;
     }
 
@@ -120,7 +124,7 @@ public class Bdys extends Spider {
             String typeSlug = (extend != null && extend.containsKey("type_slug") && !TextUtils.isEmpty(extend.get("type_slug"))) 
                     ? extend.get("type_slug") : "all";
 
-            // 修正：采用 Query 参数拼接，与网页路由保持一致
+            // 正确的 Query 路径拼接
             StringBuilder sb = new StringBuilder(host).append("/s/").append(typeSlug).append("?type=").append(tid);
             if (page > 1) {
                 sb.append("&page=").append(page);
@@ -137,6 +141,7 @@ public class Bdys extends Spider {
                 return Result.string(new ArrayList<>());
             }
 
+            logger("响应 HTML 字节长度: " + html.length());
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
             
