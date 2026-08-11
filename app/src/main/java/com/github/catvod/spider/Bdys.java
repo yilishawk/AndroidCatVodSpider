@@ -18,8 +18,6 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -29,7 +27,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.GZIPInputStream;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -38,6 +35,7 @@ public class Bdys extends Spider {
 
     private String host = "https://v.xl.in.ua";
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
+    private String cookie = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
     private void logger(String msg) {
         try {
@@ -69,30 +67,14 @@ public class Bdys extends Spider {
         headers.put("sec-fetch-site", "same-origin");
         headers.put("sec-fetch-user", "?1");
         headers.put("upgrade-insecure-requests", "1");
+        headers.put("Cookie", cookie);
         return headers;
     }
 
-    /**
-     * 安全获取网页内容（防 Gzip 乱码与空数据）
-     */
     private String fetchHtml(String url) {
         try {
-            byte[] bytes = OkHttp.bytes(url, getHeaders());
-            if (bytes == null || bytes.length == 0) return "";
-            
-            // 自动检测 Gzip 魔数 (0x1f8b) 进行解压，防止 OkHttp 底层未解包
-            if (bytes.length > 2 && (bytes[0] == (byte) 0x1f && bytes[1] == (byte) 0x8b)) {
-                ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-                GZIPInputStream gzis = new GZIPInputStream(bais);
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                byte[] buffer = new byte[1024];
-                int len;
-                while ((len = gzis.read(buffer)) > 0) {
-                    baos.write(buffer, 0, len);
-                }
-                bytes = baos.toByteArray();
-            }
-            return new String(bytes, StandardCharsets.UTF_8);
+            String html = OkHttp.string(url, getHeaders());
+            return html == null ? "" : html;
         } catch (Exception e) {
             logger("请求 HTML 异常: " + e.getMessage());
             return "";
@@ -170,7 +152,6 @@ public class Bdys extends Spider {
             Document doc = Jsoup.parse(html);
             List<Vod> list = new ArrayList<>();
             
-            // 宽松匹配：优先查找卡片，如为空尝试获取所有符合影视路由规则的 <a> 链接
             Elements cards = doc.select(".movie-card");
             if (cards.isEmpty()) {
                 cards = doc.select(".row .col, .row-cards .card-sm");
