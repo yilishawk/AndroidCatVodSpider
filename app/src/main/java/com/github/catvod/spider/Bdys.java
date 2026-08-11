@@ -160,9 +160,6 @@ public class Bdys extends Spider {
         }
     }
 
-    /**
-     * 完全还原 Python 中的 _parse_videos_from_html 逻辑
-     */
     private List<Vod> parseVideosFromHtml(String html) {
         List<Vod> videos = new ArrayList<>();
         try {
@@ -280,7 +277,7 @@ public class Bdys extends Spider {
             if (descElem != null) content = descElem.text().trim();
 
             // 提取详细信息
-            String director = "", actor = "", area = "", lang = "", remarks = "";
+            String director = "", actor = "", area = "", remarks = "";
             Elements infoItems = doc.select(".info-list .info-item");
             for (Element item : infoItems) {
                 Element labelElem = item.selectFirst(".info-label");
@@ -297,11 +294,10 @@ public class Bdys extends Spider {
                 if (label.contains("导演")) director = value;
                 else if (label.contains("主演")) actor = value;
                 else if (label.contains("地区")) area = value;
-                else if (label.contains("语言")) lang = value;
                 else if (label.contains("状态")) remarks = value;
             }
 
-            // 解析播放列表 (对标 Python 兜底逻辑)
+            // 解析播放列表
             Elements playItems = doc.select(".play-item");
             if (playItems.isEmpty()) playItems = doc.select(".play-list a");
             if (playItems.isEmpty()) playItems = doc.select(".episode a");
@@ -323,7 +319,6 @@ public class Bdys extends Spider {
             vod.setVodDirector(director);
             vod.setVodActor(actor);
             vod.setVodArea(area);
-            vod.setVodLang(lang);
             vod.setVodRemarks(remarks);
 
             if (!links.isEmpty()) {
