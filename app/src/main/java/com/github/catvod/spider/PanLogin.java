@@ -1,4 +1,3 @@
-这里是整合了静默检查天翼登录状态（彻底解决误弹窗）以及极简单卡片+统一 Dialog 操作的完整 PanLogin.java 代码：
 package com.github.catvod.spider;
 
 import android.app.AlertDialog;
