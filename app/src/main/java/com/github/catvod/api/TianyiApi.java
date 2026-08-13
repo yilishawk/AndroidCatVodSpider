@@ -65,7 +65,7 @@ public class TianyiApi {
     }
 
     /**
-     * 判断cookie是否为空，或者SSon为空，那就需要重新登陆
+     * 判断cookie是否为空， 或者SSon为空，那就需要重新登陆
      *
      * @return
      */
