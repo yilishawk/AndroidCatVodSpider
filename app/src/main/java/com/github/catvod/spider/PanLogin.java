@@ -193,26 +193,30 @@ public class PanLogin extends Spider {
 
     private void showOperationDialog(String panId) {
         runOnUI(() -> {
-            String title = getPanName(panId) + " 管理";
-            CharSequence[] options = {"📱 扫码/触发登录", "🍪 粘贴 Cookie/Token", "🚪 清除登录信息"};
+            try {
+                String title = getPanName(panId) + " 管理";
+                CharSequence[] options = {"📱 扫码/触发登录", "🍪 粘贴 Cookie/Token", "🚪 清除登录信息"};
 
-            new AlertDialog.Builder(Init.getActivity())
-                    .setTitle(title)
-                    .setItems(options, (dialog, which) -> {
-                        switch (which) {
-                            case 0:
-                                triggerLogin(panId);
-                                break;
-                            case 1:
-                                triggerPasteCookie(panId);
-                                break;
-                            case 2:
-                                triggerClear(panId);
-                                break;
-                        }
-                    })
-                    .setNegativeButton("取消", null)
-                    .show();
+                new AlertDialog.Builder(Init.getActivity())
+                        .setTitle(title)
+                        .setItems(options, (dialog, which) -> {
+                            switch (which) {
+                                case 0:
+                                    triggerLogin(panId);
+                                    break;
+                                case 1:
+                                    triggerPasteCookie(panId);
+                                    break;
+                                case 2:
+                                    triggerClear(panId);
+                                    break;
+                            }
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+            } catch (Exception e) {
+                Notify.show("拉起弹窗失败: " + e.getMessage());
+            }
         });
     }
 
@@ -418,4 +422,3 @@ public class PanLogin extends Spider {
     @Override public String playerContent(String flag, String id, List<String> vipFlags) { return "{}"; }
     @Override public String searchContent(String key, boolean quick) { return "{\"list\":[]}"; }
 }
-
