@@ -147,7 +147,8 @@ public class Bdys extends Spider {
             filterMap.put("0", filterList);
             filterMap.put("1", filterList);
 
-            return Result.get().classes(classes).filter(filterMap).string();
+            // Result 上确认存在的是 filters(...)（复数），源码已核对
+            return Result.get().classes(classes).filters(filterMap).string();
         } catch (Exception e) {
             logger("homeContent 异常: " + e.getMessage());
             return Result.get().classes(new ArrayList<>()).string();
