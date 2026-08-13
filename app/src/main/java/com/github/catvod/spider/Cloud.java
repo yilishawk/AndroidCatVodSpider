@@ -95,7 +95,7 @@ public class Cloud extends Spider {
         } else if (flag.contains("pan123")) {
             return pan123.playerContent(flag, id, vipFlags);
         }
-        return flag;
+        return null;
     }
 
     protected String detailContentVodPlayFrom(List<String> shareLinks) {
