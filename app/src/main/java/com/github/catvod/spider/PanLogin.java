@@ -2,6 +2,8 @@ package com.github.catvod.spider;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.view.ViewGroup;
 import android.widget.EditText;
@@ -34,12 +36,21 @@ import java.util.List;
  */
 public class PanLogin extends Spider {
 
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private AlertDialog currentDialog;
 
     private void logger(String msg) {
         try {
             Proxy.log(msg);
         } catch (Exception ignored) {
+        }
+    }
+
+    private void runOnUI(Runnable runnable) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runnable.run();
+        } else {
+            mainHandler.post(runnable);
         }
     }
 
@@ -51,12 +62,10 @@ public class PanLogin extends Spider {
     @Override
     public String homeContent(boolean filter) {
         try {
-            // 拍平分类，首页直接展示全部网盘列表
             JSONArray classes = new JSONArray();
             classes.put(makeClass("网盘管理", "pan_mgr"));
 
             JSONArray list = new JSONArray();
-            // 网盘单卡片展示，备注实时显示当前登录状态
             list.put(makePanVod("quark", "夸克网盘", loginStatus("quark")));
             list.put(makePanVod("uc", "UC网盘", loginStatus("uc")));
             list.put(makePanVod("ali", "阿里云盘", loginStatus("ali")));
@@ -90,7 +99,6 @@ public class PanLogin extends Spider {
         return o;
     }
 
-    // 静默检测各网盘登录状态（不主动拉起任何 Handler 初始化）
     private String loginStatus(String type) {
         try {
             switch (type) {
@@ -139,7 +147,6 @@ public class PanLogin extends Spider {
                     return "❌ 未登录";
                 }
                 case "tianyi": {
-                    // 彻底阻断 TianYiHandler 自动弹窗逻辑：纯静态文件安全读取
                     String s = Path.read(TianYiHandler.get().getCache());
                     if (TextUtils.isEmpty(s) || "{}".equals(s)) return "❌ 未登录";
                     JSONObject obj = new JSONObject(s);
@@ -167,8 +174,6 @@ public class PanLogin extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         String id = ids.get(0);
-        
-        // 弹出统一的操作选择框
         Init.execute(() -> showOperationDialog(id));
 
         try {
@@ -186,28 +191,29 @@ public class PanLogin extends Spider {
         }
     }
 
-    // 核心：统一点击选项弹窗
     private void showOperationDialog(String panId) {
-        String title = getPanName(panId) + " 管理";
-        CharSequence[] options = {"📱 扫码/触发登录", "🍪 粘贴 Cookie/Token", "🚪 清除登录信息"};
+        runOnUI(() -> {
+            String title = getPanName(panId) + " 管理";
+            CharSequence[] options = {"📱 扫码/触发登录", "🍪 粘贴 Cookie/Token", "🚪 清除登录信息"};
 
-        new AlertDialog.Builder(Init.getActivity())
-                .setTitle(title)
-                .setItems(options, (dialog, which) -> {
-                    switch (which) {
-                        case 0: // 扫码/触发登录
-                            triggerLogin(panId);
-                            break;
-                        case 1: // 粘贴 Cookie
-                            triggerPasteCookie(panId);
-                            break;
-                        case 2: // 清除
-                            triggerClear(panId);
-                            break;
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+            new AlertDialog.Builder(Init.getActivity())
+                    .setTitle(title)
+                    .setItems(options, (dialog, which) -> {
+                        switch (which) {
+                            case 0:
+                                triggerLogin(panId);
+                                break;
+                            case 1:
+                                triggerPasteCookie(panId);
+                                break;
+                            case 2:
+                                triggerClear(panId);
+                                break;
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
     }
 
     private String getPanName(String id) {
@@ -223,14 +229,12 @@ public class PanLogin extends Spider {
         }
     }
 
-    // ---------------- 1. 触发扫码 / 弹出二维码 ----------------
     private void triggerLogin(String panId) {
         Init.execute(() -> {
             try {
                 switch (panId) {
                     case "quark":
-                        QuarkApi.get().setCookie(""); 
-                        // 故意触发一次假解析，唤醒夸克底层 API 内建的二维码弹窗
+                        QuarkApi.get().setCookie("");
                         QuarkApi.get().getShareData("https://pan.quark.cn/s/invalid");
                         Notify.show("正在拉起夸克登录面板...");
                         break;
@@ -239,7 +243,6 @@ public class PanLogin extends Spider {
                         break;
                     case "ali":
                         Path.write(AliYun.get().getCache(), "{}");
-                        // 故意触发一次假解析，唤醒阿里底层 API 内建的二维码弹窗
                         AliYun.get().getVod("https://www.aliyundrive.com/s/invalid", "invalid", "");
                         Notify.show("正在拉起阿里登录面板...");
                         break;
@@ -256,7 +259,6 @@ public class PanLogin extends Spider {
                         }));
                         break;
                     case "tianyi":
-                        // 手动点击时才主动拉起天翼扫码
                         TianYiHandler.get().startScan();
                         break;
                     case "yun139":
@@ -269,7 +271,6 @@ public class PanLogin extends Spider {
         });
     }
 
-    // ---------------- 2. 手动粘贴 Cookie / Token ----------------
     private void triggerPasteCookie(String panId) {
         Init.execute(() -> {
             switch (panId) {
@@ -329,7 +330,6 @@ public class PanLogin extends Spider {
         });
     }
 
-    // ---------------- 3. 清除登录状态 ----------------
     private void triggerClear(String panId) {
         Init.execute(() -> {
             try {
@@ -349,9 +349,8 @@ public class PanLogin extends Spider {
         });
     }
 
-    // ---------- 输入框 UI 构建工具 ----------
     private void showSingleInput(String title, String hint, InputCallback callback) {
-        Init.runOnUI(() -> {
+        runOnUI(() -> {
             try {
                 int margin = ResUtil.dp2px(16);
                 FrameLayout frame = new FrameLayout(Init.context());
@@ -379,7 +378,7 @@ public class PanLogin extends Spider {
     }
 
     private void showDoubleInput(String title, String hint1, String hint2, DoubleInputCallback callback) {
-        Init.runOnUI(() -> {
+        runOnUI(() -> {
             try {
                 int margin = ResUtil.dp2px(16);
                 LinearLayout layout = new LinearLayout(Init.context());
