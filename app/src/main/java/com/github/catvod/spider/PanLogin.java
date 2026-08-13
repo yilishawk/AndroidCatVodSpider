@@ -10,7 +10,7 @@ import android.widget.LinearLayout;
 
 import com.github.catvod.api.AliYun;
 import com.github.catvod.api.BaiDuYunHandler;
-import com.github.catvod.api.Pan123Api;
+import com.github.catvod.api.BaiduDrive;
 import com.github.catvod.api.Pan123Handler;
 import com.github.catvod.api.QuarkApi;
 import com.github.catvod.api.TianYiHandler;
@@ -38,7 +38,10 @@ public class PanLogin extends Spider {
     private AlertDialog currentDialog;
 
     private void logger(String msg) {
-        try { Proxy.log(msg); } catch (Exception ignored) {}
+        try {
+            Proxy.log(msg);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -46,9 +49,6 @@ public class PanLogin extends Spider {
         logger("🚀 [网盘登录] 初始化");
     }
 
-    // ──────────────────────────────────────────────
-    // 首页
-    // ──────────────────────────────────────────────
     @Override
     public String homeContent(boolean filter) {
         try {
@@ -122,12 +122,15 @@ public class PanLogin extends Spider {
                     if (user != null) {
                         String nick = user.optString("nick_name", "");
                         if (!TextUtils.isEmpty(nick)) return "✅ " + nick;
-                        return TextUtils.isEmpty(user.optString("access_token", "")) ? "❌ 未登录" : "✅ 已登录";
+                        String access = user.optString("access_token", "");
+                        String refresh = user.optString("refresh_token", "");
+                        return (TextUtils.isEmpty(access) && TextUtils.isEmpty(refresh)) ? "❌ 未登录" : "✅ 已登录";
                     }
                     return "❌ 未登录";
                 }
                 case "baidu": {
-                    return TextUtils.isEmpty(BaiDuYunHandler.get().getToken()) ? "❌ 未登录" : "✅ 已登录";
+                    String t = BaiDuYunHandler.get().getToken();
+                    return TextUtils.isEmpty(t) ? "❌ 未登录" : "✅ 已登录";
                 }
                 case "pan123": {
                     String s = Path.read(Pan123Handler.INSTANCE.getCache());
@@ -146,25 +149,24 @@ public class PanLogin extends Spider {
                     return (TextUtils.isEmpty(s) || "{}".equals(s)) ? "❌ 未登录" : "✅ 已登录";
                 }
                 case "yun139": {
-                    return TextUtils.isEmpty(YunTokenHandler.get().getToken()) ? "❌ 未登录" : "✅ 已登录";
+                    String t = YunTokenHandler.get().getToken();
+                    return TextUtils.isEmpty(t) ? "❌ 未登录" : "✅ 已登录";
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return "❌ 未登录";
     }
 
-    // ──────────────────────────────────────────────
-    // 分类页：统一三项
-    // ──────────────────────────────────────────────
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             JSONArray list = new JSONArray();
             String status = loginStatus(tid);
 
-            list.put(makeActionVod(tid + "_login",  "📱 登录",        status));
-            list.put(makeActionVod(tid + "_cookie", "🍪 粘贴Cookie",  "手动输入"));
-            list.put(makeActionVod(tid + "_clear",  "🚪 清除",        "点击清除"));
+            list.put(makeActionVod(tid + "_login", "📱 登录", status));
+            list.put(makeActionVod(tid + "_cookie", "🍪 粘贴Cookie", "手动输入"));
+            list.put(makeActionVod(tid + "_clear", "🚪 清除", "点击清除"));
 
             JSONObject result = new JSONObject();
             result.put("list", list);
@@ -187,9 +189,6 @@ public class PanLogin extends Spider {
         return o;
     }
 
-    // ──────────────────────────────────────────────
-    // 点击操作
-    // ──────────────────────────────────────────────
     @Override
     public String detailContent(List<String> ids) {
         String id = ids.get(0);
@@ -212,13 +211,18 @@ public class PanLogin extends Spider {
     private void handleAction(String id) {
         try {
             switch (id) {
-
-                // ══════════ 夸克 ══════════
+                // 夸克
                 case "quark_login":
-                    QuarkApi.get().setCookie(""); // 触发自带扫码/登录弹窗
+                    Init.execute(() -> {
+                        try {
+                            QuarkApi.get().setCookie("");
+                        } catch (Exception e) {
+                            Notify.show("夸克登录触发失败: " + e.getMessage());
+                        }
+                    });
                     break;
                 case "quark_cookie":
-                    showSingleInput("夸克 Cookie", "请粘贴夸克 Cookie", cookie -> Init.execute(() -> {
+                    showSingleInput("夸克 Cookie", "请粘贴夸克 Cookie（需含 __pus）", cookie -> Init.execute(() -> {
                         try {
                             QuarkApi.get().setCookie(cookie);
                             Notify.show("✅ 夸克 Cookie 已设置");
@@ -232,16 +236,18 @@ public class PanLogin extends Spider {
                     Notify.show("✅ 夸克已清除");
                     break;
 
-                // ══════════ UC ══════════
+                // UC
                 case "uc_login":
-                    try {
-                        UCTokenHandler.get().startScan();
-                    } catch (Exception e) {
-                        Notify.show("UC扫码失败: " + e.getMessage());
-                    }
+                    Init.execute(() -> {
+                        try {
+                            new UCTokenHandler().startUC_TOKENScan();
+                        } catch (Exception e) {
+                            Notify.show("UC扫码失败: " + e.getMessage());
+                        }
+                    });
                     break;
                 case "uc_cookie":
-                    showSingleInput("UC Cookie", "请粘贴 UC Cookie", cookie -> Init.execute(() -> {
+                    showSingleInput("UC Cookie", "请粘贴 UC Cookie（需含 __pus）", cookie -> Init.execute(() -> {
                         try {
                             UCApi.get().setCookie(cookie);
                             Notify.show("✅ UC Cookie 已设置");
@@ -252,19 +258,28 @@ public class PanLogin extends Spider {
                     break;
                 case "uc_clear":
                     Path.write(UCApi.get().getCache(), "{}");
+                    try {
+                        Path.write(new UCTokenHandler().getCache(), "{}");
+                    } catch (Exception ignored) {
+                    }
                     Notify.show("✅ UC已清除");
                     break;
 
-                // ══════════ 阿里 ══════════
+                // 阿里
                 case "ali_login":
                     Path.write(AliYun.get().getCache(), "{}");
-                    Notify.show("已准备登录，请进入任意阿里内容触发登录");
+                    Notify.show("已清除阿里缓存，请打开任意阿里分享触发登录弹窗");
                     break;
                 case "ali_cookie":
                     showSingleInput("阿里 RefreshToken", "请粘贴 refresh_token", token -> Init.execute(() -> {
                         try {
-                            AliYun.get().setToken(token);
-                            Notify.show("✅ 阿里 Token 已设置");
+                            AliYun.get().setRefreshToken(token);
+                            JSONObject user = new JSONObject();
+                            user.put("refresh_token", token);
+                            JSONObject cache = new JSONObject();
+                            cache.put("user", user);
+                            Path.write(AliYun.get().getCache(), cache.toString());
+                            Notify.show("✅ 阿里 Token 已写入");
                         } catch (Exception e) {
                             Notify.show("❌ 失败: " + e.getMessage());
                         }
@@ -275,49 +290,59 @@ public class PanLogin extends Spider {
                     Notify.show("✅ 阿里已清除");
                     break;
 
-                // ══════════ 百度 ══════════
+                // 百度
                 case "baidu_login":
-                    try {
-                        BaiDuYunHandler.get().startScan();
-                    } catch (Exception e) {
-                        Notify.show("百度扫码失败: " + e.getMessage());
-                    }
+                    Init.execute(() -> {
+                        try {
+                            BaiDuYunHandler.get().startScan();
+                        } catch (Exception e) {
+                            Notify.show("百度扫码失败: " + e.getMessage());
+                        }
+                    });
                     break;
                 case "baidu_cookie":
-                    showSingleInput("百度 Cookie/Token", "请粘贴百度 Cookie 或 Token", token -> Init.execute(() -> {
+                    showSingleInput("百度 Cookie", "请粘贴完整 Cookie（含 BDUSS）", cookie -> Init.execute(() -> {
                         try {
-                            // 按你项目里百度实际接口调整
-                            BaiDuYunHandler.get().setToken(token);
-                            Notify.show("✅ 百度已设置");
+                            JSONObject user = new JSONObject();
+                            user.put("cookie", cookie);
+                            JSONObject cache = new JSONObject();
+                            cache.put("user", user);
+                            Path.write(BaiDuYunHandler.get().getCache(), cache.toString());
+                            BaiduDrive.INSTANCE.setCookie(cookie);
+                            Notify.show("✅ 百度 Cookie 已写入（建议重启）");
                         } catch (Exception e) {
                             Notify.show("❌ 失败: " + e.getMessage());
                         }
                     }));
                     break;
                 case "baidu_clear":
-                    Notify.show("百度请清除App数据或重装以退出");
+                    Path.write(BaiDuYunHandler.get().getCache(), "{}");
+                    BaiduDrive.INSTANCE.setCookie("");
+                    Notify.show("✅ 百度已清除");
                     break;
 
-                // ══════════ 123 ══════════
+                // 123
                 case "pan123_login":
                     showDoubleInput("123网盘登录", "账号", "密码", (user, pass) -> Init.execute(() -> {
                         try {
-                            Pan123Api.INSTANCE.login(user, pass);
-                            Notify.show("✅ 123登录成功");
+                            Pan123Handler.INSTANCE.loginWithPassword(user, pass);
                         } catch (Exception e) {
                             Notify.show("❌ 失败: " + e.getMessage());
                         }
                     }));
                     break;
                 case "pan123_cookie":
-                    showSingleInput("123 Cookie", "请粘贴 123 Cookie", cookie -> Init.execute(() -> {
+                    showSingleInput("123 Token", "请粘贴登录后的 token", token -> Init.execute(() -> {
                         try {
-                            JSONObject userJson = new JSONObject();
-                            userJson.put("cookie", cookie);
-                            JSONObject cacheJson = new JSONObject();
-                            cacheJson.put("user", userJson);
-                            Path.write(Pan123Handler.INSTANCE.getCache(), cacheJson.toString());
-                            Notify.show("✅ 123 Cookie 已设置");
+                            JSONObject user = new JSONObject();
+                            user.put("cookie", token);
+                            user.put("userName", "");
+                            user.put("password", "");
+                            user.put("expire", 0);
+                            JSONObject cache = new JSONObject();
+                            cache.put("user", user);
+                            Path.write(Pan123Handler.INSTANCE.getCache(), cache.toString());
+                            Notify.show("✅ 123 Token 已写入");
                         } catch (Exception e) {
                             Notify.show("❌ 失败: " + e.getMessage());
                         }
@@ -328,27 +353,25 @@ public class PanLogin extends Spider {
                     Notify.show("✅ 123已清除");
                     break;
 
-                // ══════════ 天翼 ══════════
+                // 天翼
                 case "tianyi_login":
                     showDoubleInput("天翼云盘登录", "用户名/手机号", "密码", (user, pass) -> Init.execute(() -> {
                         try {
                             TianYiHandler.get().loginWithPassword(user, pass);
-                            Notify.show("✅ 天翼登录成功");
                         } catch (Exception e) {
                             Notify.show("❌ 失败: " + e.getMessage());
                         }
                     }));
                     break;
                 case "tianyi_cookie":
-                    showSingleInput("天翼 Cookie", "请粘贴天翼 Cookie（可选）", cookie -> Init.execute(() -> {
+                    // 天翼第二项：扫码登录
+                    Init.execute(() -> {
                         try {
-                            // 简单写入缓存，具体格式按你项目 Cache 结构调整
-                            Path.write(TianYiHandler.get().getCache(), cookie);
-                            Notify.show("✅ 天翼 Cookie 已写入");
+                            TianYiHandler.get().startScan();
                         } catch (Exception e) {
-                            Notify.show("❌ 失败: " + e.getMessage());
+                            Notify.show("天翼扫码失败: " + e.getMessage());
                         }
-                    }));
+                    });
                     break;
                 case "tianyi_clear":
                     TianYiHandler.get().cleanCookie();
@@ -356,23 +379,21 @@ public class PanLogin extends Spider {
                     Notify.show("✅ 天翼已清除");
                     break;
 
-                // ══════════ 139 ══════════
+                // 139
                 case "yun139_login":
                 case "yun139_cookie":
-                    showSingleInput("139 Token/Cookie",
-                            "格式示例：pc:手机号:xxxxx\n从网页 F12 → Authorization 复制",
-                            token -> Init.execute(() -> {
-                                try {
-                                    JSONObject userJson = new JSONObject();
-                                    userJson.put("cookie", token);
-                                    JSONObject cacheJson = new JSONObject();
-                                    cacheJson.put("user", userJson);
-                                    Path.write(YunTokenHandler.get().getCache(), cacheJson.toString());
-                                    Notify.show("✅ 139 已设置");
-                                } catch (Exception e) {
-                                    Notify.show("❌ 失败: " + e.getMessage());
-                                }
-                            }));
+                    showSingleInput("139 Token", "Base64 格式：pc:手机号:xxxxx", token -> Init.execute(() -> {
+                        try {
+                            JSONObject user = new JSONObject();
+                            user.put("cookie", token);
+                            JSONObject cache = new JSONObject();
+                            cache.put("user", user);
+                            Path.write(YunTokenHandler.get().getCache(), cache.toString());
+                            Notify.show("✅ 139 已设置");
+                        } catch (Exception e) {
+                            Notify.show("❌ 失败: " + e.getMessage());
+                        }
+                    }));
                     break;
                 case "yun139_clear":
                     Path.write(YunTokenHandler.get().getCache(), "{}");
@@ -388,9 +409,6 @@ public class PanLogin extends Spider {
         }
     }
 
-    // ──────────────────────────────────────────────
-    // 弹窗
-    // ──────────────────────────────────────────────
     private void showSingleInput(String title, String hint, InputCallback callback) {
         try {
             int margin = ResUtil.dp2px(16);
