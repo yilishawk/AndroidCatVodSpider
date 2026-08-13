@@ -39,20 +39,20 @@ public class Push extends Spider {
     public String detailContent(List<String> ids) throws Exception {
         String url = ids.get(0);
 
-        // 使用Cloud类处理各种云盘链接
+        // 优先让 Cloud 处理网盘链接
         String cloudResult = cloud.detailContent(ids);
         if (cloudResult != null) {
             return cloudResult;
         }
 
-        // 如果不是云盘链接，返回普通链接处理结果
+        // 普通链接走本地逻辑
         return Result.string(vod(url));
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            // 使用Cloud类处理云盘链接的播放
+            // 优先让 Cloud 处理网盘播放
             String cloudResult = cloud.playerContent(flag, id, vipFlags);
             if (cloudResult != null) {
                 return cloudResult;
@@ -61,12 +61,24 @@ public class Push extends Spider {
             SpiderDebug.log("Cloud playerContent error: " + e.getMessage());
         }
 
-        // 原有逻辑处理其他类型链接
-        if (id.startsWith("http") && id.contains("***")) id = id.replace("***", "#");
-        if (flag.equals("直連")) return Result.get().url(id).subs(getSubs(id)).string();
-        if (flag.equals("解析")) return Result.get().parse().jx().url(id).string();
-        if (flag.equals("嗅探")) return Result.get().parse().url(id).string();
-        if (flag.equals("迅雷")) return Result.get().url(id).string();
+        // 普通链接处理
+        if (id.startsWith("http") && id.contains("***")) {
+            id = id.replace("***", "#");
+        }
+
+        if (flag.equals("直連") || flag.equals("直连")) {
+            return Result.get().url(id).subs(getSubs(id)).string();
+        }
+        if (flag.equals("解析")) {
+            return Result.get().parse().jx().url(id).string();
+        }
+        if (flag.equals("嗅探")) {
+            return Result.get().parse().url(id).string();
+        }
+        if (flag.equals("迅雷")) {
+            return Result.get().url(id).string();
+        }
+        // 默认直连
         return Result.get().url(id).string();
     }
 
@@ -76,15 +88,22 @@ public class Push extends Spider {
         vod.setVodPic(Image.PUSH);
         vod.setTypeName("FongMi");
         vod.setVodName(url.startsWith("file://") ? new File(url).getName() : url);
-        if (url.startsWith("http") && url.contains("#")) url = url.replace("#", "***");
+
+        if (url.startsWith("http") && url.contains("#")) {
+            url = url.replace("#", "***");
+        }
+
         if (Util.isThunder(url)) {
-            vod.setVodPlayUrl(url);
+            vod.setVodPlayUrl("播放$" + url);
             vod.setVodPlayFrom("迅雷");
         } else if (url.contains("$")) {
+            // 多集格式
             vod.setVodPlayFrom("直連");
             vod.setVodPlayUrl(TextUtils.join("#", url.split("\n")));
         } else {
-            vod.setVodPlayUrl(TextUtils.join("$$$", Arrays.asList(url, url, url)));
+            // 普通单链接 → 三条线路（兼容 TVBox）
+            String play = "播放$" + url;
+            vod.setVodPlayUrl(TextUtils.join("$$$", Arrays.asList(play, play, play)));
             vod.setVodPlayFrom(TextUtils.join("$$$", Arrays.asList("直連", "嗅探", "解析")));
         }
         return vod;
@@ -93,7 +112,7 @@ public class Push extends Spider {
     private List<Sub> getSubs(String url) {
         List<Sub> subs = new ArrayList<>();
         if (url.startsWith("file://")) setFileSub(url, subs);
-        if (url.startsWith("http://")) setHttpSub(url, subs);
+        if (url.startsWith("http://") || url.startsWith("https://")) setHttpSub(url, subs);
         return subs;
     }
 
@@ -101,22 +120,31 @@ public class Push extends Spider {
         List<String> vodTypes = Arrays.asList("mp4", "mkv");
         List<String> subTypes = Arrays.asList("srt", "ass");
         if (!vodTypes.contains(Util.getExt(url))) return;
-        for (String ext : subTypes) detectSub(url, ext, subs);
+        for (String ext : subTypes) {
+            detectSub(url, ext, subs);
+        }
     }
 
     private void detectSub(String url, String ext, List<Sub> subs) {
-        url = Util.removeExt(url).concat(".").concat(ext);
-        if (OkHttp.string(url).length() < 100) return;
-        String name = Uri.parse(url).getLastPathSegment();
-        subs.add(Sub.create().name(name).ext(ext).url(url));
+        String subUrl = Util.removeExt(url).concat(".").concat(ext);
+        if (OkHttp.string(subUrl).length() < 100) return;
+        String name = Uri.parse(subUrl).getLastPathSegment();
+        subs.add(Sub.create().name(name).ext(ext).url(subUrl));
     }
 
     private void setFileSub(String url, List<Sub> subs) {
         File file = new File(url.replace("file://", ""));
         if (file.getParentFile() == null) return;
-        for (File f : file.getParentFile().listFiles()) {
+        File[] files = file.getParentFile().listFiles();
+        if (files == null) return;
+        for (File f : files) {
             String ext = Util.getExt(f.getName());
-            if (Util.isSub(ext)) subs.add(Sub.create().name(Util.removeExt(f.getName())).ext(ext).url("file://" + f.getAbsolutePath()));
+            if (Util.isSub(ext)) {
+                subs.add(Sub.create()
+                        .name(Util.removeExt(f.getName()))
+                        .ext(ext)
+                        .url("file://" + f.getAbsolutePath()));
+            }
         }
     }
 }
