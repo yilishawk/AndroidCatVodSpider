@@ -35,6 +35,7 @@ public class Bdys extends Spider {
 
     private String host = "https://v.xl.in.ua/";
     private String commonUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
+    private String cookie = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
     private void logger(String msg) {
         try {
@@ -71,6 +72,7 @@ public class Bdys extends Spider {
         headers.put("sec-fetch-user", "?1");
         headers.put("upgrade-insecure-requests", "1");
         headers.put("Referer", TextUtils.isEmpty(referer) ? host : referer);
+        headers.put("Cookie", cookie);
         if (isAjax) headers.put("X-Requested-With", "XMLHttpRequest");
         return headers;
     }
