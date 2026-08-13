@@ -34,7 +34,6 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
@@ -90,32 +89,33 @@ public class TianYiHandler {
     }
 
     private TianYiHandler() {
-
         cookieJar = new SimpleCookieJar();
         cache = Cache.objectFrom(Path.read(getCache()));
     }
 
     /**
-     * 初始化
+     * 静默初始化：有账号密码才尝试登录，绝不自动弹窗
      */
     public void init() {
-        String user = cache.getUser().getCookie();
-        if (StringUtils.isNoneBlank(user)) {
+        try {
+            String user = cache.getUser().getCookie();
+            if (StringUtils.isBlank(user)) return;
+
             JsonObject jsonObject = Json.safeObject(user);
-            String username = jsonObject.get("username").getAsString();
-            String password = jsonObject.get("password").getAsString();
-            if (StringUtils.isBlank(username) || StringUtils.isBlank(password)) {
-                this.startFlow();
-                return;
+            if (jsonObject == null) return;
+
+            String username = jsonObject.has("username") ? jsonObject.get("username").getAsString() : "";
+            String password = jsonObject.has("password") ? jsonObject.get("password").getAsString() : "";
+            if (StringUtils.isNoneBlank(username) && StringUtils.isNoneBlank(password)) {
+                this.loginWithPassword(username, password);
             }
-            this.loginWithPassword(username, password);
-        } else {
-            this.startFlow();
+            // 没有账号密码 → 不 startFlow()，避免干扰其他爬虫
+        } catch (Exception e) {
+            SpiderDebug.log("TianYiHandler init error: " + e.getMessage());
         }
     }
 
     public void cleanCookie() {
-
         cache.setTianyiUser(new User(""));
     }
 
@@ -127,7 +127,6 @@ public class TianYiHandler {
     }
 
     public void refreshCookie() throws IOException {
-
         String url = "https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https%3A%2F%2Fcloud.189.cn%2Fweb%2Fredirect.html&defaultSaveName=3&defaultSaveNameCheck=uncheck&browserId=16322f24d9405fb83331c3f6ce971b53";
         String index = OkHttp.getLocation(url, getHeader(url));
         SpiderDebug.log("unifyAccountLogin：" + index);
@@ -140,15 +139,8 @@ public class TianYiHandler {
         Map<String, List<String>> callbackUnify = OkHttp.getLocationHeader(indexUrl, getHeader(indexUrl));
         saveCookie(callbackUnify.get("Set-Cookie"), indexUrl);
         SpiderDebug.log("refreshCookie header：" + Json.toJson(callbackUnify));
-
     }
 
-    /*
-     * 保存cookie
-     *
-     * @param cookie
-     * @param url
-     */
     private void saveCookie(List<String> cookie, String url) {
         if (cookie != null && cookie.size() > 0) {
             cookieJar.saveFromResponse(url, cookie);
@@ -156,8 +148,6 @@ public class TianYiHandler {
     }
 
     public byte[] startScan() throws Exception {
-
-
         SpiderDebug.log("index ori: " + "https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https%3A%2F%2Fcloud.189.cn%2Fweb%2Fredirect.html&defaultSaveName=3&defaultSaveNameCheck=uncheck&browserId=dff95dced0b03d9d972d920f03ddd05e");
         String index = OkHttp.getLocation("https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https://cloud.189.cn/web/redirect.html&defaultSaveName=3&defaultSaveNameCheck=uncheck&browserId=8d38da4344fba4699d13d6e6854319d7", Map.of("Cookie", ""));
         SpiderDebug.log("index red: " + index);
@@ -174,63 +164,41 @@ public class TianYiHandler {
 
         Result result = appConf();
 
-        // Step 1: Get UUID
         JsonObject uuidInfo = getUUID();
         String uuid = uuidInfo.get("uuid").getAsString();
         String encryuuid = uuidInfo.get("encryuuid").getAsString();
         String encodeuuid = uuidInfo.get("encodeuuid").getAsString();
 
-        // Step 2: Get QR Code
         byte[] byteStr = downloadQRCode(encodeuuid, reqId);
 
         Init.run(() -> showQRCode(byteStr));
-        // Step 3: Check login status
-        // return
         Init.execute(() -> startService(uuid, encryuuid, reqId, lt, result.paramId, result.returnUrl));
-        /*Map<String, Object> result = new HashMap<>();
-        result.put("qrcode", "data:image/png;base64," + qrCode);
-        result.put("status", "NEW");*/
         return byteStr;
-
     }
 
     public void loginWithPassword(String uname, String passwd) {
         try {
-            // Step 1: 获取加密配置
             JsonObject encryptConf = getEncryptConf();
             String pubKey = encryptConf.getAsJsonObject("data").get("pubKey").getAsString();
 
-            // Step 2: 获取登录参数
             PasswordLoginParams params = getLoginParams();
-
-            // Step 3: 准备请求头
             Map<String, String> headers = buildLoginHeaders(params.lt, params.reqId);
-
-            // Step 4: 获取应用配置
             AppConfig config = getAppConfig(headers);
-
-            // Step 5: 加密凭证
             EncryptedCredentials credentials = encryptCredentials(uname, passwd, pubKey);
-
-            // Step 6: 提交登录
             LoginResult loginResult = submitLogin(headers, config, credentials);
-
-            // Step 7: 处理登录结果
             processLoginResult(loginResult);
 
-            //保存的账号密码
             JsonObject jsonObject = new JsonObject();
             jsonObject.addProperty("username", uname);
             jsonObject.addProperty("password", passwd);
             cache.setTianyiUser(new User(Json.toJson(jsonObject)));
-
+            Notify.show("天翼登录成功");
         } catch (Exception e) {
             SpiderDebug.log("登录失败: " + e.getMessage());
             Notify.show("天翼登录失败: " + e.getMessage());
         }
     }
 
-    // 辅助方法实现
     private JsonObject getEncryptConf() throws Exception {
         String url = API_URL + "/api/logbox/config/encryptConf.do?appId=cloud";
         OkResult result = OkHttp.post(url, new HashMap<>(), getHeader(url));
@@ -240,7 +208,6 @@ public class TianYiHandler {
     private PasswordLoginParams getLoginParams() throws Exception {
         String url = "https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https://cloud.189.cn/web/redirect.html?returnURL=/main.action";
         Map<String, List<String>> resHeaderMap = OkHttp.getLocationHeader(url, getHeader(url));
-
 
         String redUrl = resHeaderMap.get("Location").get(0);
         resHeaderMap = OkHttp.getLocationHeader(redUrl, getHeader(redUrl));
@@ -279,7 +246,6 @@ public class TianYiHandler {
         data.put("appKey", "cloud");
         data.put("version", "2.0");
         data.put("accountType", "02");
-        //data.put("mailSuffix", "@189.cn");
         data.put("validateCode", "");
         data.put("returnUrl", config.returnUrl);
         data.put("paramId", config.paramId);
@@ -297,13 +263,10 @@ public class TianYiHandler {
 
     private void processLoginResult(LoginResult result) throws Exception {
         saveCookie(result.cookies, API_URL + "/api/logbox/oauth2/loginSubmit.do");
-
-        // 处理重定向
         Map<String, List<String>> okResult = OkHttp.getLocationHeader(result.toUrl, getHeader(result.toUrl));
         saveCookie(okResult.get("Set-Cookie"), result.toUrl);
     }
 
-    // 辅助类
     private static class PasswordLoginParams {
         final String reqId;
         final String lt;
@@ -345,11 +308,9 @@ public class TianYiHandler {
     }
 
     private PublicKey parsePublicKey(String pubKey) throws Exception {
-
         byte[] decoded = android.util.Base64.decode(pubKey, Base64.NO_WRAP);
         X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
         return KeyFactory.getInstance("RSA").generatePublic(spec);
-
     }
 
     private String encryptRSA(String data, PublicKey publicKey) throws Exception {
@@ -368,8 +329,6 @@ public class TianYiHandler {
     }
 
     private String api(String url, Map<String, String> params, Map<String, String> headers, Integer retry, String method) throws InterruptedException {
-
-
         int leftRetry = retry != null ? retry : 3;
 
         OkResult okResult;
@@ -391,13 +350,6 @@ public class TianYiHandler {
         return okResult.getBody();
     }
 
-    /**
-     * 获取appConf
-     *
-     * @param
-     * @return
-     */
-
     private @NotNull Result appConf() throws Exception {
         Map<String, String> tHeaders = getHeader(API_URL);
         tHeaders.put("Content-Type", "application/x-www-form-urlencoded");
@@ -408,15 +360,12 @@ public class TianYiHandler {
         tHeaders.put("Reqid", reqId);
 
         Map<String, String> param = new HashMap<>();
-
         param.put("version", "2.0");
         param.put("appKey", "cloud");
-        String paramId;
-        String returnUrl;
         String body = api("/api/logbox/oauth2/appConf.do", param, tHeaders, 3, "POST");
 
-        paramId = Json.safeObject(body).get("data").getAsJsonObject().get("paramId").getAsString();
-        returnUrl = Json.safeObject(body).get("data").getAsJsonObject().get("returnUrl").getAsString();
+        String paramId = Json.safeObject(body).get("data").getAsJsonObject().get("paramId").getAsString();
+        String returnUrl = Json.safeObject(body).get("data").getAsJsonObject().get("returnUrl").getAsString();
 
         SpiderDebug.log("paramId: " + paramId);
         SpiderDebug.log("returnUrl: " + returnUrl);
@@ -437,7 +386,6 @@ public class TianYiHandler {
         }
     }
 
-
     public JsonObject getUUID() throws InterruptedException {
         Map<String, String> params = new HashMap<>();
         params.put("appId", "cloud");
@@ -447,24 +395,16 @@ public class TianYiHandler {
         headers.put("reqId", reqId);
         headers.put("referer", indexUrl);
 
-
         String body = api("/api/logbox/oauth2/getUUID.do", params, headers, 3, "POST");
         return Json.safeObject(body);
-
     }
 
     public byte[] downloadQRCode(String uuid, String reqId) throws IOException {
-
-
         Map<String, String> headers = new HashMap<>();
         headers.put("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36");
-
         headers.put("referer", indexUrl);
 
-        //  OkResult okResult = OkHttp.get("https://open.e.189.cn/api/logbox/oauth2/image.do", params, headers);
-//.addQueryParameter("uuid", uuid).addQueryParameter("REQID", reqId)
         HttpUrl url = HttpUrl.parse(API_URL + "/api/logbox/oauth2/image.do?uuid=" + uuid + "&REQID=" + reqId).newBuilder().build();
-
         Request request = new Request.Builder().url(url).headers(Headers.of(headers)).build();
         Response response = OkHttp.newCall(request);
         if (response.code() == 200) {
@@ -472,7 +412,6 @@ public class TianYiHandler {
         }
         return null;
     }
-
 
     private Map<String, Object> checkLoginStatus(String uuid, String encryuuid, String reqId, String lt, String paramId, String returnUrl) throws Exception {
         Map<String, String> params = new HashMap<>();
@@ -493,53 +432,28 @@ public class TianYiHandler {
         headers.put("Reqid", reqId);
 
         String body = api("/api/logbox/oauth2/qrcodeLoginState.do", params, headers, 3, "POST");
-        //  OkResult okResult = OkHttp.post(API_URL + "/api/logbox/oauth2/qrcodeLoginState.do", params, headers);
         SpiderDebug.log("qrcodeLoginState result------" + body);
 
         JsonObject obj = Json.safeObject(body).getAsJsonObject();
         if (Objects.nonNull(obj.get("status")) && obj.get("status").getAsInt() == 0) {
-
             SpiderDebug.log("扫码成功------" + obj.get("redirectUrl").getAsString());
             String redirectUrl = obj.get("redirectUrl").getAsString();
-
-
             fetchUserInfo(redirectUrl);
-
-
         } else {
             SpiderDebug.log("扫码失败------" + body);
         }
-
-
         return null;
     }
 
     private void fetchUserInfo(String redirectUrl) throws IOException {
-
-
         Map<String, List<String>> okResult = OkHttp.getLocationHeader(redirectUrl, getHeader(redirectUrl));
         saveCookie(okResult.get("Set-Cookie"), redirectUrl);
         SpiderDebug.log("扫码返回数据：" + Json.toJson(okResult));
         if (okResult.containsKey("Set-Cookie")) {
-
-            //停止检验线程，关闭弹窗
             stopService();
         }
-
-
-       /* if (okResult.getCode() == 200) {
-            okResult.getBody();
-        }*/
-        return;
-
     }
 
-
-    /**
-     * 显示qrcode
-     *
-     * @param bytes
-     */
     public void showQRCode(byte[] bytes) {
         try {
             int size = ResUtil.dp2px(240);
@@ -561,34 +475,29 @@ public class TianYiHandler {
         Init.run(this::showInput);
     }
 
-
     private void showInput() {
         try {
             int margin = ResUtil.dp2px(16);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             LinearLayout frame = new LinearLayout(Init.context());
             frame.setOrientation(LinearLayout.VERTICAL);
-            // frame.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            // params.setMargins(margin, margin, margin, margin);
             EditText username = new EditText(Init.context());
             username.setHint("请输入天翼用户名");
             EditText password = new EditText(Init.context());
             password.setHint("请输入天翼密码");
             frame.addView(username, params);
             frame.addView(password, params);
-            dialog = new AlertDialog.Builder(Init.getActivity()).setTitle("请输入天意用户名和密码").setView(frame).setNegativeButton(android.R.string.cancel, null).setPositiveButton(android.R.string.ok, (dialog, which) -> onPositive(username.getText().toString(), password.getText().toString())).show();
+            dialog = new AlertDialog.Builder(Init.getActivity()).setTitle("请输入天意用户名和密码").setView(frame)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(android.R.string.ok, (dialog, which) -> onPositive(username.getText().toString(), password.getText().toString()))
+                    .show();
         } catch (Exception ignored) {
         }
     }
 
-
     private void onPositive(String username, String password) {
         dismiss();
-        Init.execute(() -> {
-            loginWithPassword(username, password);
-
-
-        });
+        Init.execute(() -> loginWithPassword(username, password));
     }
 
     private void dismiss() {
@@ -609,9 +518,7 @@ public class TianYiHandler {
 
     public void startService(String uuid, String encryuuid, String reqId, String lt, String paramId, String returnUrl) {
         SpiderDebug.log("----start  checkLoginStatus  service");
-
         service = Executors.newScheduledThreadPool(1);
-
         service.scheduleWithFixedDelay(() -> {
             SpiderDebug.log("----checkLoginStatus ing....");
             try {
@@ -620,8 +527,6 @@ public class TianYiHandler {
                 SpiderDebug.log("----checkLoginStatus error" + e.getMessage());
                 throw new RuntimeException(e);
             }
-
         }, 1, 3, TimeUnit.SECONDS);
     }
-
 }
