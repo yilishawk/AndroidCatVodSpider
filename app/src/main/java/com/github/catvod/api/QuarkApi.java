@@ -635,6 +635,7 @@ public class QuarkApi {
             intent.putExtra("key_scanParam", token);
             Init.getActivity().startActivity(intent);
         } catch (Exception e) {
+            SpiderDebug.log("QuarkApi openApp 打开App失败，回退到二维码: " + e.getMessage());
             showQRCode("https://su.quark.cn/4_eMHBJ?uc_param_str=&token=" + token + "&client_id=532&uc_biz_str=S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401%7COPT%3ABACK_BTN_STYLE%400");
         } finally {
             Map<String, String> map = new HashMap<>();
@@ -656,7 +657,8 @@ public class QuarkApi {
             dialog = new AlertDialog.Builder(Init.getActivity()).setView(frame).setOnCancelListener(this::dismiss).setOnDismissListener(this::dismiss).show();
             dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             Notify.show("请使用夸克网盘App扫描二维码");
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            SpiderDebug.log("QuarkApi showQRCode 弹窗失败: " + e.getMessage());
         }
     }
 
