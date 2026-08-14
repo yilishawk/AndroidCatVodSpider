@@ -354,6 +354,16 @@ public class QuarkApi {
         return token;
     }
 
+    // 修改：将 getQRCode 改为 public，并新增 startQRLogin()
+    public void getQRCode() {
+        String token = getQrCodeToken();
+        Init.run(() -> openApp(token));
+    }
+
+    public void startQRLogin() {
+        Init.run(this::getQRCode);
+    }
+
 
     public ShareData getShareData(String url) {
         Pattern pattern = Pattern.compile("https://pan\\.quark\\.cn/s/([^\\\\|#/]+)");
@@ -617,12 +627,7 @@ public class QuarkApi {
         });
     }
 
-    private void getQRCode() {
-        String token = getQrCodeToken();
-
-        Init.run(() -> openApp(token));
-    }
-
+    // 注意：openApp 保持原有逻辑，仅将 getQRCode 暴露
     private void openApp(String token) {
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW);
@@ -661,21 +666,6 @@ public class QuarkApi {
         params.put("v", "1.2");
         params.put("request_id", UUID.randomUUID().toString());
         service = Executors.newScheduledThreadPool(1);
-      /*  timer = new Timer(true);
-         TimerTask task = new TimerTask()
-        {
-            @Override
-            public void run() {
-                SpiderDebug.log("----scheduleAtFixedRate"+new Date().toString());
-                String result = OkHttp.string("https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken", params, getWebHeaders());
-               Map<String,Object> json = Json.parseSafe(result, Map.class);
-                if (json.get("status").equals(2000000)) {
-                    setToken((String) ((Map<String,Object>)((Map<String,Object>)json.get("data")).get("members")).get("service_ticket"));
-
-                }
-            }
-        };
-        timer.schedule(task, 1000, 2000);*/
 
         service.scheduleWithFixedDelay(() -> {
             SpiderDebug.log("----scheduleAtFixedRate" + new Date().toString());
@@ -716,4 +706,3 @@ public class QuarkApi {
     }
 
 }
-
