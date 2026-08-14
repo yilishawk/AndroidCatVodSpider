@@ -361,7 +361,7 @@ public class QuarkApi {
     }
 
     public void startQRLogin() {
-        Init.run(this::getQRCode);
+        Init.execute(this::getQRCode);
     }
     // ========== 修改结束 ==========
 
