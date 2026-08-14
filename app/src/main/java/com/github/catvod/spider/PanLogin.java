@@ -192,7 +192,8 @@ public class PanLogin extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         String id = ids.get(0);
-        Init.execute(() -> handleAction(id));
+        // 延迟一小段时间再触发，避开列表->详情页切换过程中前台Activity不稳定的窗口期
+        Init.run(() -> Init.execute(() -> handleAction(id)), 300);
         try {
             JSONObject vod = new JSONObject();
             vod.put("vod_id", id);
