@@ -58,7 +58,7 @@ public class TianyiApi {
         }
         if (!isCookieValid()) {
             SpiderDebug.log("CookieJar不合法，请重新登录");
-           // tianYiHandler.startScan();
+           // 注意：此处已注释自动弹窗，仅打印日志，不触发UI
         }
         getUserSizeInfo();
         this.sessionKey = getUserBriefInfo();
@@ -258,12 +258,13 @@ public class TianyiApi {
         OkResult result = OkHttp.get("https://cloud.189.cn/api/portal/getUserSizeInfo.action", new HashMap<>(), getHeaders());
         JsonObject res = Json.safeObject(result.getBody());
         if (StringUtils.isAllBlank(result.getBody()) || (Objects.nonNull(res.get("errorCode")) && res.get("errorCode").getAsString().equals("InvalidSessionKey"))) {
-            // tianYiHandler.startScan();
-            tianYiHandler.refreshCookie();
-            //tianYiHandler.startScan();
+            // 关键修改：注释掉自动弹窗，仅打印日志，避免干扰其他爬虫
+            // tianYiHandler.startScan();   // 已注释，不再自动弹窗
+            SpiderDebug.log("天翼Cookie失效，请通过 PanLogin 重新登录或刷新");
+            // 可选择抛出异常让上层处理
+            // throw new Exception("Cookie Expired");
         }
         return "";
-
     }
 
 
@@ -398,16 +399,15 @@ public class TianyiApi {
                 return normal;
             }
         } else if (res.get("errorCode") != null && res.get("errorCode").getAsString().equals("InvalidSessionKey")) {
-            //刷新cookie
+            //刷新cookie - 但不弹窗，仅尝试刷新（refreshCookie方法不会弹窗）
             SpiderDebug.log("天意cookie 过期，刷新cookie。。。。");
             tianYiHandler.refreshCookie();
             //重试下载
             SpiderDebug.log("重试下载。。。。");
-            getDownload(shareId, fileId);
+            return getDownload(shareId, fileId);
         }
         return "";
     }
 
 
 }
-
