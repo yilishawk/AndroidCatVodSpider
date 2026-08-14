@@ -600,6 +600,7 @@ public class AliYun {
             intent.putExtra("key_scanParam", json);
             Init.getActivity().startActivity(intent);
         } catch (Exception e) {
+            SpiderDebug.log("AliYun openApp 打开App失败，回退到二维码: " + e.getMessage());
             showQRCode(data);
         } finally {
             Init.execute(() -> startService(data.getParams()));
@@ -619,7 +620,8 @@ public class AliYun {
             dialog = new AlertDialog.Builder(Init.getActivity()).setView(frame).setOnCancelListener(this::dismiss).setOnDismissListener(this::dismiss).show();
             dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             Notify.show("請使用阿里雲盤 App 掃描二維碼");
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            SpiderDebug.log("AliYun showQRCode 弹窗失败: " + e.getMessage());
         }
     }
 
