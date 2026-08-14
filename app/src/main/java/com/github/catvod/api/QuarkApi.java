@@ -354,7 +354,7 @@ public class QuarkApi {
         return token;
     }
 
-    // 修改：将 getQRCode 改为 public，并新增 startQRLogin()
+    // ========== 修改：将 getQRCode 改为 public，并新增 startQRLogin() ==========
     public void getQRCode() {
         String token = getQrCodeToken();
         Init.run(() -> openApp(token));
@@ -363,7 +363,7 @@ public class QuarkApi {
     public void startQRLogin() {
         Init.run(this::getQRCode);
     }
-
+    // ========== 修改结束 ==========
 
     public ShareData getShareData(String url) {
         Pattern pattern = Pattern.compile("https://pan\\.quark\\.cn/s/([^\\\\|#/]+)");
