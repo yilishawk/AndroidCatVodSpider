@@ -582,10 +582,15 @@ public class AliYun {
         });
     }
 
-    private void getQRCode() {
+    // 修改：将 getQRCode 改为 public，并新增 startQRLogin()
+    public void getQRCode() {
         String json = OkHttp.string("https://passport.aliyundrive.com/newlogin/qrcode/generate.do?appName=aliyun_drive&fromSite=52&appName=aliyun_drive&appEntrance=web&isMobile=false&lang=zh_CN&returnUrl=&bizParams=&_bx-v=2.2.3");
         Data data = Data.objectFrom(json).getContent().getData();
         Init.run(() -> openApp(json, data));
+    }
+
+    public void startQRLogin() {
+        Init.execute(this::getQRCode);
     }
 
     private void openApp(String json, Data data) {
