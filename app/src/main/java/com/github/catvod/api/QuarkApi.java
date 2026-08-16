@@ -165,7 +165,7 @@ public class QuarkApi {
 
         } catch (Exception e) {
             SpiderDebug.log("资源已取消:" + e.getMessage());
-            Notify.show("资源已取消");
+            Notify.show("资源已经取消");
             throw new RuntimeException(e);
         }
 
