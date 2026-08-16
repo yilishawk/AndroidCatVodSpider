@@ -207,15 +207,22 @@ public class QuarkApi {
     }
 
     public String playerContent(String[] split, String flag) throws Exception {
-    String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
-    Map<String, String> header = getHeaders();
-    header.remove("Host");
-    header.remove("Content-Type");
-    
-    // 统一使用转码链接，直接返回直链
-    String playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
-    return Result.get().url(playUrl).octet().header(header).string();
-}
+
+        String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
+        String playUrl = "";
+        Map<String, String> header = getHeaders();
+        header.remove("Host");
+        header.remove("Content-Type");
+        if (flag.contains("quark原画")) {
+            playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
+            return Result.get().url( Launcher.buildProxyUrl(playUrl, header)).octet().header(header).string();
+        } else {
+            playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
+            return Result.get().url(proxyVideoUrl(playUrl, header)).octet().header(header).string();
+        }
+
+
+    }
 
     private String proxyVideoUrl(String url, Map<String, String> header) {
         return String.format(Proxy.getUrl() + "?do=quark&type=video&url=%s&header=%s", Util.base64Encode(url.getBytes(Charset.defaultCharset())), Util.base64Encode(Json.toJson(header).getBytes(Charset.defaultCharset())));
@@ -264,7 +271,7 @@ public class QuarkApi {
         return okResult.getBody();
     }
 
-    private void initUserInfo() {
+    public void initUserInfo() {
         try {
             SpiderDebug.log("initUserInfo...");
 
@@ -354,16 +361,6 @@ public class QuarkApi {
         return token;
     }
 
-    // ========== 修改：将 getQRCode 改为 public，并新增 startQRLogin() ==========
-    public void getQRCode() {
-        String token = getQrCodeToken();
-        Init.run(() -> openApp(token));
-    }
-
-    public void startQRLogin() {
-        Init.execute(this::getQRCode);
-    }
-    // ========== 修改结束 ==========
 
     public ShareData getShareData(String url) {
         Pattern pattern = Pattern.compile("https://pan\\.quark\\.cn/s/([^\\\\|#/]+)");
@@ -627,7 +624,12 @@ public class QuarkApi {
         });
     }
 
-    // 注意：openApp 保持原有逻辑，仅将 getQRCode 暴露
+    private void getQRCode() {
+        String token = getQrCodeToken();
+
+        Init.run(() -> openApp(token));
+    }
+
     private void openApp(String token) {
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW);
@@ -635,7 +637,6 @@ public class QuarkApi {
             intent.putExtra("key_scanParam", token);
             Init.getActivity().startActivity(intent);
         } catch (Exception e) {
-            SpiderDebug.log("QuarkApi openApp 打开App失败，回退到二维码: " + e.getMessage());
             showQRCode("https://su.quark.cn/4_eMHBJ?uc_param_str=&token=" + token + "&client_id=532&uc_biz_str=S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401%7COPT%3ABACK_BTN_STYLE%400");
         } finally {
             Map<String, String> map = new HashMap<>();
@@ -657,8 +658,7 @@ public class QuarkApi {
             dialog = new AlertDialog.Builder(Init.getActivity()).setView(frame).setOnCancelListener(this::dismiss).setOnDismissListener(this::dismiss).show();
             dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             Notify.show("请使用夸克网盘App扫描二维码");
-        } catch (Exception e) {
-            SpiderDebug.log("QuarkApi showQRCode 弹窗失败: " + e.getMessage());
+        } catch (Exception ignored) {
         }
     }
 
@@ -668,6 +668,21 @@ public class QuarkApi {
         params.put("v", "1.2");
         params.put("request_id", UUID.randomUUID().toString());
         service = Executors.newScheduledThreadPool(1);
+      /*  timer = new Timer(true);
+         TimerTask task = new TimerTask()
+        {
+            @Override
+            public void run() {
+                SpiderDebug.log("----scheduleAtFixedRate"+new Date().toString());
+                String result = OkHttp.string("https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken", params, getWebHeaders());
+               Map<String,Object> json = Json.parseSafe(result, Map.class);
+                if (json.get("status").equals(2000000)) {
+                    setToken((String) ((Map<String,Object>)((Map<String,Object>)json.get("data")).get("members")).get("service_ticket"));
+
+                }
+            }
+        };
+        timer.schedule(task, 1000, 2000);*/
 
         service.scheduleWithFixedDelay(() -> {
             SpiderDebug.log("----scheduleAtFixedRate" + new Date().toString());
@@ -708,3 +723,4 @@ public class QuarkApi {
     }
 
 }
+
