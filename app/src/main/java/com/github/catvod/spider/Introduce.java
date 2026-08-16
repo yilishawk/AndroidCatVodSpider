@@ -35,7 +35,7 @@ public class Introduce extends Spider {
         classes.add(new Class("7", "代理服务"));
         List<Vod> list = new ArrayList<>();
         String pic = "https://androidcatvodspider.netlify.app/wechat.png";
-        String name = "关注我公众号";
+        String name = "关注我的公众号迷茫";
         list.add(new Vod("https://androidcatvodspider.netlify.app/wechat.png", name, pic));
         String pic2 = "https://androidcatvodspider.netlify.app/wechat.png";
         String name2 = "本接口不收费，请不要付费，谢谢！";
