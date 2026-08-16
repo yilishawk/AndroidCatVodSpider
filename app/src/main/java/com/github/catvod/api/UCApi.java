@@ -91,7 +91,7 @@ public class UCApi {
         if (StringUtils.isNoneBlank(tokenCacheJson)) {
 
 
-            //刷新token,并返回
+            //刷新token, 并返回
             this.cookieToken = qrCodeHandler.refreshToken(Json.safeObject(tokenCacheJson).getAsJsonObject().get("refresh_token").getAsString());
 
             SpiderDebug.log("UC初始化获取到的cookieToken: " + cookieToken);
