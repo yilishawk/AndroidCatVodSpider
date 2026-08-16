@@ -87,7 +87,15 @@ public class UCApi {
         cache = Cache.objectFrom(Path.read(getCache()));
         tokenCache = Cache.objectFrom(Path.read(qrCodeHandler.getCache()));
 
-        this.cookieToken = tokenCache.getUser().getCookie();
+        java.lang.String tokenCacheJson = tokenCache.getUser().getCookie();
+        if (StringUtils.isNoneBlank(tokenCacheJson)) {
+
+
+            //刷新token,并返回
+            this.cookieToken = qrCodeHandler.refreshToken(Json.safeObject(tokenCacheJson).getAsJsonObject().get("refresh_token").getAsString());
+
+            SpiderDebug.log("UC初始化获取到的cookieToken: " + cookieToken);
+        }
         SpiderDebug.log("UC初始化获取到的cookieToken: " + cookieToken);
     }
 
@@ -187,7 +195,9 @@ public class UCApi {
         List<String> playUrl = new ArrayList<>();
 
         if (files.isEmpty()) {
-            return null;
+            SpiderDebug.log("Files list is empty!");
+            Notify.show("该分享已被取消，无法访问");
+            throw new RuntimeException("该分享已被取消，无法访问");
         }
         for (int i = 0; i < files.get(files.size() - 1).getShareIndex(); i++) {
             for (int index = 0; index < playFromtmp.size(); index++) {
@@ -214,22 +224,23 @@ public class UCApi {
     }
 
     public String playerContent(String[] split, String flag) throws Exception {
-    SpiderDebug.log("flag:" + flag);
-    String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
-    String playUrl = "";
-    Map<String, String> header = getHeaders();
-    header.remove("Host");
-    header.remove("Content-Type");
-    
-    if (flag.contains("uc原画")) {
-        playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
-    } else {
-        playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
+        SpiderDebug.log("flag:" + flag);
+        String fileId = split[0], fileToken = split[1], shareId = split[2], stoken = split[3];
+        String playUrl = "";
+        SpiderDebug.log("origin playUrl:" + playUrl);
+        Map<String, String> header = getHeaders();
+        header.remove("Host");
+        header.remove("Content-Type");
+        if (flag.contains("uc原画")) {
+            playUrl = this.getDownload(shareId, stoken, fileId, fileToken, true);
+            return Result.get().url(playUrl).string();
+        } else {
+            playUrl = this.getLiveTranscoding(shareId, stoken, fileId, fileToken, flag);
+            return Result.get().url(proxyVideoUrl(playUrl, new HashMap<>())).string();
+        }
+
+
     }
-    
-    // 直接返回链接 + Cookie header
-    return Result.get().url(playUrl).header(header).string();
-}
 
     private boolean testVideo(String url) {
 
@@ -387,7 +398,7 @@ public class UCApi {
         return token;
     }
 
-    private void startFlow() {
+    public void startFlow() {
         Init.run(this::showInput);
     }
 
@@ -621,7 +632,8 @@ public class UCApi {
             for (Map<String, Object> stringStringMap : ((List<Map<String, Object>>) ((Map<String, Object>) listData.get("data")).get("list"))) {
                 list.add((String) stringStringMap.get("fid"));
             }
-            api("file/delete?" + this.pr, Collections.emptyMap(), Map.of("action_type", "2", "filelist", Json.toJson(list), "exclude_fids", ""), 0, "POST");
+            api("file/delete?" + this.pr + "&uc_param_str=", Collections.emptyMap(), Map.of("action_type", 2, "filelist", list, "exclude_fids", Collections.emptyList()), 0, "POST");
+
         }
     }
 
