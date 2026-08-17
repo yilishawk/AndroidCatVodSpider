@@ -274,12 +274,16 @@ public class Tvbyun extends Spider {
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
 
+        String vodName = "未知标题";
         Element detailBox = doc.selectFirst(".myui-content__detail");
         if (detailBox == null) detailBox = doc.selectFirst(".stui-content__detail");
 
         if (detailBox != null) {
             Element titleElem = detailBox.selectFirst(".title");
-            vod.setVodName(titleElem != null ? titleElem.text().trim() : "未知标题");
+            if (titleElem != null) {
+                vodName = titleElem.text().trim();
+            }
+            vod.setVodName(vodName);
 
             Elements datas = detailBox.select("p.data");
             for (Element p : datas) {
@@ -304,7 +308,7 @@ public class Tvbyun extends Spider {
                 }
             }
         } else {
-            vod.setVodName("未知标题");
+            vod.setVodName(vodName);
         }
 
         Element thumbImg = doc.selectFirst(".myui-content__thumb img, .stui-content__thumb img");
@@ -348,7 +352,7 @@ public class Tvbyun extends Spider {
         vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
         vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
 
-        log("详情解析完成: " + vod.getVodName() + "，线路数=" + fromList.size());
+        log("详情解析完成: " + vodName + "，线路数=" + fromList.size());
         return Result.get().vod(vod).string();
     }
 
