@@ -32,13 +32,9 @@ public class Tvbyun extends Spider {
 
     private String host = "http://www.tvyun03.com";
 
-    // 从 JS 里提取的固定值
-    private static final String VERIFY_KEY   = "1f73c3cbd123c58a21284a008c0a431b";
-    private static final String VERIFY_VALUE = "f9a3898114754aa81ca6072a296867e0";
-    private static final String VERIFY_TYPE  = "ad82060c2e67cc7e2cc47552a4fc1242";
-    private static final String VERIFY_PATH  = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
+    private static final String VERIFY_TYPE = "ad82060c2e67cc7e2cc47552a4fc1242";
+    private static final String VERIFY_PATH = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
 
-    // 运行时自动获取的 Cookie
     private final AtomicReference<String> currentCookie = new AtomicReference<>("");
 
     private static final Map<String, String> jiexiUrlMap = new HashMap<>();
@@ -59,16 +55,6 @@ public class Tvbyun extends Spider {
         }
     }
 
-    /** 计算 JS 里的 value 参数 */
-    private String calcVerifyValue() {
-        // stringtoHex: 每个字符 charCode + 1 拼接
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < VERIFY_VALUE.length(); i++) {
-            sb.append((int) VERIFY_VALUE.charAt(i) + 1);
-        }
-        return md5(sb.toString());
-    }
-
     private String md5(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
@@ -83,8 +69,17 @@ public class Tvbyun extends Spider {
         }
     }
 
+    /** JS 里的 stringtoHex */
+    private String stringToHex(String str) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < str.length(); i++) {
+            sb.append((int) str.charAt(i) + 1);
+        }
+        return sb.toString();
+    }
+
     /**
-     * 自动过滑块验证，获取完整 Cookie
+     * 自动过滑块验证（动态提取 key / value）
      */
     private synchronized boolean ensureCookie() {
         if (!TextUtils.isEmpty(currentCookie.get())) {
@@ -94,13 +89,13 @@ public class Tvbyun extends Spider {
         try {
             log("开始自动过滑块验证...");
 
-            // 1. 先访问首页，拿到 server_name_session
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
             headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             headers.put("Accept-Language", "zh-CN,zh;q=0.9");
             headers.put("Referer", "http://hktvyb.cc/");
 
+            // 1. 访问首页，拿 server_name_session + 滑块页 HTML
             okhttp3.Response resp = OkHttp.newCall(host + "/", headers);
             if (resp == null) {
                 log("❌ 首页请求失败");
@@ -108,16 +103,17 @@ public class Tvbyun extends Spider {
             }
 
             String sessionCookie = null;
-            // 从响应头提取 Set-Cookie
             List<String> setCookies = resp.headers("Set-Cookie");
             if (setCookies != null) {
                 for (String sc : setCookies) {
                     if (sc.startsWith("server_name_session=")) {
-                        sessionCookie = sc.split(";")[0]; // server_name_session=xxx
+                        sessionCookie = sc.split(";")[0];
                         break;
                     }
                 }
             }
+
+            String html = resp.body() != null ? resp.body().string() : "";
             resp.close();
 
             if (sessionCookie == null) {
@@ -126,12 +122,50 @@ public class Tvbyun extends Spider {
             }
             log("获取到 session: " + sessionCookie);
 
-            // 2. 调用验证接口
-            String verifyValue = calcVerifyValue();
+            // 2. 从 HTML 提取 huadong JS 地址
+            Pattern jsPattern = Pattern.compile("src=[\"'](/huadong_[^\"']+\\.js[^\"']*)[\"']");
+            Matcher jsMatcher = jsPattern.matcher(html);
+            if (!jsMatcher.find()) {
+                log("❌ 未在滑块页找到 huadong JS");
+                return false;
+            }
+            String jsUrl = host + jsMatcher.group(1);
+            log("提取到 JS 地址: " + jsUrl);
+
+            // 3. 下载 JS，提取 key 和 value
+            Map<String, String> jsHeaders = new HashMap<>(headers);
+            jsHeaders.put("Referer", host + "/");
+            jsHeaders.put("Cookie", sessionCookie);
+
+            String jsContent = OkHttp.string(jsUrl, jsHeaders);
+            if (TextUtils.isEmpty(jsContent)) {
+                log("❌ JS 下载失败");
+                return false;
+            }
+
+            Pattern keyPat = Pattern.compile("key\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
+            Pattern valPat = Pattern.compile("value\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
+
+            Matcher keyMatcher = keyPat.matcher(jsContent);
+            Matcher valMatcher = valPat.matcher(jsContent);
+
+            if (!keyMatcher.find() || !valMatcher.find()) {
+                log("❌ JS 中未提取到 key 或 value");
+                return false;
+            }
+
+            String key = keyMatcher.group(1);
+            String value = valMatcher.group(1);
+            log("提取到 key=" + key + "  value=" + value);
+
+            // 4. 计算验证参数
+            String verifyValue = md5(stringToHex(value));
             String verifyUrl = host + VERIFY_PATH
                     + "?type=" + VERIFY_TYPE
-                    + "&key=" + VERIFY_KEY
+                    + "&key=" + key
                     + "&value=" + verifyValue;
+
+            log("请求验证接口: " + verifyUrl);
 
             Map<String, String> verifyHeaders = new HashMap<>();
             verifyHeaders.put("User-Agent", headers.get("User-Agent"));
@@ -139,7 +173,6 @@ public class Tvbyun extends Spider {
             verifyHeaders.put("Referer", host + "/");
             verifyHeaders.put("Cookie", sessionCookie);
 
-            log("请求验证接口: " + verifyUrl);
             okhttp3.Response verifyResp = OkHttp.newCall(verifyUrl, verifyHeaders);
             if (verifyResp == null) {
                 log("❌ 验证接口请求失败");
@@ -150,29 +183,25 @@ public class Tvbyun extends Spider {
             List<String> verifySetCookies = verifyResp.headers("Set-Cookie");
             if (verifySetCookies != null) {
                 for (String sc : verifySetCookies) {
+                    // 排除 server_name_session，取另一个
                     if (sc.contains("=") && !sc.startsWith("server_name_session=")) {
                         secondCookie = sc.split(";")[0];
                         break;
                     }
                 }
             }
-            // 也兼容 body 返回 cookie 名的情况
+
             String body = verifyResp.body() != null ? verifyResp.body().string() : "";
             verifyResp.close();
 
-            if (secondCookie == null && !TextUtils.isEmpty(body)) {
-                // 有些情况 body 只返回 cookie 名，值可能需要从其他地方拿，这里优先用 Set-Cookie
-                log("验证接口 body: " + body);
-            }
-
             if (secondCookie == null) {
-                log("❌ 未从验证接口获取到第二个 Cookie");
+                log("❌ 未从验证接口获取到第二个 Cookie，body=" + body);
                 return false;
             }
 
             String fullCookie = sessionCookie + "; " + secondCookie;
             currentCookie.set(fullCookie);
-            log("✅ 自动验证成功，Cookie: " + fullCookie);
+            log("✅ 自动验证成功 → " + fullCookie);
             return true;
 
         } catch (Exception e) {
@@ -198,24 +227,26 @@ public class Tvbyun extends Spider {
         String cookie = currentCookie.get();
         if (!TextUtils.isEmpty(cookie)) {
             headers.put("Cookie", cookie);
+            log("请求携带 Cookie: " + cookie.substring(0, Math.min(50, cookie.length())) + "...");
+        } else {
+            log("⚠️ 当前没有可用 Cookie");
         }
         return headers;
     }
 
-    /** 检测是否还在滑块页，如果是则清空 Cookie 重新验证 */
     private boolean isSliderPage(String html) {
         return html != null && (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_"));
     }
 
     @Override
     public void init(android.content.Context context, String extend) {
-        log("🚀 Tvbyun 初始化，当前域名: " + host);
+        log("🚀 Tvbyun 初始化，域名: " + host);
         ensureCookie();
     }
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        log("进入 homeContent，filter=" + filter);
+        log("进入 homeContent");
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("13", "国产剧"));
         classes.add(new Class("2",  "電視劇"));
@@ -354,13 +385,13 @@ public class Tvbyun extends Spider {
             log("分类请求 → " + url);
             String html = OkHttp.string(url, getHeaders());
 
-            if (html == null || html.isEmpty()) {
-                log("❌ 分类页返回空内容");
+            if (TextUtils.isEmpty(html)) {
+                log("❌ 分类页返回空");
                 return Result.string(new ArrayList<>());
             }
 
             if (isSliderPage(html)) {
-                log("⚠️ 命中滑块页，清空 Cookie 重新验证");
+                log("⚠️ 分类页命中滑块，重新验证");
                 currentCookie.set("");
                 ensureCookie();
                 html = OkHttp.string(url, getHeaders());
@@ -400,7 +431,7 @@ public class Tvbyun extends Spider {
         log("详情页请求 → " + detailUrl);
 
         String html = OkHttp.string(detailUrl, getHeaders());
-        if (html == null || html.isEmpty()) {
+        if (TextUtils.isEmpty(html)) {
             log("❌ 详情页返回空");
             return Result.get().vod(new Vod()).string();
         }
@@ -416,7 +447,6 @@ public class Tvbyun extends Spider {
         }
 
         Document doc = Jsoup.parse(html);
-
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
 
@@ -426,9 +456,7 @@ public class Tvbyun extends Spider {
 
         if (detailBox != null) {
             Element titleElem = detailBox.selectFirst(".title");
-            if (titleElem != null) {
-                vodName = titleElem.text().trim();
-            }
+            if (titleElem != null) vodName = titleElem.text().trim();
             vod.setVodName(vodName);
 
             Elements datas = detailBox.select("p.data");
@@ -468,7 +496,7 @@ public class Tvbyun extends Spider {
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
         List<String> fromList = new ArrayList<>();
-        List<String> urlList  = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
 
         Elements playlistPanels = doc.select(".myui-panel");
         for (Element panel : playlistPanels) {
@@ -486,7 +514,7 @@ public class Tvbyun extends Spider {
             for (int j = 0; j < max; j++) {
                 Element a = links.get(j);
                 String epName = a.text().trim();
-                String epUrl  = a.attr("href");
+                String epUrl = a.attr("href");
                 if (!epUrl.startsWith("http")) epUrl = host + epUrl;
                 episodeList.add(epName + "$" + epUrl);
             }
@@ -512,7 +540,7 @@ public class Tvbyun extends Spider {
         try {
             String html = OkHttp.string(playUrl, currentHeaders);
 
-            if (html == null || html.isEmpty()) {
+            if (TextUtils.isEmpty(html)) {
                 log("❌ 播放页返回空");
                 return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
             }
@@ -531,7 +559,7 @@ public class Tvbyun extends Spider {
             String marker = "var player_data=";
             int start = html.indexOf(marker) + marker.length();
             if (start < marker.length()) {
-                log("未找到 player_data，降级给壳子嗅探");
+                log("未找到 player_data，降级嗅探");
                 return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
             }
 
@@ -539,7 +567,7 @@ public class Tvbyun extends Spider {
             String jsonStr = html.substring(start, end).trim();
             JsonObject playerData = JsonParser.parseString(jsonStr).getAsJsonObject();
             String rawUrl = playerData.get("url").getAsString();
-            String from   = playerData.get("from").getAsString();
+            String from = playerData.get("from").getAsString();
 
             log("提取到 from=" + from + "  rawUrl=" + rawUrl);
 
@@ -551,12 +579,12 @@ public class Tvbyun extends Spider {
                     String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
                     log("请求解析接口: " + fullApiUrl);
                     String apiResponse = OkHttp.string(fullApiUrl, currentHeaders);
-                    if (apiResponse != null && !apiResponse.trim().isEmpty()) {
+                    if (!TextUtils.isEmpty(apiResponse)) {
                         JsonObject resJson = JsonParser.parseString(apiResponse).getAsJsonObject();
                         if (resJson.has("code") && resJson.get("code").getAsInt() == 200) {
                             String realUrl = resJson.get("url").getAsString();
-                            if (realUrl != null && !realUrl.isEmpty() && realUrl.startsWith("http")) {
-                                log("✅ 解析成功，直链: " + realUrl);
+                            if (!TextUtils.isEmpty(realUrl) && realUrl.startsWith("http")) {
+                                log("✅ 解析成功: " + realUrl);
                                 return Result.get().url(realUrl).parse(0).header(pureHeaders).string();
                             }
                         }
@@ -564,7 +592,6 @@ public class Tvbyun extends Spider {
                 } catch (Exception e) {
                     log("解析接口异常: " + e.getMessage());
                 }
-                log("解析接口失败，降级给壳子嗅探");
                 return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
             }
 
@@ -573,7 +600,6 @@ public class Tvbyun extends Spider {
                 return Result.get().url(rawUrl).parse(0).header(pureHeaders).string();
             }
 
-            log("兜底：给壳子嗅探");
             return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
 
         } catch (Exception e) {
@@ -584,7 +610,7 @@ public class Tvbyun extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        log("搜索关键词: " + key);
+        log("搜索: " + key);
         String searchUrl = host + "/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(key, "UTF-8");
         String jsonResult = OkHttp.string(searchUrl, getHeaders());
         List<Vod> list = new ArrayList<>();
