@@ -141,32 +141,20 @@ public class Czzyv extends Spider {
     }
 
     /**
-     * 判断是否为可直接播放的视频地址
-     */
-    private boolean isDirectVideoUrl(String url) {
-        if (TextUtils.isEmpty(url)) return false;
-        String lower = url.toLowerCase();
-        return lower.contains(".m3u8")
-                || lower.contains(".mp4")
-                || lower.contains(".flv")
-                || lower.contains("/hls")
-                || lower.contains("hls/")
-                || lower.endsWith(".m3u8")
-                || lower.endsWith(".mp4");
-    }
-
-    /**
-     * 核心解密：提取播放页中的 iframe 地址
-     * 1. 如果 iframe 的 src 里 url= 后面已经是直链（m3u8 / 视频地址），直接返回
-     * 2. 否则再去请求第三方解析页（py.php 等），提取 const mysvg
+     * 播放页解析逻辑：
+     * 1. 优先从 iframe src 的 url= 参数提取直链，直接返回给壳子
+     * 2. 如果没有直链，再请求完整的 src 地址（必须带主站 Referer），提取 const mysvg
      */
     private String extractVideoUrlFromPlayPage(String playUrl) {
         try {
             // 1. 获取播放页 HTML
             String html = get(playUrl, HOST + "/");
-            if (TextUtils.isEmpty(html)) return null;
+            if (TextUtils.isEmpty(html)) {
+                logger("播放页 HTML 为空");
+                return null;
+            }
 
-            // 2. 提取 iframe 节点
+            // 2. 提取 iframe 的 src
             Pattern iframePattern = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
             Matcher iframeMatcher = iframePattern.matcher(html);
             if (!iframeMatcher.find()) {
@@ -175,7 +163,7 @@ public class Czzyv extends Spider {
             }
 
             String iframeUrl = iframeMatcher.group(1).trim();
-            logger("找到 iframe 节点 URL: " + iframeUrl);
+            logger("找到 iframe src: " + iframeUrl);
 
             // 补全协议
             if (iframeUrl.startsWith("//")) {
@@ -184,7 +172,7 @@ public class Czzyv extends Spider {
                 iframeUrl = HOST + iframeUrl;
             }
 
-            // ========== 优先判断：url= 后面是否已经是直链 ==========
+            // ========== 第一步：优先提取 url= 后面的直链 ==========
             if (iframeUrl.contains("url=")) {
                 String paramUrl = iframeUrl.substring(iframeUrl.indexOf("url=") + 4);
 
@@ -194,38 +182,50 @@ public class Czzyv extends Spider {
                     paramUrl = paramUrl.substring(0, ampIndex);
                 }
 
-                // URL 解码（处理中文等）
+                // URL 解码（处理中文路径）
                 try {
                     paramUrl = URLDecoder.decode(paramUrl, "UTF-8");
                 } catch (Exception ignored) {
                 }
 
-                // 判断是否为直链（m3u8 / 常见视频后缀 / 明显是 hls 地址）
-                if (paramUrl.startsWith("http") && isDirectVideoUrl(paramUrl)) {
-                    logger("🚀 检测到 iframe 中已是直链，直接返回: " + paramUrl);
+                logger("从 url= 提取到: " + paramUrl);
+
+                // 只要是 http 开头的视频地址，直接返回
+                if (paramUrl.startsWith("http") && (
+                        paramUrl.contains(".m3u8") ||
+                        paramUrl.contains(".mp4") ||
+                        paramUrl.contains("/hls") ||
+                        paramUrl.toLowerCase().contains("m3u8")
+                )) {
+                    logger("🚀 检测到直链，直接推给壳子播放: " + paramUrl);
                     return paramUrl;
-                } else {
-                    logger("url= 参数不是直链，继续走第三方解析页逻辑: " + paramUrl);
                 }
+
+                logger("url= 参数不是直链，继续走解析页逻辑");
             }
 
-            // ========== 兜底：请求第三方解析页，提取 const mysvg ==========
-            String iframeHtml = get(iframeUrl, HOST + "/");
+            // ========== 第二步：没有直链，请求完整的 src 地址 ==========
+            // 关键：Referer 必须是主站域名
+            logger("请求完整 iframe 地址（Referer=" + HOST + "）: " + iframeUrl);
+            String iframeHtml = get(iframeUrl, HOST + "/");   // 这里第二个参数就是 Referer
+
             if (TextUtils.isEmpty(iframeHtml)) {
-                logger("iframe 页面获取失败（被接口阻断或返回空数据）");
+                logger("iframe 页面获取失败（被拦截或返回空）");
                 return null;
             }
 
+            // 提取 const mysvg
             String videoUrl = extractMysvgValue(iframeHtml);
             if (videoUrl != null) {
-                logger("✅ 成功从 iframe HTML 中匹配提取到 mysvg 真实视频地址: " + videoUrl);
+                logger("✅ 从 const mysvg 提取到真实地址: " + videoUrl);
                 return videoUrl;
             }
 
             logger("未能从 iframe 中提取到有效视频地址");
             return null;
+
         } catch (Exception e) {
-            logger("提取视频地址失败: " + e.getMessage());
+            logger("提取视频地址异常: " + e.getMessage());
             return null;
         }
     }
