@@ -17,25 +17,29 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Tvbyun extends Spider {
 
-    // 新域名
     private String host = "http://www.tvyun03.com";
 
-    /**
-     * 手动过一次滑块后，把完整 Cookie 填到这里。
-     * 过期后（一般1天）重新抓一次再更新即可。
-     */
-    private static final String FIXED_COOKIE =
-            "server_name_session=314b26bde0f81c275f32ab19c3ca7c16; " +
-            "1ec71dbdfe80217b8f31e23f62ea8447=f91ada3937ea79a76c5ee4dd9206bd2a";
+    // 从 JS 里提取的固定值
+    private static final String VERIFY_KEY   = "1f73c3cbd123c58a21284a008c0a431b";
+    private static final String VERIFY_VALUE = "f9a3898114754aa81ca6072a296867e0";
+    private static final String VERIFY_TYPE  = "ad82060c2e67cc7e2cc47552a4fc1242";
+    private static final String VERIFY_PATH  = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
+
+    // 运行时自动获取的 Cookie
+    private final AtomicReference<String> currentCookie = new AtomicReference<>("");
 
     private static final Map<String, String> jiexiUrlMap = new HashMap<>();
     static {
@@ -55,26 +59,158 @@ public class Tvbyun extends Spider {
         }
     }
 
+    /** 计算 JS 里的 value 参数 */
+    private String calcVerifyValue() {
+        // stringtoHex: 每个字符 charCode + 1 拼接
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < VERIFY_VALUE.length(); i++) {
+            sb.append((int) VERIFY_VALUE.charAt(i) + 1);
+        }
+        return md5(sb.toString());
+    }
+
+    private String md5(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b & 0xff));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * 自动过滑块验证，获取完整 Cookie
+     */
+    private synchronized boolean ensureCookie() {
+        if (!TextUtils.isEmpty(currentCookie.get())) {
+            return true;
+        }
+
+        try {
+            log("开始自动过滑块验证...");
+
+            // 1. 先访问首页，拿到 server_name_session
+            Map<String, String> headers = new HashMap<>();
+            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
+            headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+            headers.put("Referer", "http://hktvyb.cc/");
+
+            okhttp3.Response resp = OkHttp.newCall(host + "/", headers);
+            if (resp == null) {
+                log("❌ 首页请求失败");
+                return false;
+            }
+
+            String sessionCookie = null;
+            // 从响应头提取 Set-Cookie
+            List<String> setCookies = resp.headers("Set-Cookie");
+            if (setCookies != null) {
+                for (String sc : setCookies) {
+                    if (sc.startsWith("server_name_session=")) {
+                        sessionCookie = sc.split(";")[0]; // server_name_session=xxx
+                        break;
+                    }
+                }
+            }
+            resp.close();
+
+            if (sessionCookie == null) {
+                log("❌ 未获取到 server_name_session");
+                return false;
+            }
+            log("获取到 session: " + sessionCookie);
+
+            // 2. 调用验证接口
+            String verifyValue = calcVerifyValue();
+            String verifyUrl = host + VERIFY_PATH
+                    + "?type=" + VERIFY_TYPE
+                    + "&key=" + VERIFY_KEY
+                    + "&value=" + verifyValue;
+
+            Map<String, String> verifyHeaders = new HashMap<>();
+            verifyHeaders.put("User-Agent", headers.get("User-Agent"));
+            verifyHeaders.put("Accept", "*/*");
+            verifyHeaders.put("Referer", host + "/");
+            verifyHeaders.put("Cookie", sessionCookie);
+
+            log("请求验证接口: " + verifyUrl);
+            okhttp3.Response verifyResp = OkHttp.newCall(verifyUrl, verifyHeaders);
+            if (verifyResp == null) {
+                log("❌ 验证接口请求失败");
+                return false;
+            }
+
+            String secondCookie = null;
+            List<String> verifySetCookies = verifyResp.headers("Set-Cookie");
+            if (verifySetCookies != null) {
+                for (String sc : verifySetCookies) {
+                    if (sc.contains("=") && !sc.startsWith("server_name_session=")) {
+                        secondCookie = sc.split(";")[0];
+                        break;
+                    }
+                }
+            }
+            // 也兼容 body 返回 cookie 名的情况
+            String body = verifyResp.body() != null ? verifyResp.body().string() : "";
+            verifyResp.close();
+
+            if (secondCookie == null && !TextUtils.isEmpty(body)) {
+                // 有些情况 body 只返回 cookie 名，值可能需要从其他地方拿，这里优先用 Set-Cookie
+                log("验证接口 body: " + body);
+            }
+
+            if (secondCookie == null) {
+                log("❌ 未从验证接口获取到第二个 Cookie");
+                return false;
+            }
+
+            String fullCookie = sessionCookie + "; " + secondCookie;
+            currentCookie.set(fullCookie);
+            log("✅ 自动验证成功，Cookie: " + fullCookie);
+            return true;
+
+        } catch (Exception e) {
+            log("自动验证异常: " + e.getMessage());
+            return false;
+        }
+    }
+
     private HashMap<String, String> getHeaders() {
+        ensureCookie();
+
         HashMap<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
         headers.put("Referer", host + "/");
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9");
         headers.put("Cache-Control", "max-age=0");
         headers.put("Upgrade-Insecure-Requests", "1");
         headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
         headers.put("sec-ch-ua-mobile", "?0");
         headers.put("sec-ch-ua-platform", "\"Windows\"");
-        // 关键：带上滑块验证后的 Cookie
-        headers.put("Cookie", FIXED_COOKIE);
+
+        String cookie = currentCookie.get();
+        if (!TextUtils.isEmpty(cookie)) {
+            headers.put("Cookie", cookie);
+        }
         return headers;
+    }
+
+    /** 检测是否还在滑块页，如果是则清空 Cookie 重新验证 */
+    private boolean isSliderPage(String html) {
+        return html != null && (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_"));
     }
 
     @Override
     public void init(android.content.Context context, String extend) {
         log("🚀 Tvbyun 初始化，当前域名: " + host);
-        log("当前使用 Cookie: " + FIXED_COOKIE.substring(0, Math.min(60, FIXED_COOKIE.length())) + "...");
+        ensureCookie();
     }
 
     @Override
@@ -223,10 +359,15 @@ public class Tvbyun extends Spider {
                 return Result.string(new ArrayList<>());
             }
 
-            // 简单判断是否还在滑块页
-            if (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_")) {
-                log("⚠️ 仍然命中滑块验证页，Cookie 可能已失效，请重新抓取 Cookie！");
-                return Result.string(new ArrayList<>());
+            if (isSliderPage(html)) {
+                log("⚠️ 命中滑块页，清空 Cookie 重新验证");
+                currentCookie.set("");
+                ensureCookie();
+                html = OkHttp.string(url, getHeaders());
+                if (isSliderPage(html)) {
+                    log("❌ 重新验证后仍失败");
+                    return Result.string(new ArrayList<>());
+                }
             }
 
             Document doc = Jsoup.parse(html);
@@ -264,9 +405,14 @@ public class Tvbyun extends Spider {
             return Result.get().vod(new Vod()).string();
         }
 
-        if (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_")) {
-            log("⚠️ 详情页命中滑块验证，Cookie 失效");
-            return Result.get().vod(new Vod()).string();
+        if (isSliderPage(html)) {
+            log("⚠️ 详情页命中滑块，重新验证");
+            currentCookie.set("");
+            ensureCookie();
+            html = OkHttp.string(detailUrl, getHeaders());
+            if (isSliderPage(html)) {
+                return Result.get().vod(new Vod()).string();
+            }
         }
 
         Document doc = Jsoup.parse(html);
@@ -371,12 +517,17 @@ public class Tvbyun extends Spider {
                 return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
             }
 
-            if (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_")) {
-                log("⚠️ 播放页命中滑块验证，Cookie 失效！");
-                return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+            if (isSliderPage(html)) {
+                log("⚠️ 播放页命中滑块，重新验证");
+                currentCookie.set("");
+                ensureCookie();
+                currentHeaders = getHeaders();
+                html = OkHttp.string(playUrl, currentHeaders);
+                if (isSliderPage(html)) {
+                    return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+                }
             }
 
-            // 提取播放器配置 JSON
             String marker = "var player_data=";
             int start = html.indexOf(marker) + marker.length();
             if (start < marker.length()) {
@@ -392,11 +543,9 @@ public class Tvbyun extends Spider {
 
             log("提取到 from=" + from + "  rawUrl=" + rawUrl);
 
-            // 干净的请求头（不带 Referer）给直链用
             Map<String, String> pureHeaders = new HashMap<>();
             pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
 
-            // 1. 有对应解析接口就走解析
             if (jiexiUrlMap.containsKey(from)) {
                 try {
                     String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
@@ -415,12 +564,10 @@ public class Tvbyun extends Spider {
                 } catch (Exception e) {
                     log("解析接口异常: " + e.getMessage());
                 }
-                // 解析失败降级
                 log("解析接口失败，降级给壳子嗅探");
                 return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
             }
 
-            // 2. 没有对应解析接口，直接推原始直链
             if (rawUrl.startsWith("http")) {
                 log("✅ 直接返回原始直链: " + rawUrl);
                 return Result.get().url(rawUrl).parse(0).header(pureHeaders).string();
