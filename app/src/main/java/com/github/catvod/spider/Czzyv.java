@@ -14,6 +14,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -44,7 +45,7 @@ public class Czzyv extends Spider {
 
     private void logger(String msg) {
         try {
-            Proxy.log("[Czzyv] " + msg);
+            android.util.Log.d("Czzyv", "[Czzyv] " + msg);
         } catch (Exception ignored) {
         }
     }
@@ -151,13 +152,16 @@ public class Czzyv extends Spider {
     }
 
     /**
-     * 核心解密：提取播放页中的 iframe 地址，并结合 Header 提取真实的 m3u8 直链
+     * 核心解密：提取播放页中的 iframe 地址，优先从 URL 参数提取直链，否则解析第三方接口
      */
     private String extractVideoUrlFromPlayPage(String playUrl) {
         try {
             // 1. 获取播放页 HTML
             String html = get(playUrl, HOST + "/");
-            if (TextUtils.isEmpty(html)) return null;
+            if (TextUtils.isEmpty(html)) {
+                logger("播放页获取失败");
+                return null;
+            }
 
             // 2. 提取 iframe 节点
             Pattern iframePattern = Pattern.compile("<iframe[^>]+src=[\"']([^\"']+)[\"']");
@@ -173,17 +177,30 @@ public class Czzyv extends Spider {
                     iframeUrl = HOST + iframeUrl;
                 }
 
-                // 优先检查：如果 URL 参数中直接含有 url=https://...，则直接截取，性能最高
-                if (iframeUrl.contains("url=")) {
-                    String paramUrl = iframeUrl.substring(iframeUrl.indexOf("url=") + 4);
-                    if (paramUrl.contains("&")) {
-                        paramUrl = paramUrl.substring(0, paramUrl.indexOf("&"));
+                // ========== 新增逻辑：优先从 iframe URL 参数中提取直链 ==========
+                // 匹配 url= 参数（支持编码）
+                Pattern urlParamPattern = Pattern.compile("[?&]url=([^&]+)");
+                Matcher urlParamMatcher = urlParamPattern.matcher(iframeUrl);
+                if (urlParamMatcher.find()) {
+                    String paramUrl = urlParamMatcher.group(1);
+                    try {
+                        paramUrl = URLDecoder.decode(paramUrl, "UTF-8");
+                    } catch (Exception e) {
+                        // 解码失败则使用原始值
                     }
-                    if (paramUrl.startsWith("http")) {
-                        logger("🚀 成功从 iframe 的 URL 参数中提取到 m3u8 地址: " + paramUrl);
+                    
+                    // 判断是否为直链（m3u8 / mp4 / flv 等）
+                    if (paramUrl.startsWith("http") && 
+                        (paramUrl.contains(".m3u8") || paramUrl.contains(".mp4") || 
+                         paramUrl.contains(".flv") || paramUrl.contains(".ts"))) {
+                        logger("🚀 成功从 iframe URL 参数中提取到直链: " + paramUrl);
                         return paramUrl;
                     }
+                    
+                    // 如果参数值是短链或其他非直链，继续走下面的流程
+                    logger("iframe URL 参数中的值不是直链，继续解析: " + paramUrl);
                 }
+                // ========== 新增逻辑结束 ==========
 
                 // 兜底方案：携带完整防盗链 Header 访问第三方解析接口（如 py.php）
                 String iframeHtml = get(iframeUrl, HOST + "/");
@@ -197,6 +214,15 @@ public class Czzyv extends Spider {
                 if (videoUrl != null) {
                     logger("✅ 成功从 iframe HTML 中匹配提取到 mysvg 真实视频地址: " + videoUrl);
                     return videoUrl;
+                }
+                
+                // 尝试从 iframe 页面直接匹配 m3u8 链接（兜底）
+                Pattern directM3u8 = Pattern.compile("(https?://[^\\s<>'\"]+\\.m3u8[^\\s<>'\"]*)");
+                Matcher m3u8Matcher = directM3u8.matcher(iframeHtml);
+                if (m3u8Matcher.find()) {
+                    String directUrl = m3u8Matcher.group(1);
+                    logger("✅ 从 iframe 页面直接匹配到 m3u8: " + directUrl);
+                    return directUrl;
                 }
             }
             return null;
@@ -355,8 +381,25 @@ public class Czzyv extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            String playUrl = id.startsWith("http") ? id : HOST + id;
+            // 如果 id 包含 $，取后面的实际 URL
+            String actualId = id;
+            if (id.contains("$")) {
+                String[] parts = id.split("\\$", 2);
+                if (parts.length > 1) actualId = parts[1];
+            }
+
+            String playUrl = actualId.startsWith("http") ? actualId : HOST + actualId;
             logger("开始解析播放页: " + playUrl);
+
+            // 检查是否本身就是视频直链
+            if (playUrl.contains(".m3u8") || playUrl.contains(".mp4") || playUrl.contains(".flv")) {
+                logger("✅ 直接返回视频直链: " + playUrl);
+                Map<String, String> headers = new HashMap<>();
+                headers.put("User-Agent", UA);
+                headers.put("Origin", HOST);
+                headers.put("Referer", HOST + "/");
+                return Result.get().url(playUrl).header(headers).string();
+            }
 
             String videoUrl = extractVideoUrlFromPlayPage(playUrl);
 
@@ -371,6 +414,7 @@ public class Czzyv extends Spider {
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Origin", HOST);
+            headers.put("Referer", HOST + "/");
 
             return Result.get().url(videoUrl).header(headers).string();
         } catch (Exception e) {
@@ -429,8 +473,11 @@ public class Czzyv extends Spider {
                     picUrl = img.hasAttr("data-original") ? img.attr("data-original") : img.attr("src");
                 }
 
+                // 规范化 vodId
+                String vodId = detailUrl.startsWith("http") ? detailUrl.replace(HOST, "") : detailUrl;
+
                 Vod vod = new Vod();
-                vod.setVodId(detailUrl);
+                vod.setVodId(vodId);
                 vod.setVodName(title);
                 vod.setVodPic(picUrl);
                 vod.setVodRemarks("");
