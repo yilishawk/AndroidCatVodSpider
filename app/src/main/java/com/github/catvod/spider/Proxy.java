@@ -4,6 +4,7 @@ import android.util.Base64;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.ProxyVideo;
+import com.github.catvod.utils.TmdbUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.json.JSONArray;
@@ -51,6 +52,7 @@ public class Proxy {
         if ("clean".equals(action)) return handleClean();
         log("📨 [Proxy] 收到请求: " + params);
         if ("getPoster".equals(action)) return handleGetPoster(params);
+        if ("getTitle".equals(action)) return handleGetTitle(params);
         if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
         if ("proxySegment".equals(action)) return handleProxySegment(params);
         if ("ppnixKey".equals(action)) return handlePpnixKey(params);
@@ -90,21 +92,32 @@ public class Proxy {
         return String.valueOf(n);
     }
 
-    // ====================== 图片代理 ======================
+    // ====================== TMDB/图片代理与标题获取 ======================
     private static Object[] handleGetPoster(Map<String, String> params) {
         String title = params.get("title");
         if (title == null || title.trim().isEmpty()) return defaultImage();
-        title = normalizeSearchTitle(title);
+        
         try {
-            String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
-                    + URLEncoder.encode(title.trim(), "UTF-8");
-            String jsonStr = OkHttp.string(searchUrl);
-            JSONObject obj = new JSONObject(jsonStr);
-            JSONArray list = obj.optJSONArray("list");
-            if (list != null && list.length() > 0) {
-                String pic = list.getJSONObject(0).optString("pic");
-                if (pic.startsWith("http")) {
-                    okhttp3.Response resp = OkHttp.newCall(pic, new HashMap<>());
+            // 1. 优先调用 TMDB 获取海报图片链接
+            String posterUrl = TmdbUtil.getPosterUrl(title);
+            
+            // 2. 如果 TMDB 未查到，降级走原有的红牛资源网 suggest 提取
+            if (posterUrl.isEmpty()) {
+                String cleanTitle = normalizeSearchTitle(title);
+                String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
+                        + URLEncoder.encode(cleanTitle.trim(), "UTF-8");
+                String jsonStr = OkHttp.string(searchUrl);
+                JSONObject obj = new JSONObject(jsonStr);
+                JSONArray list = obj.optJSONArray("list");
+                if (list != null && list.length() > 0) {
+                    posterUrl = list.getJSONObject(0).optString("pic");
+                }
+            }
+
+            // 3. 执行图片流拉取与中转
+            if (posterUrl.startsWith("http")) {
+                okhttp3.Response resp = OkHttp.newCall(posterUrl, new HashMap<>());
+                if (resp != null && resp.isSuccessful() && resp.body() != null) {
                     String contentType = resp.header("Content-Type", "image/jpeg");
                     return new Object[]{200, contentType, resp.body().byteStream()};
                 }
@@ -113,6 +126,21 @@ public class Proxy {
             log("❌ getPoster 失败: " + e.getMessage());
         }
         return defaultImage();
+    }
+
+    private static Object[] handleGetTitle(Map<String, String> params) {
+        String title = params.get("title");
+        if (title == null || title.trim().isEmpty()) {
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes())};
+        }
+        try {
+            String zhTitle = TmdbUtil.getZhTitle(title);
+            byte[] bytes = zhTitle.getBytes("UTF-8");
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            log("❌ getTitle 失败: " + e.getMessage());
+            return errorResponse(500, e.getMessage());
+        }
     }
 
     private static Object[] defaultImage() {
@@ -135,10 +163,8 @@ public class Proxy {
                 return errorResponse(500, "m3u8 empty");
             }
 
-            // 分片地址改为经本地代理转发，代理内部会在多个编号域名间自动重试
             content = proxifySegments(content);
 
-            // 把 KEY 指向本地二进制转换接口
             String localKeyUrl = getUrl() + "?do=ppnixKey";
             content = content.replace("URI=\"../key\"", "URI=\"" + localKeyUrl + "\"");
             content = content.replace("URI='../key'", "URI=\"" + localKeyUrl + "\"");
@@ -154,10 +180,6 @@ public class Proxy {
         }
     }
 
-    /**
-     * 把 m3u8 里 ipfs.ppnix.com 的分片地址，改写成指向本地 do=proxySegment 接口，
-     * 由服务端在多个编号域名（1-16.ppnix.com）间自动重试，规避单一网关变慢/跳转导致的超时。
-     */
     private static String proxifySegments(String m3u8Content) {
         if (m3u8Content == null || !m3u8Content.contains("ipfs.ppnix.com")) return m3u8Content;
         Pattern pattern = Pattern.compile("(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)");
@@ -209,12 +231,6 @@ public class Proxy {
         return errorResponse(502, "all segment candidates failed");
     }
 
-    /**
-     * 根据原始分片 URL（形如 https://N.ppnix.com/ipfs/xxx），构造重试候选列表：
-     * 1. 原始 URL 本身（保留站点自己的负载均衡选择）
-     * 2. 其余 1-16 编号域名，随机顺序
-     * 3. 最后兜底用 ipfs.ppnix.com 直连
-     */
     private static java.util.List<String> buildSegmentCandidates(String originalUrl) {
         java.util.List<String> candidates = new java.util.ArrayList<>();
         candidates.add(originalUrl);
@@ -278,13 +294,9 @@ public class Proxy {
         }
     }
 
-    /**
-     * 粗略判断响应是否为 Cloudflare（或类似 WAF）的 JS 挑战页，而不是期望的十六进制 key。
-     * 判断依据：非纯十六进制字符 且 命中常见挑战页关键词。
-     */
     private static boolean isCloudflareChallenge(String content) {
         if (content == null || content.isEmpty()) return false;
-        if (content.matches("^[0-9a-fA-F]+$")) return false; // 纯十六进制，正常 key，直接放行
+        if (content.matches("^[0-9a-fA-F]+$")) return false;
         String lower = content.toLowerCase();
         return lower.contains("cf-browser-verification")
                 || lower.contains("just a moment")
