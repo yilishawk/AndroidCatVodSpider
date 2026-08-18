@@ -58,14 +58,14 @@ public class TianyiApi {
         }
         if (!isCookieValid()) {
             SpiderDebug.log("CookieJar不合法，请重新登录");
-           // 注意：此处已注释自动弹窗，仅打印日志，不触发UI
+           // tianYiHandler.startScan();
         }
         getUserSizeInfo();
         this.sessionKey = getUserBriefInfo();
     }
 
     /**
-     * 判断cookie是否为空， 或者SSon为空，那就需要重新登陆
+     * 判断cookie是否为空，或者SSon为空，那就需要重新登陆
      *
      * @return
      */
@@ -111,7 +111,7 @@ public class TianyiApi {
         Init.checkPermission();
 
         tianYiHandler =  TianYiHandler.get();
-        //tianYiHandler.init();
+        tianYiHandler.init();
         cookieJar = tianYiHandler.getCookieJar();
     }
 
@@ -127,9 +127,9 @@ public class TianyiApi {
             JsonArray listData = listFile(1, shareData, files, subs, shareData.getShareId(), shareData.getFolderId(), 1);
 
         } catch (Exception e) {
-            SpiderDebug.log("资源已取消:" + e.getMessage());
-            Notify.show("资源已取消");
-            throw new RuntimeException(e);
+            SpiderDebug.log("Files list is empty!");
+            Notify.show("该分享已被取消，无法访问");
+            throw new RuntimeException("该分享已被取消，无法访问");
         }
 
 
@@ -175,7 +175,7 @@ public class TianyiApi {
 
 
         header.put("Cookie", cookieJar.loadForRequest("https://cloud.189.cn/api/portal/getNewVlcVideoPlayUrl.action"));
-        return Result.get().url(ProxyServer.INSTANCE.buildProxyUrl(playUrl, header)).octet().header(header).string();
+        return Result.get().url( Launcher.buildProxyUrl(playUrl, header)).octet().header(header).string();
     }
 
 
@@ -258,13 +258,12 @@ public class TianyiApi {
         OkResult result = OkHttp.get("https://cloud.189.cn/api/portal/getUserSizeInfo.action", new HashMap<>(), getHeaders());
         JsonObject res = Json.safeObject(result.getBody());
         if (StringUtils.isAllBlank(result.getBody()) || (Objects.nonNull(res.get("errorCode")) && res.get("errorCode").getAsString().equals("InvalidSessionKey"))) {
-            // 关键修改：注释掉自动弹窗，仅打印日志，避免干扰其他爬虫
-            // tianYiHandler.startScan();   // 已注释，不再自动弹窗
-            SpiderDebug.log("天翼Cookie失效，请通过 PanLogin 重新登录或刷新");
-            // 可选择抛出异常让上层处理
-            // throw new Exception("Cookie Expired");
+            // tianYiHandler.startScan();
+            tianYiHandler.refreshCookie();
+            //tianYiHandler.startScan();
         }
         return "";
+
     }
 
 
@@ -300,14 +299,20 @@ public class TianyiApi {
              *   "shareType" : 1.0
              * }
              */
-            if (Objects.nonNull(shareToken.get("res_code")) && shareToken.get("res_code").getAsInt() == 0) {
-                shareData.setShareId(shareToken.get("shareId").getAsString());
-                shareData.setShareMode(shareToken.get("shareMode").getAsInt());
-                shareData.setFolder(shareToken.get("isFolder").getAsBoolean());
-                shareData.setFileId(shareToken.get("fileId").getAsString());
-                shareData.setFolderId(shareToken.get("fileId").getAsString());
+            try {
+                if (Objects.nonNull(shareToken.get("res_code")) && shareToken.get("res_code").getAsInt() == 0) {
+                    shareData.setShareId(shareToken.get("shareId").getAsString());
+                    shareData.setShareMode(shareToken.get("shareMode").getAsInt());
+                    shareData.setFolder(shareToken.get("isFolder").getAsBoolean());
+                    shareData.setFileId(shareToken.get("fileId").getAsString());
+                    shareData.setFolderId(shareToken.get("fileId").getAsString());
 
-                this.shareTokenCache.put(shareData.getShareId(), shareToken);
+                    this.shareTokenCache.put(shareData.getShareId(), shareToken);
+                }
+            } catch (Exception e) {
+                SpiderDebug.log("该分享已被取消，无法访问");
+                Notify.show("该分享已被取消，无法访问");
+                throw new RuntimeException("该分享已被取消，无法访问");
             }
         }
     }
@@ -399,12 +404,12 @@ public class TianyiApi {
                 return normal;
             }
         } else if (res.get("errorCode") != null && res.get("errorCode").getAsString().equals("InvalidSessionKey")) {
-            //刷新cookie - 但不弹窗，仅尝试刷新（refreshCookie方法不会弹窗）
+            //刷新cookie
             SpiderDebug.log("天意cookie 过期，刷新cookie。。。。");
             tianYiHandler.refreshCookie();
             //重试下载
             SpiderDebug.log("重试下载。。。。");
-            return getDownload(shareId, fileId);
+            getDownload(shareId, fileId);
         }
         return "";
     }
