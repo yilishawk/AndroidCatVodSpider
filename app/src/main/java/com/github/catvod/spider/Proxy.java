@@ -2,13 +2,12 @@ package com.github.catvod.spider;
 
 import android.text.TextUtils;
 import android.util.Base64;
-
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.ProxyVideo;
+import com.github.catvod.utils.TmdbUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -26,7 +25,7 @@ import java.util.regex.Pattern;
 public class Proxy {
 
     private static final int PROXY_PORT = 9978;
-    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>---凱哥全能矩陣引擎已啟動---</div>");
+    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動---</div>");
 
     // ====================== 缓存和线程池 ======================
     private static final ConcurrentHashMap<String, String> titleCache = new ConcurrentHashMap<>();
@@ -39,6 +38,21 @@ public class Proxy {
 
     public static String getUrl() {
         return "http://127.0.0.1:" + PROXY_PORT + "/proxy";
+    }
+
+    // ====================== 兼容 FongMi 官方调用 ======================
+    /**
+     * 官方 Local 等爬虫会调用这个方法
+     */
+    public static String getUrl(String siteKey, String param) {
+        return "proxy://do=csp&siteKey=" + siteKey + param;
+    }
+
+    /**
+     * 官方会调用带 boolean 的版本
+     */
+    public static String getUrl(boolean local) {
+        return getUrl();
     }
 
     public static void log(String msg) {
@@ -73,18 +87,13 @@ public class Proxy {
     }
 
     // ====================== 对外公开的异步方法 ======================
-
     /**
      * 异步获取中文标题（立即返回，后台线程处理）
-     * @param title 原始英文标题
-     * @return 中文标题（如果缓存中有则返回，否则返回空字符串）
      */
     public static String getTitle(String title) {
         if (title == null || title.trim().isEmpty()) return "";
-
         String cached = titleCache.get(title);
         if (cached != null) return cached;
-
         executor.submit(() -> {
             try {
                 Map<String, String> params = new HashMap<>();
@@ -105,21 +114,16 @@ public class Proxy {
                 log("❌ 异步获取标题失败: " + title + " → " + e.getMessage());
             }
         });
-
         return "";
     }
 
     /**
      * 异步获取海报（立即返回，后台线程处理）
-     * @param title 原始英文标题
-     * @return 海报URL（如果缓存中有则返回，否则返回空字符串）
      */
     public static String getPoster(String title) {
         if (title == null || title.trim().isEmpty()) return "";
-
         String cached = posterCache.get(title);
         if (cached != null) return cached;
-
         executor.submit(() -> {
             try {
                 Map<String, String> params = new HashMap<>();
@@ -127,7 +131,6 @@ public class Proxy {
                 params.put("title", title);
                 Object[] result = proxy(params);
                 if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
-                    // 海报获取成功，缓存URL
                     String posterUrl = TmdbUtil.getPosterUrl(title);
                     if (!TextUtils.isEmpty(posterUrl)) {
                         posterCache.put(title, posterUrl);
@@ -138,21 +141,16 @@ public class Proxy {
                 log("❌ 异步获取海报失败: " + title + " → " + e.getMessage());
             }
         });
-
         return "";
     }
 
     /**
-     * 同步获取中文标题（等待结果返回）
-     * @param title 原始英文标题
-     * @return 中文标题
+     * 同步获取中文标题
      */
     public static String getTitleSync(String title) {
         if (title == null || title.trim().isEmpty()) return "";
-
         String cached = titleCache.get(title);
         if (cached != null) return cached;
-
         try {
             Map<String, String> params = new HashMap<>();
             params.put("do", "getTitle");
@@ -176,16 +174,12 @@ public class Proxy {
     }
 
     /**
-     * 同步获取海报（等待结果返回）
-     * @param title 原始英文标题
-     * @return 海报URL
+     * 同步获取海报
      */
     public static String getPosterSync(String title) {
         if (title == null || title.trim().isEmpty()) return "";
-
         String cached = posterCache.get(title);
         if (cached != null) return cached;
-
         try {
             String posterUrl = TmdbUtil.getPosterUrl(title);
             if (!TextUtils.isEmpty(posterUrl)) {
@@ -242,12 +236,8 @@ public class Proxy {
     private static Object[] handleGetPoster(Map<String, String> params) {
         String title = params.get("title");
         if (title == null || title.trim().isEmpty()) return defaultImage();
-
         try {
-            // 1. 优先调用 TMDB 获取海报图片链接
             String posterUrl = TmdbUtil.getPosterUrl(title);
-
-            // 2. 如果 TMDB 未查到，降级走原有的红牛资源网 suggest 提取
             if (posterUrl.isEmpty()) {
                 String cleanTitle = normalizeSearchTitle(title);
                 String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
@@ -259,8 +249,6 @@ public class Proxy {
                     posterUrl = list.getJSONObject(0).optString("pic");
                 }
             }
-
-            // 3. 执行图片流拉取与中转
             if (posterUrl.startsWith("http")) {
                 okhttp3.Response resp = OkHttp.newCall(posterUrl, new HashMap<>());
                 if (resp != null && resp.isSuccessful() && resp.body() != null) {
@@ -293,7 +281,7 @@ public class Proxy {
         return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
     }
 
-    // ====================== M3U8 代理（改写 KEY + 域名） ======================
+    // ====================== M3U8 代理 ======================
     private static Object[] handleProxyM3u8(Map<String, String> params) {
         String url = params.get("url");
         if (url == null) return errorResponse(400, "Missing url");
@@ -303,21 +291,16 @@ public class Proxy {
             headers.put("Referer", "https://www.ppnix.com/");
             headers.put("Origin", "https://www.ppnix.com");
             headers.put("Accept", "*/*");
-
             String content = OkHttp.string(url, headers);
             if (content == null || content.isEmpty()) {
                 return errorResponse(500, "m3u8 empty");
             }
-
             content = proxifySegments(content);
-
             String localKeyUrl = getUrl() + "?do=ppnixKey";
             content = content.replace("URI=\"../key\"", "URI=\"" + localKeyUrl + "\"");
             content = content.replace("URI='../key'", "URI=\"" + localKeyUrl + "\"");
             content = content.replace("URI=\"https://www.ppnix.com/info/m3u8/key\"", "URI=\"" + localKeyUrl + "\"");
-
             log("✅ proxyM3u8 处理完成，分片已指向本地代理，KEY 已指向本地二进制接口");
-
             byte[] bytes = content.getBytes("UTF-8");
             return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
         } catch (Exception e) {
@@ -346,17 +329,15 @@ public class Proxy {
         return out.toString();
     }
 
-    // ====================== 分片代理（多编号域名自动重试） ======================
+    // ====================== 分片代理 ======================
     private static Object[] handleProxySegment(Map<String, String> params) {
         String url = params.get("url");
         if (url == null) return errorResponse(400, "Missing url");
-
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         headers.put("Referer", "https://www.ppnix.com/");
         headers.put("Origin", "https://www.ppnix.com");
         headers.put("Accept", "*/*");
-
         for (String candidate : buildSegmentCandidates(url)) {
             try {
                 okhttp3.Response resp = OkHttp.newCall(candidate, headers);
@@ -372,7 +353,6 @@ public class Proxy {
                 log("⚠️ 分片候选异常，换下一个域名重试: " + candidate + " → " + e.getMessage());
             }
         }
-
         log("❌ 分片所有候选域名均失败: " + url);
         return errorResponse(502, "all segment candidates failed");
     }
@@ -380,7 +360,6 @@ public class Proxy {
     private static java.util.List<String> buildSegmentCandidates(String originalUrl) {
         java.util.List<String> candidates = new java.util.ArrayList<>();
         candidates.add(originalUrl);
-
         Pattern hostPattern = Pattern.compile("(https?://)[\\w.-]+\\.ppnix\\.com(/.*)");
         Matcher m = hostPattern.matcher(originalUrl);
         if (!m.matches()) {
@@ -388,7 +367,6 @@ public class Proxy {
         }
         String scheme = m.group(1);
         String path = m.group(2);
-
         java.util.List<Integer> nums = new java.util.ArrayList<>();
         for (int i = 1; i <= 16; i++) nums.add(i);
         java.util.Collections.shuffle(nums);
@@ -396,12 +374,11 @@ public class Proxy {
             String candidate = scheme + n + ".ppnix.com" + path;
             if (!candidate.equals(originalUrl)) candidates.add(candidate);
         }
-
         candidates.add(scheme + "ipfs.ppnix.com" + path);
         return candidates;
     }
 
-    // ====================== PPnix AES Key 转换（hex → 二进制） ======================
+    // ====================== PPnix AES Key ======================
     private static Object[] handlePpnixKey(Map<String, String> params) {
         try {
             String keyUrl = "https://www.ppnix.com/info/m3u8/key";
@@ -409,22 +386,18 @@ public class Proxy {
             headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             headers.put("Referer", "https://www.ppnix.com/");
             headers.put("Origin", "https://www.ppnix.com");
-
             String keyHex = OkHttp.string(keyUrl, headers);
             if (keyHex == null || keyHex.trim().isEmpty()) {
                 log("❌ ppnixKey 获取失败：返回空");
                 return errorResponse(500, "key empty");
             }
             keyHex = keyHex.trim();
-
             if (isCloudflareChallenge(keyHex)) {
                 log("🛡️ ppnixKey 疑似被 Cloudflare 拦截（返回的是挑战页而非 key），前200字符: "
                         + keyHex.substring(0, Math.min(200, keyHex.length())));
                 return errorResponse(403, "blocked by cloudflare challenge");
             }
-
             log("🔑 获取到 key hex: " + keyHex);
-
             byte[] keyBytes = hexStringToByteArray(keyHex);
             if (keyBytes == null || keyBytes.length != 16) {
                 log("❌ key 长度不正确: " + (keyBytes == null ? 0 : keyBytes.length)
@@ -432,7 +405,6 @@ public class Proxy {
                         + "，前200字符: " + keyHex.substring(0, Math.min(200, keyHex.length())));
                 return errorResponse(500, "invalid key length");
             }
-
             return new Object[]{200, "application/octet-stream", new ByteArrayInputStream(keyBytes)};
         } catch (Exception e) {
             log("❌ ppnixKey 失败: " + e.getMessage());
