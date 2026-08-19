@@ -1,12 +1,15 @@
 package com.github.catvod.spider;
 
+import android.text.TextUtils;
 import android.util.Base64;
+
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.ProxyVideo;
 import com.github.catvod.utils.TmdbUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -15,6 +18,9 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,6 +28,11 @@ public class Proxy {
 
     private static final int PROXY_PORT = 9978;
     public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動---</div>");
+
+    // ====================== 缓存和线程池 ======================
+    private static final ConcurrentHashMap<String, String> titleCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, String> posterCache = new ConcurrentHashMap<>();
+    private static final ExecutorService executor = Executors.newCachedThreadPool();
 
     public static int getPort() {
         return PROXY_PORT;
@@ -62,6 +73,142 @@ public class Proxy {
         return errorResponse(400, "Unknown action: " + action);
     }
 
+    // ====================== 对外公开的异步方法 ======================
+
+    /**
+     * 异步获取中文标题（立即返回，后台线程处理）
+     * @param title 原始英文标题
+     * @return 中文标题（如果缓存中有则返回，否则返回空字符串）
+     */
+    public static String getTitle(String title) {
+        if (title == null || title.trim().isEmpty()) return "";
+
+        String cached = titleCache.get(title);
+        if (cached != null) return cached;
+
+        executor.submit(() -> {
+            try {
+                Map<String, String> params = new HashMap<>();
+                params.put("do", "getTitle");
+                params.put("title", title);
+                Object[] result = proxy(params);
+                if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
+                    ByteArrayInputStream bis = (ByteArrayInputStream) result[2];
+                    byte[] bytes = new byte[bis.available()];
+                    bis.read(bytes);
+                    String zhTitle = new String(bytes, "UTF-8");
+                    if (!TextUtils.isEmpty(zhTitle)) {
+                        titleCache.put(title, zhTitle);
+                        log("✅ 异步获取标题成功: " + title + " → " + zhTitle);
+                    }
+                }
+            } catch (Exception e) {
+                log("❌ 异步获取标题失败: " + title + " → " + e.getMessage());
+            }
+        });
+
+        return "";
+    }
+
+    /**
+     * 异步获取海报（立即返回，后台线程处理）
+     * @param title 原始英文标题
+     * @return 海报URL（如果缓存中有则返回，否则返回空字符串）
+     */
+    public static String getPoster(String title) {
+        if (title == null || title.trim().isEmpty()) return "";
+
+        String cached = posterCache.get(title);
+        if (cached != null) return cached;
+
+        executor.submit(() -> {
+            try {
+                Map<String, String> params = new HashMap<>();
+                params.put("do", "getPoster");
+                params.put("title", title);
+                Object[] result = proxy(params);
+                if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
+                    // 海报获取成功，缓存URL
+                    String posterUrl = TmdbUtil.getPosterUrl(title);
+                    if (!TextUtils.isEmpty(posterUrl)) {
+                        posterCache.put(title, posterUrl);
+                        log("✅ 异步获取海报成功: " + title + " → " + posterUrl);
+                    }
+                }
+            } catch (Exception e) {
+                log("❌ 异步获取海报失败: " + title + " → " + e.getMessage());
+            }
+        });
+
+        return "";
+    }
+
+    /**
+     * 同步获取中文标题（等待结果返回）
+     * @param title 原始英文标题
+     * @return 中文标题
+     */
+    public static String getTitleSync(String title) {
+        if (title == null || title.trim().isEmpty()) return "";
+
+        String cached = titleCache.get(title);
+        if (cached != null) return cached;
+
+        try {
+            Map<String, String> params = new HashMap<>();
+            params.put("do", "getTitle");
+            params.put("title", title);
+            Object[] result = proxy(params);
+            if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
+                ByteArrayInputStream bis = (ByteArrayInputStream) result[2];
+                byte[] bytes = new byte[bis.available()];
+                bis.read(bytes);
+                String zhTitle = new String(bytes, "UTF-8");
+                if (!TextUtils.isEmpty(zhTitle)) {
+                    titleCache.put(title, zhTitle);
+                    log("✅ 同步获取标题成功: " + title + " → " + zhTitle);
+                }
+                return zhTitle;
+            }
+        } catch (Exception e) {
+            log("❌ getTitleSync 失败: " + e.getMessage());
+        }
+        return "";
+    }
+
+    /**
+     * 同步获取海报（等待结果返回）
+     * @param title 原始英文标题
+     * @return 海报URL
+     */
+    public static String getPosterSync(String title) {
+        if (title == null || title.trim().isEmpty()) return "";
+
+        String cached = posterCache.get(title);
+        if (cached != null) return cached;
+
+        try {
+            String posterUrl = TmdbUtil.getPosterUrl(title);
+            if (!TextUtils.isEmpty(posterUrl)) {
+                posterCache.put(title, posterUrl);
+                log("✅ 同步获取海报成功: " + title + " → " + posterUrl);
+            }
+            return posterUrl;
+        } catch (Exception e) {
+            log("❌ getPosterSync 失败: " + e.getMessage());
+        }
+        return "";
+    }
+
+    /**
+     * 清除所有缓存
+     */
+    public static void clearCache() {
+        titleCache.clear();
+        posterCache.clear();
+        log("🧹 缓存已清除");
+    }
+
     // ====================== 搜索词标准化 ======================
     private static String normalizeSearchTitle(String title) {
         if (title == null) return "";
@@ -96,11 +243,11 @@ public class Proxy {
     private static Object[] handleGetPoster(Map<String, String> params) {
         String title = params.get("title");
         if (title == null || title.trim().isEmpty()) return defaultImage();
-        
+
         try {
             // 1. 优先调用 TMDB 获取海报图片链接
             String posterUrl = TmdbUtil.getPosterUrl(title);
-            
+
             // 2. 如果 TMDB 未查到，降级走原有的红牛资源网 suggest 提取
             if (posterUrl.isEmpty()) {
                 String cleanTitle = normalizeSearchTitle(title);
