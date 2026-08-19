@@ -8,6 +8,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.TmdbUtil;
+import com.github.catvod.utils.Util;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -19,14 +20,13 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class Sinitv extends BaseSpider {
+public class SiniTV extends BaseSpider {
 
     private static final String SITE_URL = "https://sinitv.cc";
     private static final String CATEGORY_URL = SITE_URL + "/vodshow/%s-------%d---.html";
@@ -112,9 +112,13 @@ public class Sinitv extends BaseSpider {
             String href = link.attr("href");
             String vodId = extractIdFromUrl(href);
             String title = link.attr("title");
-            String pic = link.selectFirst("img").attr("data-src");
-            if (TextUtils.isEmpty(pic)) {
-                pic = link.selectFirst("img").attr("src");
+            String pic = "";
+            Element img = link.selectFirst("img");
+            if (img != null) {
+                pic = img.attr("data-src");
+                if (TextUtils.isEmpty(pic)) {
+                    pic = img.attr("src");
+                }
             }
 
             // 去除 "Musim ke X" 用于搜索
@@ -244,8 +248,6 @@ public class Sinitv extends BaseSpider {
         for (Element ep : episodes) {
             String epHref = ep.attr("href");
             String epTitle = ep.text();
-            // 从 href 提取集数
-            String episodeId = extractEpisodeFromUrl(epHref);
 
             Vod.VodPlayBuilder.PlayUrl playUrl = new Vod.VodPlayBuilder.PlayUrl();
             playUrl.flag = "source_" + sourceId;
@@ -291,6 +293,19 @@ public class Sinitv extends BaseSpider {
             if (html.contains("player_aaaa")) {
                 // 提取 url 字段
                 Pattern urlPattern = Pattern.compile("\"url\":\"([^\"]+)\"");
+                Matcher matcher = urlPattern.matcher(html);
+                if (matcher.find()) {
+                    playUrl = matcher.group(1);
+                    break;
+                }
+            }
+        }
+
+        if (TextUtils.isEmpty(playUrl)) {
+            // 尝试其他方式提取
+            for (Element script : scripts) {
+                String html = script.html();
+                Pattern urlPattern = Pattern.compile("url:\\s*['\"]([^'\"]+?)['\"]");
                 Matcher matcher = urlPattern.matcher(html);
                 if (matcher.find()) {
                     playUrl = matcher.group(1);
