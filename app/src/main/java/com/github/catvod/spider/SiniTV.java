@@ -1,14 +1,13 @@
 package com.github.catvod.spider;
 
 import android.text.TextUtils;
-
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
+import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Util;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
@@ -19,14 +18,14 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// 移除 extends BaseSpider，因为项目中不存在这个类
-public class SiniTV {
+public class SiniTV extends Spider {
 
     private static final String SITE_URL = "https://sinitv.cc";
     private static final String CATEGORY_URL = SITE_URL + "/vodshow/%s-------%d---.html";
@@ -47,19 +46,16 @@ public class SiniTV {
     private static final Pattern SEASON_PATTERN = Pattern.compile("(Season|Musim|Saison|Temporada)\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
 
     // ====================== Home ======================
-
+    @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
         for (Map.Entry<String, String> entry : CATEGORIES.entrySet()) {
             classes.add(new Class(entry.getKey(), entry.getValue()));
         }
-
         if (filter) {
             LinkedHashMap<String, List<Filter>> filters = buildFilters();
-            // 使用 Result.get() 构建
             return Result.get().classes(classes).filters(filters).string();
         }
-        // 使用 Result.get() 构建
         return Result.get().classes(classes).string();
     }
 
@@ -86,10 +82,9 @@ public class SiniTV {
     }
 
     // ====================== Category ======================
-
-    public String categoryContent(String tid, String pg, boolean filter, Map<String, String> extend) throws Exception {
+    @Override
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = TextUtils.isEmpty(pg) ? 1 : Integer.parseInt(pg);
-
         String url = String.format(CATEGORY_URL, tid, page);
         if (extend != null && !extend.isEmpty()) {
             url = buildFilterUrl(tid, page, extend);
@@ -102,7 +97,6 @@ public class SiniTV {
 
         List<Vod> vodList = new ArrayList<>();
         Elements items = doc.select("div.public-list-box");
-
         for (Element item : items) {
             Element link = item.selectFirst("a.public-list-exp");
             if (link == null) continue;
@@ -121,11 +115,10 @@ public class SiniTV {
             }
 
             String searchTitle = removeSeason(title);
-
-            String zhTitle = Proxy.getTitle(searchTitle);
+            String zhTitle = Proxy.getTitleSync(searchTitle);
             String finalName = TextUtils.isEmpty(zhTitle) ? title : zhTitle;
 
-            String poster = Proxy.getPoster(searchTitle);
+            String poster = Proxy.getPosterSync(searchTitle);
             if (TextUtils.isEmpty(poster) && !TextUtils.isEmpty(pic)) {
                 poster = pic.startsWith("http") ? pic : "https:" + pic;
             }
@@ -136,33 +129,28 @@ public class SiniTV {
 
         int total = vodList.size();
         int pageCount = estimatePageCount(doc);
-
         return Result.string(page, pageCount, 20, total, vodList);
     }
 
     private String buildFilterUrl(String tid, int page, Map<String, String> extend) {
         StringBuilder sb = new StringBuilder(SITE_URL + "/vodshow/");
         sb.append(tid);
-
         String area = extend.get("area");
         String year = extend.get("year");
-
         if (!TextUtils.isEmpty(area) || !TextUtils.isEmpty(year)) {
             sb.append("--");
             if (!TextUtils.isEmpty(area)) sb.append("area-").append(area);
             sb.append("--");
             if (!TextUtils.isEmpty(year)) sb.append("year-").append(year);
         }
-
         sb.append("-------").append(page).append("---.html");
         return sb.toString();
     }
 
     // ====================== Detail ======================
-
+    @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("Missing ID");
-
         String vodId = ids.get(0);
         String url = String.format(DETAIL_URL, vodId);
 
@@ -178,7 +166,6 @@ public class SiniTV {
         if (titleEl != null) {
             String title = titleEl.text();
             String searchTitle = removeSeason(title);
-
             String zhTitle = Proxy.getTitleSync(searchTitle);
             String finalName = TextUtils.isEmpty(zhTitle) ? title : zhTitle;
             vod.setVodName(finalName);
@@ -189,14 +176,13 @@ public class SiniTV {
             }
         }
 
-        // 提取海报（直接使用 vod.vodPic 字段）
-        if (TextUtils.isEmpty(vod.vodPic)) {
-            Element posterEl = doc.selectFirst("div.this-pic-bj img");
-            if (posterEl != null) {
-                String poster = posterEl.attr("src");
-                if (!TextUtils.isEmpty(poster)) {
-                    vod.setVodPic(poster.startsWith("http") ? poster : "https:" + poster);
-                }
+        // 如果前面没有设置成功海报，再从页面提取
+        Element posterEl = doc.selectFirst("div.this-pic-bj img");
+        if (posterEl != null) {
+            String poster = posterEl.attr("src");
+            if (!TextUtils.isEmpty(poster)) {
+                // 这里直接 set，覆盖或补充
+                vod.setVodPic(poster.startsWith("http") ? poster : "https:" + poster);
             }
         }
 
@@ -238,18 +224,15 @@ public class SiniTV {
         if (!episodes.isEmpty()) {
             Vod.VodPlayBuilder builder = new Vod.VodPlayBuilder();
             List<Vod.VodPlayBuilder.PlayUrl> playUrls = new ArrayList<>();
-
             for (Element ep : episodes) {
                 String epHref = ep.attr("href");
                 String epTitle = ep.text();
-
                 Vod.VodPlayBuilder.PlayUrl playUrl = new Vod.VodPlayBuilder.PlayUrl();
                 playUrl.flag = "XP";
                 playUrl.name = epTitle;
                 playUrl.url = epHref;
                 playUrls.add(playUrl);
             }
-
             builder.append("XP", playUrls);
             Vod.VodPlayBuilder.BuildResult result = builder.build();
             vod.setVodPlayFrom(result.vodPlayFrom);
@@ -260,7 +243,7 @@ public class SiniTV {
     }
 
     // ====================== Player ======================
-
+    @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playId = id;
         if (id.contains("/")) {
@@ -271,7 +254,6 @@ public class SiniTV {
         }
 
         String url = SITE_URL + "/vodplay/" + playId + ".html";
-
         Document doc = Jsoup.connect(url)
                 .userAgent(Util.CHROME)
                 .timeout(15000)
@@ -279,7 +261,6 @@ public class SiniTV {
 
         String playUrl = null;
         Elements scripts = doc.select("script");
-
         for (Element script : scripts) {
             String html = script.html();
             if (html.contains("player_aaaa")) {
@@ -312,25 +293,23 @@ public class SiniTV {
         if (playUrl.endsWith(".m3u8") || playUrl.contains("master.m3u8")) {
             result.m3u8();
         }
-
         return result.string();
     }
 
     // ====================== Search ======================
-
+    @Override
     public String searchContent(String key, boolean quick) throws Exception {
         if (TextUtils.isEmpty(key)) return Result.error("Please enter search keyword");
 
         String searchUrl = SITE_URL + "/index.php/ajax/suggest.html?mid=1&wd="
                 + URLEncoder.encode(key, "UTF-8");
-
         String json = OkHttp.string(searchUrl);
         if (TextUtils.isEmpty(json)) return Result.error("Search failed");
 
         JSONObject obj = new JSONObject(json);
         JSONArray list = obj.optJSONArray("list");
-
         List<Vod> vodList = new ArrayList<>();
+
         if (list != null) {
             for (int i = 0; i < list.length(); i++) {
                 JSONObject item = list.getJSONObject(i);
@@ -339,23 +318,20 @@ public class SiniTV {
                 String pic = item.optString("pic");
 
                 String searchTitle = removeSeason(vodName);
-
-                String zhTitle = Proxy.getTitle(searchTitle);
+                String zhTitle = Proxy.getTitleSync(searchTitle);
                 String finalName = TextUtils.isEmpty(zhTitle) ? vodName : zhTitle;
 
-                String poster = Proxy.getPoster(searchTitle);
+                String poster = Proxy.getPosterSync(searchTitle);
                 String finalPic = TextUtils.isEmpty(poster) ? pic : poster;
 
                 Vod vod = new Vod(vodId, finalName, finalPic);
                 vodList.add(vod);
             }
         }
-
         return Result.string(vodList);
     }
 
     // ====================== 辅助方法 ======================
-
     private String extractIdFromUrl(String url) {
         if (TextUtils.isEmpty(url)) return "";
         Pattern pattern = Pattern.compile("/voddetail/(\\d+)\\.html");
