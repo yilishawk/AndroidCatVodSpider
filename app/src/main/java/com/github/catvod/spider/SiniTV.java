@@ -2,25 +2,14 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
-
+import com.github.catvod.crawler.Spider;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
-import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
-
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -28,693 +17,175 @@ import java.util.regex.Pattern;
 
 public class SiniTV extends Spider {
 
-    private static final String SITE_URL = "https://sinitv.cc";
+    private static final String HOST = "https://sinitv.cc";
 
-    private static final String CATEGORY_URL =
-            SITE_URL + "/vodshow/%s-------%d---.html";
-
-    private static final String DETAIL_URL =
-            SITE_URL + "/voddetail/%s.html";
-
-    private static final Map<String, String> CATEGORIES =
-            new LinkedHashMap<>();
-
-    static {
-        CATEGORIES.put("1", "电视剧");
-        CATEGORIES.put("2", "电影");
-        CATEGORIES.put("3", "动漫");
-        CATEGORIES.put("4", "综艺");
-        CATEGORIES.put("5", "纪录片");
-        CATEGORIES.put("1-Tiongkok", "国产剧");
-        CATEGORIES.put("2-Tiongkok", "国产电影");
+    private Map<String, String> getHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Referer", HOST + "/");
+        return headers;
     }
-
-    private static final Pattern SEASON_PATTERN =
-            Pattern.compile(
-                    "(Season|Musim|Saison|Temporada)\\s*(\\d+)",
-                    Pattern.CASE_INSENSITIVE
-            );
-
-    private Map<String, String> baseHeaders;
-
-    @Override
-    public void init(Context context, String extend) throws Exception {
-        baseHeaders = new HashMap<>();
-
-        baseHeaders.put("User-Agent", Util.CHROME);
-        baseHeaders.put("Referer", SITE_URL + "/");
-    }
-
-    // ====================== 首页分类 ======================
 
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
+        classes.add(new Class("1", "电视剧"));
+        classes.add(new Class("2", "电影"));
 
-        for (Map.Entry<String, String> entry : CATEGORIES.entrySet()) {
-            classes.add(
-                    new Class(
-                            entry.getKey(),
-                            entry.getValue()
-                    )
-            );
-        }
-
-        return Result.get()
-                .classes(classes)
-                .string();
+        return Result.get().classes(classes).string();
     }
 
-    // ====================== 分类列表 ======================
-
     @Override
-    public String categoryContent(
-            String tid,
-            String pg,
-            boolean filter,
-            HashMap<String, String> extend
-    ) throws Exception {
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        int page = Integer.parseInt(pg);
+        // 分页URL格式: /vodshow/1--------2---.html
+        String url = HOST + "/vodshow/" + tid + "--------" + page + "---.html";
 
-        int page = 1;
+        String html = OkHttp.string(url, getHeaders());
+        List<Vod> list = parseVideoList(html);
 
-        if (!TextUtils.isEmpty(pg)) {
-            try {
-                page = Integer.parseInt(pg);
-            } catch (Exception e) {
-                page = 1;
-            }
+        int totalPage = page;
+        if (list.size() >= 10) {
+            totalPage = page + 1;
         }
 
-        if (page < 1) {
-            page = 1;
-        }
-
-        String url = String.format(
-                CATEGORY_URL,
-                tid,
-                page
-        );
-
-        String html = OkHttp.string(
-                url,
-                baseHeaders
-        );
-
-        if (TextUtils.isEmpty(html)) {
-            return Result.get()
-                    .vod(new ArrayList<Vod>())
-                    .page(page, page, 0, 0)
-                    .string();
-        }
-
-        Document doc = Jsoup.parse(html);
-
-        List<Vod> list = new ArrayList<>();
-
-        Elements items = doc.select(
-                "div.public-list-box"
-        );
-
-        for (Element item : items) {
-
-            Element link = item.selectFirst(
-                    "a.public-list-exp"
-            );
-
-            if (link == null) {
-                continue;
-            }
-
-            String href = link.attr("href");
-
-            String vodId = extractIdFromUrl(href);
-
-            if (TextUtils.isEmpty(vodId)) {
-                continue;
-            }
-
-            String title = link.attr("title");
-
-            if (TextUtils.isEmpty(title)) {
-                Element titleEl = item.selectFirst(
-                        ".public-list-div a"
-                );
-
-                if (titleEl != null) {
-                    title = titleEl.text().trim();
-                }
-            }
-
-            if (TextUtils.isEmpty(title)) {
-                continue;
-            }
-
-            Element img = link.selectFirst("img");
-
-            String pic = "";
-
-            if (img != null) {
-                pic = img.attr("data-src");
-
-                if (TextUtils.isEmpty(pic)) {
-                    pic = img.attr("src");
-                }
-
-                if (!TextUtils.isEmpty(pic)
-                        && !pic.startsWith("http")) {
-
-                    if (pic.startsWith("//")) {
-                        pic = "https:" + pic;
-                    } else {
-                        pic = SITE_URL + pic;
-                    }
-                }
-            }
-
-            // 中文标题
-            String searchTitle = removeSeason(title);
-
-            String zhTitle =
-                    Proxy.getTitleSync(searchTitle);
-
-            String finalName;
-
-            if (TextUtils.isEmpty(zhTitle)) {
-                finalName = title;
-            } else {
-                finalName = zhTitle;
-            }
-
-            // 海报
-            String poster =
-                    Proxy.getPosterSync(searchTitle);
-
-            if (TextUtils.isEmpty(poster)) {
-                poster = pic;
-            }
-
-            Vod vod = new Vod();
-
-            vod.setVodId(vodId);
-            vod.setVodName(finalName);
-            vod.setVodPic(poster);
-
-            list.add(vod);
-        }
-
-        /*
-         * 当前站点没有可靠的总页数字段，
-         * 因此沿用原来的逻辑：
-         * 有数据时认为后面可能还有一页，
-         * 无数据时停止分页。
-         */
-        int count;
-
-        if (list.isEmpty()) {
-            count = page;
-        } else {
-            count = page + 1;
-        }
-
-        return Result.get()
-                .vod(list)
-                .page(
-                        page,
-                        count,
-                        list.size(),
-                        0
-                )
-                .string();
+        return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
     }
 
-    // ====================== 详情 ======================
-
     @Override
-    public String detailContent(
-            List<String> ids
-    ) throws Exception {
-
-        if (ids == null || ids.isEmpty()) {
-            return Result.error("Missing ID");
+    public String detailContent(List<String> ids) throws Exception {
+        String detailUrl = ids.get(0);
+        if (!detailUrl.startsWith("http")) {
+            detailUrl = HOST + detailUrl;
         }
 
-        String vodId = ids.get(0);
-
-        if (TextUtils.isEmpty(vodId)) {
-            return Result.error("Missing ID");
-        }
-
-        String url = String.format(
-                DETAIL_URL,
-                vodId
-        );
-
-        String html = OkHttp.string(
-                url,
-                baseHeaders
-        );
-
-        if (TextUtils.isEmpty(html)) {
-            return Result.error("详情请求失败");
-        }
-
-        Document doc = Jsoup.parse(html);
+        String html = OkHttp.string(detailUrl, getHeaders());
 
         Vod vod = new Vod();
+        vod.setVodId(detailUrl);
 
-        vod.setVodId(vodId);
-
-        // ====================== 标题 ======================
-
-        Element titleEl = doc.selectFirst(
-                "div.this-desc-title"
-        );
-
-        if (titleEl != null) {
-
-            String title =
-                    titleEl.text().trim();
-
-            String searchTitle =
-                    removeSeason(title);
-
-            String zhTitle =
-                    Proxy.getTitleSync(searchTitle);
-
-            if (TextUtils.isEmpty(zhTitle)) {
-                vod.setVodName(title);
-            } else {
-                vod.setVodName(zhTitle);
-            }
-
-            String poster =
-                    Proxy.getPosterSync(searchTitle);
-
-            if (!TextUtils.isEmpty(poster)) {
-                vod.setVodPic(poster);
-            }
+        // 解析标题
+        Pattern pTitle = Pattern.compile("<div class=\"this-desc-title\">([^<]+)</div>", Pattern.CASE_INSENSITIVE);
+        Matcher mTitle = pTitle.matcher(html);
+        if (mTitle.find()) {
+            vod.setVodName(mTitle.group(1).trim());
         }
 
-        // ====================== 海报兜底 ======================
-
-        Element posterEl = doc.selectFirst(
-                "div.this-pic-bj img"
-        );
-
-        if (posterEl != null) {
-
-            String poster =
-                    posterEl.attr("src");
-
-            if (!TextUtils.isEmpty(poster)) {
-
-                if (!poster.startsWith("http")) {
-
-                    if (poster.startsWith("//")) {
-                        poster = "https:" + poster;
-                    } else {
-                        poster = SITE_URL + poster;
-                    }
-                }
-
-                vod.setVodPic(poster);
-            }
+        // 解析封面图片
+        Pattern pPic = Pattern.compile("<div class=\"this-pic-bj\">\\s*<img src=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+        Matcher mPic = pPic.matcher(html);
+        if (mPic.find()) {
+            vod.setVodPic(mPic.group(1).trim());
         }
 
-        // ====================== 年份 / 地区 / 备注 ======================
-
-        Element infoEl = doc.selectFirst(
-                "div.this-desc-info"
-        );
-
-        if (infoEl != null) {
-
-            Elements spans =
-                    infoEl.select("span");
-
-            if (spans.size() >= 1) {
-                vod.setVodYear(
-                        spans.get(0).text().trim()
-                );
-            }
-
-            if (spans.size() >= 2) {
-                vod.setVodArea(
-                        spans.get(1).text().trim()
-                );
-            }
-
-            if (spans.size() >= 3) {
-                vod.setVodRemarks(
-                        spans.get(2).text().trim()
-                );
-            }
+        // 解析主演
+        Pattern pActor = Pattern.compile("<strong class=\"r6\">Pemeran:</strong>([\\s\\S]*?)</div>", Pattern.CASE_INSENSITIVE);
+        Matcher mActor = pActor.matcher(html);
+        if (mActor.find()) {
+            String actorStr = mActor.group(1).replaceAll("<[^>]+>", "").replace("，", ",").trim();
+            vod.setVodActor(actorStr);
         }
 
-        // ====================== 演员 ======================
-
-        Element actorEl = doc.selectFirst(
-                "div.this-info"
-        );
-
-        if (actorEl != null) {
-
-            String actorText =
-                    actorEl.text()
-                            .replace("Pemeran:", "")
-                            .trim();
-
-            if (!TextUtils.isEmpty(actorText)) {
-                vod.setVodActor(actorText);
-            }
+        // 解析简介
+        Pattern pDesc = Pattern.compile("<div id=\"height_limit\" class=\"text\">([\\s\\S]*?)</div>", Pattern.CASE_INSENSITIVE);
+        Matcher mDesc = pDesc.matcher(html);
+        if (mDesc.find()) {
+            String desc = mDesc.group(1).replaceAll("<[^>]+>", "").replace("Deskripsi:", "").trim();
+            vod.setVodContent(desc);
         }
 
-        // ====================== 简介 ======================
-
-        Element descEl = doc.selectFirst(
-                "div#height_limit.text"
-        );
-
-        if (descEl != null) {
-
-            String desc =
-                    descEl.text()
-                            .replace("Deskripsi:", "")
-                            .trim();
-
-            if (!TextUtils.isEmpty(desc)) {
-                vod.setVodContent(desc);
-            }
+        // 解析播放线路与列表
+        // 1. 提取所有播放源名称 (例如: XP)
+        List<String> playFromList = new ArrayList<>();
+        Pattern pFrom = Pattern.compile("<a class=\"swiper-slide\">[\\s\\S]*?&nbsp;([^<]+)<span", Pattern.CASE_INSENSITIVE);
+        Matcher mFrom = pFrom.matcher(html);
+        while (mFrom.find()) {
+            playFromList.add(mFrom.group(1).trim());
         }
 
-        // ====================== 播放列表 ======================
+        // 2. 提取所有选集列表组
+        List<String> playListGroup = new ArrayList<>();
+        Pattern pListBox = Pattern.compile("<ul class=\"anthology-list-play[^\"]*\">([\\s\\S]*?)</ul>", Pattern.CASE_INSENSITIVE);
+        Matcher mListBox = pListBox.matcher(html);
 
-        Elements episodes = doc.select(
-                "ul.anthology-list-play li a"
-        );
-
-        if (!episodes.isEmpty()) {
-
-            List<String> playUrls =
-                    new ArrayList<>();
-
-            for (Element ep : episodes) {
-
-                String epHref =
-                        ep.attr("href");
-
-                String epTitle =
-                        ep.text().trim();
-
-                if (TextUtils.isEmpty(epHref)) {
-                    continue;
-                }
-
-                if (TextUtils.isEmpty(epTitle)) {
-                    epTitle = "播放";
-                }
-
-                playUrls.add(
-                        epTitle + "$" + epHref
-                );
+        while (mListBox.find()) {
+            String ulContent = mListBox.group(1);
+            List<String> epList = new ArrayList<>();
+            Pattern pEp = Pattern.compile("<a [^>]*href=\"([^\"]+)\">([^<]+)</a>", Pattern.CASE_INSENSITIVE);
+            Matcher mEp = pEp.matcher(ulContent);
+            while (mEp.find()) {
+                String epUrl = mEp.group(1).trim();
+                String epName = mEp.group(2).trim();
+                epList.add(epName + "$" + epUrl);
             }
-
-            if (!playUrls.isEmpty()) {
-
-                vod.setVodPlayFrom("XP");
-
-                vod.setVodPlayUrl(
-                        TextUtils.join(
-                                "#",
-                                playUrls
-                        )
-                );
-            }
+            playListGroup.add(TextUtils.join("#", epList));
         }
 
-        return Result.get()
-                .vod(vod)
-                .string();
+        // 防错处理：如果线路数和播放组数量对不上，兜底处理
+        if (playFromList.isEmpty()) {
+            playFromList.add("默认播放");
+        }
+
+        vod.setVodPlayFrom(TextUtils.join("$$$", playFromList));
+        vod.setVodPlayUrl(TextUtils.join("$$$", playListGroup));
+
+        return Result.get().vod(vod).string();
     }
 
-    // ====================== 播放 ======================
+    @Override
+    public String searchContent(String key, boolean quick) throws Exception {
+        String url = HOST + "/vodsearch/-" + key + "------------.html";
+        String html = OkHttp.string(url, getHeaders());
+
+        List<Vod> list = parseVideoList(html);
+        return Result.get().vod(list).string();
+    }
 
     @Override
-    public String playerContent(
-            String flag,
-            String id,
-            List<String> vipFlags
-    ) throws Exception {
-
-        String playId = id;
-
-        if (TextUtils.isEmpty(playId)) {
-            return Result.error("播放ID为空");
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        String playPageUrl = id;
+        if (!playPageUrl.startsWith("http")) {
+            playPageUrl = HOST + playPageUrl;
         }
 
-        if (playId.contains("/")) {
-            playId = playId.substring(
-                    playId.lastIndexOf("/") + 1
-            );
+        String html = OkHttp.string(playPageUrl, getHeaders());
+        String realPlayUrl = "";
+
+        // 正则解析 JS 对象 player_aaaa 中的 "url":"https:\/\/..."
+        Pattern pUrl = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+        Matcher mUrl = pUrl.matcher(html);
+        if (mUrl.find()) {
+            realPlayUrl = mUrl.group(1).replace("\\/", "/");
         }
 
-        if (playId.endsWith(".html")) {
-            playId = playId.substring(
-                    0,
-                    playId.length() - 5
-            );
-        }
+        return Result.get().url(realPlayUrl).header(getHeaders()).string();
+    }
 
-        String url =
-                SITE_URL
-                        + "/vodplay/"
-                        + playId
-                        + ".html";
-
-        String html = OkHttp.string(
-                url,
-                baseHeaders
-        );
-
+    /**
+     * 解析列表页与搜索页中的视频条目
+     */
+    private List<Vod> parseVideoList(String html) {
+        List<Vod> list = new ArrayList<>();
         if (TextUtils.isEmpty(html)) {
-            return Result.error("播放页请求失败");
+            return list;
         }
 
-        Document doc = Jsoup.parse(html);
+        Pattern pCard = Pattern.compile("<div class=\"public-list-box[^\"]*\">[\\s\\S]*?<a [^>]*href=\"([^\"]+)\" title=\"([^\"]+)\"[\\s\\S]*?<img [^>]*data-src=\"([^\"]+)\"[\\s\\S]*?(?:<span class=\"public-list-prb[^\"]*\">([^<]+)</span>)?", Pattern.CASE_INSENSITIVE);
+        Matcher mCard = pCard.matcher(html);
 
-        String playUrl = null;
+        while (mCard.find()) {
+            String href = mCard.group(1).trim();
+            String title = mCard.group(2).trim();
+            String img = mCard.group(3).trim();
+            String remark = mCard.group(4) != null ? mCard.group(4).trim() : "";
 
-        Elements scripts =
-                doc.select("script");
-
-        for (Element script : scripts) {
-
-            String js = script.html();
-
-            if (TextUtils.isEmpty(js)) {
-                continue;
-            }
-
-            if (js.contains("player_aaaa")
-                    || js.contains("\"url\"")) {
-
-                Matcher m =
-                        Pattern.compile(
-                                "\"url\"\\s*:\\s*\"([^\"]+)\""
-                        ).matcher(js);
-
-                if (m.find()) {
-                    playUrl = m.group(1);
-                    break;
-                }
-
-                m = Pattern.compile(
-                        "url\\s*:\\s*['\"]([^'\"]+)['\"]"
-                ).matcher(js);
-
-                if (m.find()) {
-                    playUrl = m.group(1);
-                    break;
-                }
-            }
+            Vod vod = new Vod();
+            vod.setVodId(href);
+            vod.setVodName(title);
+            vod.setVodPic(img);
+            vod.setVodRemarks(remark);
+            list.add(vod);
         }
-
-        if (TextUtils.isEmpty(playUrl)) {
-            return Result.error("未找到播放地址");
-        }
-
-        /*
-         * 部分站点返回 JSON 字符串中的
-         * URL 转义字符，需要做基础处理。
-         */
-        playUrl = playUrl
-                .replace("\\/", "/")
-                .replace("\\u0026", "&");
-
-        Result result =
-                Result.get().url(playUrl);
-
-        if (playUrl.contains(".m3u8")) {
-            result.m3u8();
-        }
-
-        return result.string();
-    }
-
-    // ====================== 搜索 ======================
-
-    @Override
-    public String searchContent(
-            String key,
-            boolean quick
-    ) throws Exception {
-
-        if (TextUtils.isEmpty(key)) {
-            return Result.get()
-                    .vod(new ArrayList<Vod>())
-                    .string();
-        }
-
-        String searchUrl =
-                SITE_URL
-                        + "/index.php/ajax/suggest.html?mid=1&wd="
-                        + URLEncoder.encode(
-                                key,
-                                "UTF-8"
-                        );
-
-        String json =
-                OkHttp.string(
-                        searchUrl,
-                        baseHeaders
-                );
-
-        if (TextUtils.isEmpty(json)) {
-            return Result.get()
-                    .vod(new ArrayList<Vod>())
-                    .string();
-        }
-
-        try {
-
-            JSONObject obj =
-                    new JSONObject(json);
-
-            JSONArray arr =
-                    obj.optJSONArray("list");
-
-            List<Vod> list =
-                    new ArrayList<>();
-
-            if (arr != null) {
-
-                for (int i = 0;
-                     i < arr.length();
-                     i++) {
-
-                    JSONObject item =
-                            arr.optJSONObject(i);
-
-                    if (item == null) {
-                        continue;
-                    }
-
-                    String vodId =
-                            item.optString("vod_id");
-
-                    String vodName =
-                            item.optString("vod_name");
-
-                    String pic =
-                            item.optString("pic");
-
-                    if (TextUtils.isEmpty(vodId)
-                            || TextUtils.isEmpty(vodName)) {
-                        continue;
-                    }
-
-                    String searchTitle =
-                            removeSeason(vodName);
-
-                    String zhTitle =
-                            Proxy.getTitleSync(searchTitle);
-
-                    String finalName;
-
-                    if (TextUtils.isEmpty(zhTitle)) {
-                        finalName = vodName;
-                    } else {
-                        finalName = zhTitle;
-                    }
-
-                    String poster =
-                            Proxy.getPosterSync(searchTitle);
-
-                    if (TextUtils.isEmpty(poster)) {
-                        poster = pic;
-                    }
-
-                    Vod vod = new Vod();
-
-                    vod.setVodId(vodId);
-                    vod.setVodName(finalName);
-                    vod.setVodPic(poster);
-
-                    list.add(vod);
-                }
-            }
-
-            return Result.get()
-                    .vod(list)
-                    .string();
-
-        } catch (Exception e) {
-
-            return Result.get()
-                    .vod(new ArrayList<Vod>())
-                    .string();
-        }
-    }
-
-    // ====================== 辅助方法 ======================
-
-    private String extractIdFromUrl(String url) {
-
-        if (TextUtils.isEmpty(url)) {
-            return "";
-        }
-
-        Matcher m =
-                Pattern.compile(
-                        "/voddetail/(\\d+)\\.html"
-                ).matcher(url);
-
-        if (m.find()) {
-            return m.group(1);
-        }
-
-        String id =
-                url.replaceAll("\\D", "");
-
-        return id;
-    }
-
-    private String removeSeason(String title) {
-
-        if (TextUtils.isEmpty(title)) {
-            return "";
-        }
-
-        Matcher m =
-                SEASON_PATTERN.matcher(title);
-
-        if (m.find()) {
-
-            return title
-                    .substring(0, m.start())
-                    .trim();
-        }
-
-        return title;
+        return list;
     }
 }
