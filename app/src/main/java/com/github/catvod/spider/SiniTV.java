@@ -74,10 +74,10 @@ public class SiniTV extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        // 测试分类
-        classes.add(new Class("1-Tiongkok", "中国陆剧"));[cite: 1]
+        // 测试分类：中国陆剧
+        classes.add(new Class("1-Tiongkok", "中国陆剧"));
 
-        return Result.string(classes, new ArrayList<>());[cite: 3]
+        return Result.string(classes, new ArrayList<>());
     }
 
     @Override
@@ -101,18 +101,17 @@ public class SiniTV extends Spider {
             Element prb = item.selectFirst("span.public-list-prb");
             String remarks = prb != null ? prb.text().trim() : "";
 
-            // 使用 Vod 实体构造并绑定异步代理接口
-            Vod vod = new Vod();[cite: 5]
-            vod.setVodId(vodId);[cite: 5]
-            vod.setVodName(getProxyTitleUrl(rawTitle));[cite: 5]
-            vod.setVodPic(getProxyPosterUrl(rawTitle));[cite: 5]
-            vod.setVodRemarks(remarks);[cite: 5]
+            Vod vod = new Vod();
+            vod.setVodId(vodId);
+            vod.setVodName(getProxyTitleUrl(rawTitle));
+            vod.setVodPic(getProxyPosterUrl(rawTitle));
+            vod.setVodRemarks(remarks);
 
             list.add(vod);
         }
 
         int pageNum = Integer.parseInt(pg);
-        return Result.string(pageNum, 999, list.size(), 9999, list);[cite: 3]
+        return Result.string(pageNum, 999, list.size(), 9999, list);
     }
 
     @Override
@@ -146,43 +145,43 @@ public class SiniTV extends Spider {
         Elements tabElements = doc.select("div.anthology-tab div.swiper-wrapper a");
         Elements listBoxes = doc.select("div.anthology-list-box");
 
-        Vod.VodPlayBuilder playBuilder = new Vod.VodPlayBuilder();[cite: 5]
+        Vod.VodPlayBuilder playBuilder = new Vod.VodPlayBuilder();
 
         for (int i = 0; i < tabElements.size(); i++) {
             String fromName = tabElements.get(i).text().replaceAll("<.*?>", "").trim();
             if (TextUtils.isEmpty(fromName)) fromName = "播放源 " + (i + 1);
 
-            List<Vod.VodPlayBuilder.PlayUrl> playUrls = new ArrayList<>();[cite: 5]
+            List<Vod.VodPlayBuilder.PlayUrl> playUrls = new ArrayList<>();
             if (i < listBoxes.size()) {
                 Elements aLinks = listBoxes.get(i).select("ul.anthology-list-play li a");
                 for (Element a : aLinks) {
-                    Vod.VodPlayBuilder.PlayUrl playUrl = new Vod.VodPlayBuilder.PlayUrl();[cite: 5]
-                    playUrl.name = a.text().trim();[cite: 5]
-                    playUrl.url = a.attr("href");[cite: 5]
+                    Vod.VodPlayBuilder.PlayUrl playUrl = new Vod.VodPlayBuilder.PlayUrl();
+                    playUrl.name = a.text().trim();
+                    playUrl.url = a.attr("href");
                     playUrls.add(playUrl);
                 }
             }
 
             if (!playUrls.isEmpty()) {
-                playBuilder.append(fromName, playUrls);[cite: 5]
+                playBuilder.append(fromName, playUrls);
             }
         }
 
-        Vod.VodPlayBuilder.BuildResult playResult = playBuilder.build();[cite: 5]
+        Vod.VodPlayBuilder.BuildResult playResult = playBuilder.build();
 
-        Vod vod = new Vod();[cite: 5]
-        vod.setVodId(vodId);[cite: 5]
-        vod.setVodName(getProxyTitleUrl(rawTitle));[cite: 5]
-        vod.setVodPic(getProxyPosterUrl(rawTitle));[cite: 5]
-        vod.setTypeName(typeName);[cite: 5]
-        vod.setVodYear(year);[cite: 5]
-        vod.setVodArea(area);[cite: 5]
-        vod.setVodActor(actor.toString());[cite: 5]
-        vod.setVodContent(desc);[cite: 5]
-        vod.setVodPlayFrom(playResult.vodPlayFrom);[cite: 5]
-        vod.setVodPlayUrl(playResult.vodPlayUrl);[cite: 5]
+        Vod vod = new Vod();
+        vod.setVodId(vodId);
+        vod.setVodName(getProxyTitleUrl(rawTitle));
+        vod.setVodPic(getProxyPosterUrl(rawTitle));
+        vod.setTypeName(typeName);
+        vod.setVodYear(year);
+        vod.setVodArea(area);
+        vod.setVodActor(actor.toString());
+        vod.setVodContent(desc);
+        vod.setVodPlayFrom(playResult.vodPlayFrom);
+        vod.setVodPlayUrl(playResult.vodPlayUrl);
 
-        return Result.string(vod);[cite: 3]
+        return Result.string(vod);
     }
 
     @Override
@@ -205,16 +204,16 @@ public class SiniTV extends Spider {
             Element prb = item.selectFirst("span.public-list-prb");
             String remarks = prb != null ? prb.text().trim() : "";
 
-            Vod vod = new Vod();[cite: 5]
-            vod.setVodId(vodId);[cite: 5]
-            vod.setVodName(getProxyTitleUrl(rawTitle));[cite: 5]
-            vod.setVodPic(getProxyPosterUrl(rawTitle));[cite: 5]
-            vod.setVodRemarks(remarks);[cite: 5]
+            Vod vod = new Vod();
+            vod.setVodId(vodId);
+            vod.setVodName(getProxyTitleUrl(rawTitle));
+            vod.setVodPic(getProxyPosterUrl(rawTitle));
+            vod.setVodRemarks(remarks);
 
             list.add(vod);
         }
 
-        return Result.string(list);[cite: 3]
+        return Result.string(list);
     }
 
     @Override
@@ -230,9 +229,9 @@ public class SiniTV extends Spider {
             JSONObject jsonObject = new JSONObject(jsonStr);
             String playUrl = jsonObject.optString("url").replace("\\/", "/");
 
-            return Result.get().url(playUrl).header(getHeaders()).string();[cite: 3]
+            return Result.get().url(playUrl).header(getHeaders()).string();
         }
 
-        return Result.error("未找到播放视频链接");[cite: 3]
+        return Result.error("未找到播放视频链接");
     }
 }
