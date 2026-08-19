@@ -8,7 +8,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Util;
-import com.github.catvod.utils.TmdbUtil;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -23,17 +22,16 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class SiniTV extends BaseSpider {
+// 移除 extends BaseSpider，因为项目中不存在这个类
+public class SiniTV {
 
     private static final String SITE_URL = "https://sinitv.cc";
     private static final String CATEGORY_URL = SITE_URL + "/vodshow/%s-------%d---.html";
     private static final String DETAIL_URL = SITE_URL + "/voddetail/%s.html";
 
-    // 分类映射（英文站）
     private static final Map<String, String> CATEGORIES = new LinkedHashMap<>();
 
     static {
@@ -46,12 +44,7 @@ public class SiniTV extends BaseSpider {
         CATEGORIES.put("5", "Documentary");
     }
 
-    // 季数正则
     private static final Pattern SEASON_PATTERN = Pattern.compile("(Season|Musim|Saison|Temporada)\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern EPISODE_PATTERN = Pattern.compile("(E|Episode|EP|S\\d+E)\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
-
-    // 本地代理缓存
-    private static final ConcurrentHashMap<String, String> proxyCache = new ConcurrentHashMap<>();
 
     // ====================== Home ======================
 
@@ -63,15 +56,16 @@ public class SiniTV extends BaseSpider {
 
         if (filter) {
             LinkedHashMap<String, List<Filter>> filters = buildFilters();
-            return Result.string(classes, filters);
+            // 使用 Result.get() 构建
+            return Result.get().classes(classes).filters(filters).string();
         }
-        return Result.string(classes);
+        // 使用 Result.get() 构建
+        return Result.get().classes(classes).string();
     }
 
     private LinkedHashMap<String, List<Filter>> buildFilters() {
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
 
-        // 年份筛选
         List<Filter.Value> yearValues = new ArrayList<>();
         yearValues.add(new Filter.Value("All", ""));
         for (int y = 2026; y >= 2000; y--) {
@@ -79,7 +73,6 @@ public class SiniTV extends BaseSpider {
         }
         filters.put("year", Arrays.asList(new Filter("year", "Year", yearValues)));
 
-        // 地区筛选
         List<Filter.Value> areaValues = new ArrayList<>();
         areaValues.add(new Filter.Value("All", ""));
         areaValues.add(new Filter.Value("China", "Tiongkok"));
@@ -110,10 +103,6 @@ public class SiniTV extends BaseSpider {
         List<Vod> vodList = new ArrayList<>();
         Elements items = doc.select("div.public-list-box");
 
-        // 使用多线程并发获取海报
-        List<Thread> threads = new ArrayList<>();
-        List<Vod> syncList = new ArrayList<>();
-
         for (Element item : items) {
             Element link = item.selectFirst("a.public-list-exp");
             if (link == null) continue;
@@ -131,42 +120,18 @@ public class SiniTV extends BaseSpider {
                 }
             }
 
-            // 去除季数用于搜索
             String searchTitle = removeSeason(title);
 
-            // 先创建基础 Vod 对象
-            Vod vod = new Vod(vodId, title, "");
+            String zhTitle = Proxy.getTitle(searchTitle);
+            String finalName = TextUtils.isEmpty(zhTitle) ? title : zhTitle;
+
+            String poster = Proxy.getPoster(searchTitle);
+            if (TextUtils.isEmpty(poster) && !TextUtils.isEmpty(pic)) {
+                poster = pic.startsWith("http") ? pic : "https:" + pic;
+            }
+
+            Vod vod = new Vod(vodId, finalName, poster);
             vodList.add(vod);
-
-            // 多线程获取 TMDB 信息
-            Thread t = new Thread(() -> {
-                try {
-                    String poster = TmdbUtil.getPosterUrl(searchTitle);
-                    if (!TextUtils.isEmpty(poster)) {
-                        // 通过本地代理获取图片
-                        String proxyUrl = Proxy.getUrl() + "?do=getPoster&title=" 
-                                + URLEncoder.encode(searchTitle, "UTF-8");
-                        vod.setVodPic(proxyUrl);
-                    } else if (!TextUtils.isEmpty(pic)) {
-                        String proxyPic = pic.startsWith("http") ? pic : "https:" + pic;
-                        vod.setVodPic(proxyPic);
-                    }
-                } catch (Exception e) {
-                    // 降级使用原始图片
-                    if (!TextUtils.isEmpty(pic)) {
-                        vod.setVodPic(pic.startsWith("http") ? pic : "https:" + pic);
-                    }
-                }
-            });
-            t.start();
-            threads.add(t);
-        }
-
-        // 等待所有线程完成（最多5秒）
-        for (Thread t : threads) {
-            try {
-                t.join(5000);
-            } catch (InterruptedException ignored) {}
         }
 
         int total = vodList.size();
@@ -209,26 +174,23 @@ public class SiniTV extends BaseSpider {
         Vod vod = new Vod();
         vod.setVodId(vodId);
 
-        // 提取标题
         Element titleEl = doc.selectFirst("div.this-desc-title");
         if (titleEl != null) {
             String title = titleEl.text();
             String searchTitle = removeSeason(title);
-            
-            // 通过本地代理获取中文标题
-            String zhTitle = Proxy.getTitle(searchTitle);
+
+            String zhTitle = Proxy.getTitleSync(searchTitle);
             String finalName = TextUtils.isEmpty(zhTitle) ? title : zhTitle;
             vod.setVodName(finalName);
 
-            // 通过本地代理获取海报
-            String proxyPoster = Proxy.getPoster(searchTitle);
-            if (!TextUtils.isEmpty(proxyPoster)) {
-                vod.setVodPic(proxyPoster);
+            String poster = Proxy.getPosterSync(searchTitle);
+            if (!TextUtils.isEmpty(poster)) {
+                vod.setVodPic(poster);
             }
         }
 
-        // 提取海报（如果本地代理没有）
-        if (TextUtils.isEmpty(vod.getVodPic())) {
+        // 提取海报（直接使用 vod.vodPic 字段）
+        if (TextUtils.isEmpty(vod.vodPic)) {
             Element posterEl = doc.selectFirst("div.this-pic-bj img");
             if (posterEl != null) {
                 String poster = posterEl.attr("src");
@@ -238,7 +200,6 @@ public class SiniTV extends BaseSpider {
             }
         }
 
-        // 提取年份、地区、状态
         Element infoEl = doc.selectFirst("div.this-desc-info");
         if (infoEl != null) {
             Elements spans = infoEl.select("span");
@@ -249,21 +210,18 @@ public class SiniTV extends BaseSpider {
             }
         }
 
-        // 提取演员
         Element actorEl = doc.selectFirst("div.this-info");
         if (actorEl != null) {
             String actorText = actorEl.text().replace("Pemeran:", "").trim();
             vod.setVodActor(actorText);
         }
 
-        // 提取简介
         Element descEl = doc.selectFirst("div#height_limit.text");
         if (descEl != null) {
             String desc = descEl.text().replace("Deskripsi:", "").trim();
             vod.setVodContent(desc);
         }
 
-        // 提取标签
         Elements tags = doc.select("div.this-desc-tags span");
         if (!tags.isEmpty()) {
             StringBuilder tagBuilder = new StringBuilder();
@@ -276,7 +234,6 @@ public class SiniTV extends BaseSpider {
             }
         }
 
-        // 提取播放列表
         Elements episodes = doc.select("ul.anthology-list-play li a");
         if (!episodes.isEmpty()) {
             Vod.VodPlayBuilder builder = new Vod.VodPlayBuilder();
@@ -382,13 +339,12 @@ public class SiniTV extends BaseSpider {
                 String pic = item.optString("pic");
 
                 String searchTitle = removeSeason(vodName);
-                
-                // 通过本地代理获取
+
                 String zhTitle = Proxy.getTitle(searchTitle);
                 String finalName = TextUtils.isEmpty(zhTitle) ? vodName : zhTitle;
 
-                String proxyPoster = Proxy.getPoster(searchTitle);
-                String finalPic = TextUtils.isEmpty(proxyPoster) ? pic : proxyPoster;
+                String poster = Proxy.getPoster(searchTitle);
+                String finalPic = TextUtils.isEmpty(poster) ? pic : poster;
 
                 Vod vod = new Vod(vodId, finalName, finalPic);
                 vodList.add(vod);
