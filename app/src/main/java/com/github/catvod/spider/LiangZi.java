@@ -8,7 +8,6 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
@@ -130,17 +129,22 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（已按你的要求修改） ======================
+    // ====================== 搜索（官方双方法支持） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
+        return searchContent(key, quick, "1");
+    }
+
+    @Override
+    public String searchContent(String key, boolean quick, String pg) throws Exception {
         if (TextUtils.isEmpty(key)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
 
-        // ==================== kwyili 接口（你指定的搜索链接） ====================
+        // 使用你指定的 kwyili 接口
         String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
 
-        String json = OkHttp.string(searchUrl, new HashMap<>());   // 无需额外请求头
+        String json = OkHttp.string(searchUrl, new HashMap<>()); // 无需额外请求头
         if (TextUtils.isEmpty(json)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
@@ -151,15 +155,14 @@ public class LiangZi extends Spider {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject item = arr.getJSONObject(i);
                 String title = item.optString("title");
-                String image = item.optString("image");
                 String href = item.optString("href");
 
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                // 提取 id（xl02.com.de/guoju/24563.htm 中的数字）
+                // 提取数字 id
                 String id = href.replaceAll("[^0-9]", "");
 
-                // ==================== 图片替换成红牛接口 ====================
+                // 图片用红牛接口 + 本地代理
                 String proxyPic = Proxy.getPoster(id);
 
                 Vod vod = new Vod();
@@ -170,8 +173,8 @@ public class LiangZi extends Spider {
                 list.add(vod);
             }
         } catch (Exception ignored) {
-            // 降级处理
         }
+
         return Result.get().vod(list).string();
     }
 
