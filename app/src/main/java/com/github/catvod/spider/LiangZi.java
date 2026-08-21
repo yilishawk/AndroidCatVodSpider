@@ -111,12 +111,16 @@ public class LiangZi extends Spider {
         String year = extend != null ? extend.getOrDefault("year", "").trim() : "";
 
         String slug = TextUtils.isEmpty(typeSlug) ? "all" : typeSlug;
-        StringBuilder url = new StringBuilder(HOST + "s/" + slug + "?type=" + tid);
-        if (page > 1) url.append("&page=").append(page);
-        if (!TextUtils.isEmpty(area)) url.append("&area=").append(URLEncoder.encode(area, "UTF-8"));
-        if (!TextUtils.isEmpty(year)) url.append("&year=").append(year);
+        String url = String.format("%ss/all/%d?type=%s", HOST, page, tid);
 
-        String html = OkHttp.string(url.toString(), baseHeaders);
+        if (!TextUtils.isEmpty(area)) {
+            url += "&area=" + URLEncoder.encode(area, "UTF-8");
+        }
+        if (!TextUtils.isEmpty(year)) {
+            url += "&year=" + year;
+        }
+
+        String html = OkHttp.string(url, baseHeaders);
         if (TextUtils.isEmpty(html)) {
             return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
         }
@@ -126,73 +130,47 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（已修改） ======================
+    // ====================== 搜索（已按你的要求修改） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         if (TextUtils.isEmpty(key)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
 
-        // 使用红牛资源的官方 suggest 接口（标题完全匹配，图片正确）
-        String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(key, "UTF-8");
+        // ==================== kwyili 接口（你指定的搜索链接） ====================
+        String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
 
-        String json = OkHttp.string(searchUrl, baseHeaders);
+        String json = OkHttp.string(searchUrl, new HashMap<>());   // 无需额外请求头
         if (TextUtils.isEmpty(json)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
 
         List<Vod> list = new ArrayList<>();
         try {
-            JSONObject obj = new JSONObject(json);
-            JSONArray arr = obj.optJSONArray("list");
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject item = arr.getJSONObject(i);
+                String title = item.optString("title");
+                String image = item.optString("image");
+                String href = item.optString("href");
 
-            if (arr != null) {
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject item = arr.getJSONObject(i);
-                    String title = item.optString("name");
-                    String pic = item.optString("pic");
-                    String href = item.optString("url");
-                    String id = item.optString("id");
+                if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                    if (TextUtils.isEmpty(title) || TextUtils.isEmpty(id) || TextUtils.isEmpty(href)) continue;
+                // 提取 id（xl02.com.de/guoju/24563.htm 中的数字）
+                String id = href.replaceAll("[^0-9]", "");
 
-                    // 处理相对路径
-                    if (href.startsWith("/")) {
-                        href = "https://hongniuzy.tv" + href;
-                    }
+                // ==================== 图片替换成红牛接口 ====================
+                String proxyPic = Proxy.getPoster(id);
 
-                    Vod vod = new Vod();
-                    vod.setVodId(id);
-                    vod.setVodName(title);
-                    vod.setVodPic(pic);
-                    vod.setVodRemarks("搜索");
-                    list.add(vod);
-                }
+                Vod vod = new Vod();
+                vod.setVodId(id);
+                vod.setVodName(title);
+                vod.setVodPic(proxyPic);
+                vod.setVodRemarks("搜索");
+                list.add(vod);
             }
-        } catch (Exception e) {
-            // 降级使用 kwyili API（图片不变）
-            String fallbackUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
-            String fallbackJson = OkHttp.string(fallbackUrl, new HashMap<>()); // 复用原有降级逻辑
-
-            try {
-                JSONArray arr = new JSONArray(fallbackJson);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject item = arr.getJSONObject(i);
-                    String title = item.optString("title");
-                    String image = item.optString("image");
-                    String href = item.optString("href");
-                    if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
-
-                    String vodId = href.startsWith("/") ? href : "/" + href;
-
-                    Vod vod = new Vod();
-                    vod.setVodId(vodId);
-                    vod.setVodName(title);
-                    vod.setVodPic(image);
-                    vod.setVodRemarks("搜索");
-                    list.add(vod);
-                }
-            } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // 降级处理
         }
         return Result.get().vod(list).string();
     }
@@ -203,12 +181,7 @@ public class LiangZi extends Spider {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
         String vodId = ids.get(0);
 
-        String url;
-        if (vodId.startsWith("http://") || vodId.startsWith("https://")) {
-            url = vodId;
-        } else {
-            url = HOST + vodId.replaceFirst("^/", "");
-        }
+        String url = vodId.startsWith("http") ? vodId : HOST + vodId.replaceFirst("^/", "");
 
         Map<String, String> headers = new HashMap<>(baseHeaders);
         if (url.contains("xl02.com.de")) {
