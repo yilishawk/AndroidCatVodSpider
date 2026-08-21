@@ -59,7 +59,8 @@ public class LiangZi extends Spider {
 
         List<Filter.Value> typeValues = new ArrayList<>();
         typeValues.add(new Filter.Value("全部", ""));
-        String[][] types = {{"动作", "dongzuo"}, {"爱情", "aiqing"}, {"喜剧", "xiju"}, {"科幻", "kehuan"},
+        String[][] types = {
+                {"动作", "dongzuo"}, {"爱情", "aiqing"}, {"喜剧", "xiju"}, {"科幻", "kehuan"},
                 {"恐怖", "kongbu"}, {"战争", "zhanzheng"}, {"武侠", "wuxia"}, {"魔幻", "mohuan"},
                 {"剧情", "juqing"}, {"动画", "donghua"}, {"惊悚", "jingsong"}, {"3D", "3d"},
                 {"灾难", "zainan"}, {"悬疑", "xuanyi"}, {"警匪", "jingfei"}, {"文艺", "wenyi"},
@@ -69,7 +70,8 @@ public class LiangZi extends Spider {
                 {"美剧", "meiju"}, {"韩剧", "hanju"}, {"国产电视剧", "guoju"}, {"日剧", "riju"},
                 {"英剧", "yingju"}, {"德剧", "deju"}, {"俄剧", "eju"}, {"巴剧", "baju"},
                 {"加剧", "jiaju"}, {"西剧", "spanish"}, {"意大利剧", "yidaliju"}, {"泰剧", "taiju"},
-                {"港台剧", "gangtaiju"}, {"法剧", "faju"}, {"澳剧", "aoju"}, {"短剧", "duanju"}};
+                {"港台剧", "gangtaiju"}, {"法剧", "faju"}, {"澳剧", "aoju"}, {"短剧", "duanju"}
+        };
         for (String[] t : types) {
             typeValues.add(new Filter.Value(t[0], t[1]));
         }
@@ -129,7 +131,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（官方双方法支持） ======================
+    // ====================== 搜索（已修复图片本地代理） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -141,7 +143,7 @@ public class LiangZi extends Spider {
             return Result.get().vod(new ArrayList<>()).string();
         }
 
-        // 使用你指定的 kwyili 接口
+        // 使用 kwyili 接口
         String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
 
         String json = OkHttp.string(searchUrl, new HashMap<>()); // 无需额外请求头
@@ -159,16 +161,23 @@ public class LiangZi extends Spider {
 
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                // 提取数字 id
-                String id = href.replaceAll("[^0-9]", "");
+                // ==================== 关键：强制使用本地代理图片 ====================
+                String proxyPic = "";
+                try {
+                    // 优先使用同步方法
+                    proxyPic = Proxy.getPosterSync(title);
+                } catch (Exception ignored) {
+                }
 
-                // 图片用红牛接口 + 本地代理
-                String proxyPic = Proxy.getPoster(id);
+                // 如果同步方法返回空，则手动拼接本地代理地址
+                if (TextUtils.isEmpty(proxyPic)) {
+                    proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
+                }
 
                 Vod vod = new Vod();
-                vod.setVodId(id);
+                vod.setVodId(href);                 // 保留原始路径
                 vod.setVodName(title);
-                vod.setVodPic(proxyPic);
+                vod.setVodPic(proxyPic);            // 本地代理图片
                 vod.setVodRemarks("搜索");
                 list.add(vod);
             }
@@ -206,6 +215,19 @@ public class LiangZi extends Spider {
         if (cover != null) {
             pic = cover.attr("src");
             if (TextUtils.isEmpty(pic)) pic = cover.attr("data-src");
+        }
+
+        // 详情页海报也走本地代理
+        if (!TextUtils.isEmpty(name)) {
+            try {
+                String proxyPic = Proxy.getPosterSync(name);
+                if (!TextUtils.isEmpty(proxyPic)) {
+                    pic = proxyPic;
+                } else {
+                    pic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
+                }
+            } catch (Exception ignored) {
+            }
         }
 
         String content = "暂无简介";
