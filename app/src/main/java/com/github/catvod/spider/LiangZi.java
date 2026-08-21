@@ -127,7 +127,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（图片已修复本地代理） ======================
+    // ====================== 搜索（图片已走本地代理） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -204,7 +204,7 @@ public class LiangZi extends Spider {
             if (TextUtils.isEmpty(pic)) pic = cover.attr("data-src");
         }
 
-        // 详情页海报也走本地代理
+        // 详情页海报走本地代理
         if (!TextUtils.isEmpty(name)) {
             try {
                 String proxyPic = Proxy.getPosterSync(name);
@@ -306,7 +306,6 @@ public class LiangZi extends Spider {
                 return Result.get().url(playUrl).parse().string();
             }
 
-            // 解析所有线路
             JSONObject data = new JSONObject(resp);
             if (data.optInt("code") == 0 && data.has("data")) {
                 JSONObject resInfo = data.getJSONObject("data");
@@ -317,33 +316,28 @@ public class LiangZi extends Spider {
                 if (!TextUtils.isEmpty(resInfo.optString("url3"))) {
                     urls.add(resInfo.optString("url3"));
                 }
-
                 // 2. m3u8_2
                 if (!TextUtils.isEmpty(resInfo.optString("m3u8_2"))) {
                     urls.add(resInfo.optString("m3u8_2"));
                 }
-
                 // 3. tos
                 if (!TextUtils.isEmpty(resInfo.optString("tos"))) {
                     urls.add(resInfo.optString("tos"));
                 }
-
                 // 4. m3u8（maliva）
                 if (!TextUtils.isEmpty(resInfo.optString("m3u8"))) {
                     urls.add(resInfo.optString("m3u8"));
                 }
 
                 if (!urls.isEmpty()) {
-                    // 合并成一个线路名
-                    String playUrlStr = urls.get(0);
+                    String playUrlStr = urls.get(0);           // 第一个就是播放地址
                     String playFrom = "量子资源(" + urls.size() + "线路)";
-                    String playUrl = playUrlStr + "#量子资源";
 
                     Map<String, String> header = new HashMap<>();
                     header.put("User-Agent", COMMON_UA);
 
                     return Result.get()
-                            .url(playUrl)
+                            .url(playUrlStr)
                             .header(header)
                             .string();
                 }
@@ -354,7 +348,7 @@ public class LiangZi extends Spider {
         return Result.get().url(id).parse().string();
     }
 
-    // ====================== 其他方法保持不变 ======================
+    // ====================== 分类列表解析 ======================
     private List<Vod> parseVideosFromHtml(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
