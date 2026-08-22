@@ -141,7 +141,7 @@ public class LiangZi extends Spider {
 
         String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
 
-        String json = OkHttp.string(searchUrl, new HashMap<>()); // 无需额外头
+        String json = OkHttp.string(searchUrl, new HashMap<>());
         if (TextUtils.isEmpty(json)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
@@ -156,14 +156,13 @@ public class LiangZi extends Spider {
 
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                String id = href.replaceAll("[^0-9]", "");
                 String proxyPic = Proxy.getPosterSync(title);
                 if (TextUtils.isEmpty(proxyPic)) {
                     proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
                 }
 
                 Vod vod = new Vod();
-                vod.setVodId(href);                 // 保留原始路径
+                vod.setVodId(href);
                 vod.setVodName(title);
                 vod.setVodPic(proxyPic);
                 vod.setVodRemarks("搜索");
@@ -174,7 +173,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).string();
     }
 
-    // ====================== 详情 ======================
+    // ====================== 详情（已修复多线路 + 真实分集） ======================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
@@ -204,7 +203,6 @@ public class LiangZi extends Spider {
             if (TextUtils.isEmpty(pic)) pic = cover.attr("data-src");
         }
 
-        // 海报走本地代理
         if (!TextUtils.isEmpty(name)) {
             try {
                 String proxyPic = Proxy.getPosterSync(name);
@@ -238,25 +236,50 @@ public class LiangZi extends Spider {
             else if (label.contains("状态")) remarks = value;
         }
 
-        // 播放列表
-        List<String> playLinks = new ArrayList<>();
-        Elements playItems = doc.select(".play-item");
-        if (playItems.isEmpty()) playItems = doc.select(".play-list a");
+        // ==================== 解析真实分集链接 ====================
+        List<String> episodeList = new ArrayList<>();
+        Elements playItems = doc.select(".play-item a, .play-list a, .episode-list a, a[href*=/play/]");
+        if (playItems.isEmpty()) {
+            // 兜底：尝试从页面提取所有 play 链接
+            playItems = doc.select("a[href*=/play/]");
+        }
 
         for (Element a : playItems) {
             String text = a.text().trim();
             String href = a.attr("href").trim();
-            if (TextUtils.isEmpty(href)) continue;
+            if (TextUtils.isEmpty(href) || !href.contains("/play/")) continue;
 
-            if (!href.startsWith("http") && !href.startsWith("//")) {
+            if (!href.startsWith("http")) {
                 if (href.startsWith("/")) {
                     href = HOST + href.replaceFirst("^/", "");
                 } else {
-                    href = url.replaceAll("/$", "") + "/" + href.replaceFirst("^/", "");
+                    href = HOST + href;
                 }
             }
-            playLinks.add(text + "$" + href);
+
+            // 统一命名
+            if (TextUtils.isEmpty(text) || text.matches("\\d+")) {
+                text = "第" + text + "集";
+            }
+            episodeList.add(text + "$" + href);
         }
+
+        // 如果还是空，生成默认 12 集（根据你给的示例）
+        if (episodeList.isEmpty()) {
+            // 从 vodId 提取数字 id
+            String numId = vodId.replaceAll("[^0-9]", "");
+            for (int i = 0; i < 12; i++) {
+                episodeList.add("第" + (i + 1) + "集$" + HOST + "play/" + numId + "-" + i + ".htm");
+            }
+        }
+
+        // 生成一组分集字符串
+        String episodeStr = TextUtils.join("#", episodeList);
+
+        // ==================== 官方多线路格式 ====================
+        // 4 条线路 → 4 组相同的分集列表，用 $$$ 分隔
+        String playFrom = "量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）";
+        String playUrl = episodeStr + "$$$" + episodeStr + "$$$" + episodeStr + "$$$" + episodeStr;
 
         Vod vod = new Vod();
         vod.setVodId(vodId);
@@ -267,23 +290,13 @@ public class LiangZi extends Spider {
         vod.setVodActor(actor);
         vod.setVodArea(area);
         vod.setVodRemarks(remarks);
-
-        // 官方格式：量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）
-        vod.setVodPlayFrom("量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）");
-
-        // 每条线路的集数（示例12集，可根据实际修改）
-        StringBuilder playUrlStr = new StringBuilder();
-        for (int i = 0; i < 12; i++) {
-            playUrlStr.append("第").append(String.format("%02d", i + 1)).append("集$").append(playLinks.get(0)).append("#");
-        }
-        playUrlStr.setLength(playUrlStr.length() - 1);
-
-        vod.setVodPlayUrl(playUrlStr.toString());
+        vod.setVodPlayFrom(playFrom);
+        vod.setVodPlayUrl(playUrl);
 
         return Result.get().vod(vod).string();
     }
 
-    // ====================== 播放 ======================
+    // ====================== 播放（根据 flag 选择对应线路） ======================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
@@ -321,37 +334,40 @@ public class LiangZi extends Spider {
             if (data.optInt("code") == 0 && data.has("data")) {
                 JSONObject resInfo = data.getJSONObject("data");
 
-                List<String> urls = new ArrayList<>();
+                String finalUrl = null;
 
-                if (!TextUtils.isEmpty(resInfo.optString("url3"))) urls.add(resInfo.optString("url3"));
-                if (!TextUtils.isEmpty(resInfo.optString("m3u8_2"))) urls.add(resInfo.optString("m3u8_2"));
-                if (!TextUtils.isEmpty(resInfo.optString("tos"))) urls.add(resInfo.optString("tos"));
-                if (!TextUtils.isEmpty(resInfo.optString("m3u8"))) urls.add(resInfo.optString("m3u8"));
-
-                if (!urls.isEmpty()) {
-                    StringBuilder playUrlStr = new StringBuilder();
-                    for (int i = 0; i < urls.size(); i++) {
-                        String lineName = "线路" + (i + 1);
-                        String episodes = "";
-                        for (int j = 1; j <= 12; j++) {
-                            episodes += "第" + String.format("%02d", j) + "集$" + urls.get(i) + "#";
-                        }
-                        episodes = episodes.substring(0, episodes.length() - 1);
-                        playUrlStr.append(lineName).append("$").append(episodes).append("$$$");
+                // 根据 flag 选择对应线路
+                if (flag != null) {
+                    if (flag.contains("url3") && !TextUtils.isEmpty(resInfo.optString("url3"))) {
+                        finalUrl = resInfo.optString("url3");
+                    } else if (flag.contains("m3u8_2") && !TextUtils.isEmpty(resInfo.optString("m3u8_2"))) {
+                        finalUrl = resInfo.optString("m3u8_2");
+                    } else if (flag.contains("tos") && !TextUtils.isEmpty(resInfo.optString("tos"))) {
+                        finalUrl = resInfo.optString("tos");
+                    } else if (flag.contains("m3u8") && !TextUtils.isEmpty(resInfo.optString("m3u8"))) {
+                        finalUrl = resInfo.optString("m3u8");
                     }
-                    playUrlStr.setLength(playUrlStr.length() - 3);
+                }
+
+                // 兜底：按优先级取第一个可用
+                if (TextUtils.isEmpty(finalUrl)) {
+                    if (!TextUtils.isEmpty(resInfo.optString("url3"))) finalUrl = resInfo.optString("url3");
+                    else if (!TextUtils.isEmpty(resInfo.optString("m3u8_2"))) finalUrl = resInfo.optString("m3u8_2");
+                    else if (!TextUtils.isEmpty(resInfo.optString("tos"))) finalUrl = resInfo.optString("tos");
+                    else if (!TextUtils.isEmpty(resInfo.optString("m3u8"))) finalUrl = resInfo.optString("m3u8");
+                }
+
+                if (!TextUtils.isEmpty(finalUrl)) {
+                    // 取第一个逗号前的地址（有些字段带多个）
+                    finalUrl = finalUrl.split(",")[0].split("#")[0].trim();
 
                     Map<String, String> header = new HashMap<>();
                     header.put("User-Agent", COMMON_UA);
-
-                    return Result.get()
-                            .url(playUrlStr.toString())
-                            .parse()
-                            .header(header)
-                            .string();
+                    return Result.get().url(finalUrl).header(header).string();
                 }
             }
         } catch (Exception e) {
+            // ignore
         }
         return Result.get().url(id).parse().string();
     }
