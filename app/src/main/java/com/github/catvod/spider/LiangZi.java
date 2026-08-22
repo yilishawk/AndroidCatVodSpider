@@ -34,6 +34,9 @@ public class LiangZi extends Spider {
     private static final String COMMON_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
     private static final String COOKIE = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
+    // 最多支持 url3 里拆分出的线路数量
+    private static final int MAX_URL3_LINES = 5;
+
     private Map<String, String> baseHeaders;
 
     @Override
@@ -101,7 +104,6 @@ public class LiangZi extends Spider {
         String area = extend != null ? extend.getOrDefault("area", "").trim() : "";
         String year = extend != null ? extend.getOrDefault("year", "").trim() : "";
 
-        String slug = TextUtils.isEmpty(typeSlug) ? "all" : typeSlug;
         String url = String.format("%ss/all/%d?type=%s", HOST, page, tid);
         if (!TextUtils.isEmpty(area)) url += "&area=" + URLEncoder.encode(area, "UTF-8");
         if (!TextUtils.isEmpty(year)) url += "&year=" + year;
@@ -116,7 +118,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（仅这里使用 Proxy 代理图片） ======================
+    // ====================== 搜索（仅这里使用 Proxy） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -139,7 +141,6 @@ public class LiangZi extends Spider {
                 String href = item.optString("href");
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                // 只在搜索时使用 Proxy 代理图片
                 String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
 
                 Vod vod = new Vod();
@@ -153,7 +154,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).string();
     }
 
-    // ====================== 详情（不使用 Proxy） ======================
+    // ====================== 详情（方案B：预生成 url3-1 ~ url3-5） ======================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
@@ -218,26 +219,34 @@ public class LiangZi extends Spider {
 
         String episodeStr = TextUtils.join("#", episodes);
 
-        // 官方多线路格式
-        String playFrom = "量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）";
-        String playUrl = episodeStr + "$$$" + episodeStr + "$$$" + episodeStr + "$$$" + episodeStr;
+        // ========== 方案B：预生成 url3-1 ~ url3-5 ==========
+        StringBuilder playFrom = new StringBuilder();
+        StringBuilder playUrl = new StringBuilder();
+        for (int i = 1; i <= MAX_URL3_LINES; i++) {
+            if (i > 1) {
+                playFrom.append("$$$");
+                playUrl.append("$$$");
+            }
+            playFrom.append("url3-").append(i);
+            playUrl.append(episodeStr);
+        }
 
         Vod vod = new Vod();
         vod.setVodId(vodId);
         vod.setVodName(name);
-        vod.setVodPic(pic);                 // 详情页用原始图片，不走 Proxy
+        vod.setVodPic(pic);
         vod.setVodContent(content);
         vod.setVodDirector(director);
         vod.setVodActor(actor);
         vod.setVodArea(area);
         vod.setVodRemarks(remarks);
-        vod.setVodPlayFrom(playFrom);
-        vod.setVodPlayUrl(playUrl);
+        vod.setVodPlayFrom(playFrom.toString());
+        vod.setVodPlayUrl(playUrl.toString());
 
         return Result.get().vod(vod).string();
     }
 
-    // ====================== 播放 ======================
+    // ====================== 播放（根据 flag 取 url3 里第 N 个链接） ======================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
@@ -265,27 +274,41 @@ public class LiangZi extends Spider {
             JSONObject data = new JSONObject(resp);
             if (data.optInt("code") == 0 && data.has("data")) {
                 JSONObject res = data.getJSONObject("data");
+                String url3 = res.optString("url3");
 
-                String finalUrl = null;
-                if (flag != null) {
-                    if (flag.contains("url3")) finalUrl = res.optString("url3");
-                    else if (flag.contains("m3u8_2")) finalUrl = res.optString("m3u8_2");
-                    else if (flag.contains("tos")) finalUrl = res.optString("tos");
-                    else if (flag.contains("m3u8")) finalUrl = res.optString("m3u8");
-                }
+                if (!TextUtils.isEmpty(url3)) {
+                    // 拆分 url3 里的多个链接
+                    String[] urls = url3.split(",");
+                    List<String> validUrls = new ArrayList<>();
+                    for (String u : urls) {
+                        u = u.trim();
+                        if (!TextUtils.isEmpty(u) && u.startsWith("http")) {
+                            validUrls.add(u);
+                        }
+                    }
 
-                if (TextUtils.isEmpty(finalUrl)) {
-                    if (!TextUtils.isEmpty(res.optString("url3"))) finalUrl = res.optString("url3");
-                    else if (!TextUtils.isEmpty(res.optString("m3u8_2"))) finalUrl = res.optString("m3u8_2");
-                    else if (!TextUtils.isEmpty(res.optString("tos"))) finalUrl = res.optString("tos");
-                    else if (!TextUtils.isEmpty(res.optString("m3u8"))) finalUrl = res.optString("m3u8");
-                }
+                    if (!validUrls.isEmpty()) {
+                        int index = 0; // 默认取第一个
 
-                if (!TextUtils.isEmpty(finalUrl)) {
-                    finalUrl = finalUrl.split(",")[0].split("#")[0].trim();
-                    Map<String, String> header = new HashMap<>();
-                    header.put("User-Agent", COMMON_UA);
-                    return Result.get().url(finalUrl).header(header).string();
+                        // 根据 flag 决定取第几个（url3-1 → 0, url3-2 → 1 ...）
+                        if (flag != null && flag.startsWith("url3-")) {
+                            try {
+                                int num = Integer.parseInt(flag.replace("url3-", "").trim());
+                                index = Math.max(0, num - 1);
+                            } catch (Exception ignored) {}
+                        }
+
+                        // 超出范围则取最后一个可用
+                        if (index >= validUrls.size()) {
+                            index = validUrls.size() - 1;
+                        }
+
+                        String finalUrl = validUrls.get(index);
+
+                        Map<String, String> header = new HashMap<>();
+                        header.put("User-Agent", COMMON_UA);
+                        return Result.get().url(finalUrl).header(header).string();
+                    }
                 }
             }
         } catch (Exception ignored) {}
