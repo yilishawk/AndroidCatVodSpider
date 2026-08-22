@@ -114,12 +114,8 @@ public class LiangZi extends Spider {
         String slug = TextUtils.isEmpty(typeSlug) ? "all" : typeSlug;
         String url = String.format("%ss/all/%d?type=%s", HOST, page, tid);
 
-        if (!TextUtils.isEmpty(area)) {
-            url += "&area=" + URLEncoder.encode(area, "UTF-8");
-        }
-        if (!TextUtils.isEmpty(year)) {
-            url += "&year=" + year;
-        }
+        if (!TextUtils.isEmpty(area)) url += "&area=" + URLEncoder.encode(area, "UTF-8");
+        if (!TextUtils.isEmpty(year)) url += "&year=" + year;
 
         String html = OkHttp.string(url, baseHeaders);
         if (TextUtils.isEmpty(html)) {
@@ -131,7 +127,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（已修复图片本地代理） ======================
+    // ====================== 搜索 ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -143,10 +139,9 @@ public class LiangZi extends Spider {
             return Result.get().vod(new ArrayList<>()).string();
         }
 
-        // 使用 kwyili 接口
         String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
 
-        String json = OkHttp.string(searchUrl, new HashMap<>()); // 无需额外请求头
+        String json = OkHttp.string(searchUrl, new HashMap<>()); // 无需额外头
         if (TextUtils.isEmpty(json)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
@@ -161,15 +156,8 @@ public class LiangZi extends Spider {
 
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                // ==================== 关键：强制使用本地代理图片 ====================
-                String proxyPic = "";
-                try {
-                    // 优先使用同步方法
-                    proxyPic = Proxy.getPosterSync(title);
-                } catch (Exception ignored) {
-                }
-
-                // 如果同步方法返回空，则手动拼接本地代理地址
+                String id = href.replaceAll("[^0-9]", "");
+                String proxyPic = Proxy.getPosterSync(title);
                 if (TextUtils.isEmpty(proxyPic)) {
                     proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
                 }
@@ -177,13 +165,12 @@ public class LiangZi extends Spider {
                 Vod vod = new Vod();
                 vod.setVodId(href);                 // 保留原始路径
                 vod.setVodName(title);
-                vod.setVodPic(proxyPic);            // 本地代理图片
+                vod.setVodPic(proxyPic);
                 vod.setVodRemarks("搜索");
                 list.add(vod);
             }
         } catch (Exception ignored) {
         }
-
         return Result.get().vod(list).string();
     }
 
@@ -217,15 +204,12 @@ public class LiangZi extends Spider {
             if (TextUtils.isEmpty(pic)) pic = cover.attr("data-src");
         }
 
-        // 详情页海报也走本地代理
+        // 海报走本地代理
         if (!TextUtils.isEmpty(name)) {
             try {
                 String proxyPic = Proxy.getPosterSync(name);
-                if (!TextUtils.isEmpty(proxyPic)) {
-                    pic = proxyPic;
-                } else {
-                    pic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
-                }
+                if (!TextUtils.isEmpty(proxyPic)) pic = proxyPic;
+                else pic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
             } catch (Exception ignored) {
             }
         }
@@ -254,6 +238,7 @@ public class LiangZi extends Spider {
             else if (label.contains("状态")) remarks = value;
         }
 
+        // 播放列表
         List<String> playLinks = new ArrayList<>();
         Elements playItems = doc.select(".play-item");
         if (playItems.isEmpty()) playItems = doc.select(".play-list a");
@@ -282,8 +267,18 @@ public class LiangZi extends Spider {
         vod.setVodActor(actor);
         vod.setVodArea(area);
         vod.setVodRemarks(remarks);
-        vod.setVodPlayFrom("量子资源");
-        vod.setVodPlayUrl(TextUtils.join("#", playLinks));
+
+        // 官方格式：量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）
+        vod.setVodPlayFrom("量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）");
+
+        // 每条线路的集数（示例12集，可根据实际修改）
+        StringBuilder playUrlStr = new StringBuilder();
+        for (int i = 0; i < 12; i++) {
+            playUrlStr.append("第").append(String.format("%02d", i + 1)).append("集$").append(playLinks.get(0)).append("#");
+        }
+        playUrlStr.setLength(playUrlStr.length() - 1);
+
+        vod.setVodPlayUrl(playUrlStr.toString());
 
         return Result.get().vod(vod).string();
     }
@@ -318,29 +313,47 @@ public class LiangZi extends Spider {
             apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
 
             String resp = OkHttp.string(apiUrl, apiHeaders);
-            if (!TextUtils.isEmpty(resp)) {
-                Matcher jsonMatcher = Pattern.compile("(\\{.*\\})").matcher(resp);
-                if (jsonMatcher.find()) {
-                    JSONObject data = new JSONObject(jsonMatcher.group(1));
-                    if (data.optInt("code") == 0 && data.has("data")) {
-                        JSONObject resInfo = data.getJSONObject("data");
-                        String rawUrl = resInfo.optString("url3");
-                        if (TextUtils.isEmpty(rawUrl)) rawUrl = resInfo.optString("m3u8_2");
-                        if (TextUtils.isEmpty(rawUrl)) rawUrl = resInfo.optString("m3u8");
+            if (TextUtils.isEmpty(resp)) {
+                return Result.get().url(playUrl).parse().string();
+            }
 
-                        if (!TextUtils.isEmpty(rawUrl)) {
-                            String finalUrl = rawUrl.split(",")[0].split("#")[0].trim();
-                            Map<String, String> header = new HashMap<>();
-                            header.put("User-Agent", COMMON_UA);
-                            return Result.get().url(finalUrl).header(header).string();
+            JSONObject data = new JSONObject(resp);
+            if (data.optInt("code") == 0 && data.has("data")) {
+                JSONObject resInfo = data.getJSONObject("data");
+
+                List<String> urls = new ArrayList<>();
+
+                if (!TextUtils.isEmpty(resInfo.optString("url3"))) urls.add(resInfo.optString("url3"));
+                if (!TextUtils.isEmpty(resInfo.optString("m3u8_2"))) urls.add(resInfo.optString("m3u8_2"));
+                if (!TextUtils.isEmpty(resInfo.optString("tos"))) urls.add(resInfo.optString("tos"));
+                if (!TextUtils.isEmpty(resInfo.optString("m3u8"))) urls.add(resInfo.optString("m3u8"));
+
+                if (!urls.isEmpty()) {
+                    StringBuilder playUrlStr = new StringBuilder();
+                    for (int i = 0; i < urls.size(); i++) {
+                        String lineName = "线路" + (i + 1);
+                        String episodes = "";
+                        for (int j = 1; j <= 12; j++) {
+                            episodes += "第" + String.format("%02d", j) + "集$" + urls.get(i) + "#";
                         }
+                        episodes = episodes.substring(0, episodes.length() - 1);
+                        playUrlStr.append(lineName).append("$").append(episodes).append("$$$");
                     }
+                    playUrlStr.setLength(playUrlStr.length() - 3);
+
+                    Map<String, String> header = new HashMap<>();
+                    header.put("User-Agent", COMMON_UA);
+
+                    return Result.get()
+                            .url(playUrlStr.toString())
+                            .parse()
+                            .header(header)
+                            .string();
                 }
             }
-            return Result.get().url(playUrl).parse().string();
         } catch (Exception e) {
-            return Result.get().url(id).parse().string();
         }
+        return Result.get().url(id).parse().string();
     }
 
     // ====================== 分类列表解析 ======================
