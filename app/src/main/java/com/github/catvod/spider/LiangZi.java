@@ -40,13 +40,12 @@ public class LiangZi extends Spider {
     public void init(Context context, String extend) throws Exception {
         baseHeaders = new HashMap<>();
         baseHeaders.put("User-Agent", COMMON_UA);
-        baseHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        baseHeaders.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
         baseHeaders.put("Accept-Language", "zh-CN,zh;q=0.9");
         baseHeaders.put("Referer", HOST);
         baseHeaders.put("Cookie", COOKIE);
     }
 
-    // ====================== 首页分类 ======================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -72,48 +71,38 @@ public class LiangZi extends Spider {
                 {"加剧", "jiaju"}, {"西剧", "spanish"}, {"意大利剧", "yidaliju"}, {"泰剧", "taiju"},
                 {"港台剧", "gangtaiju"}, {"法剧", "faju"}, {"澳剧", "aoju"}, {"短剧", "duanju"}
         };
-        for (String[] t : types) {
-            typeValues.add(new Filter.Value(t[0], t[1]));
-        }
+        for (String[] t : types) typeValues.add(new Filter.Value(t[0], t[1]));
 
         List<Filter.Value> areaValues = new ArrayList<>();
         areaValues.add(new Filter.Value("全部", ""));
         String[] areas = {"中国大陆", "中国香港", "中国台湾", "美国", "英国", "日本", "韩国",
                 "法国", "印度", "德国", "西班牙", "意大利", "澳大利亚", "加拿大", "俄罗斯"};
-        for (String a : areas) {
-            areaValues.add(new Filter.Value(a, a));
-        }
+        for (String a : areas) areaValues.add(new Filter.Value(a, a));
 
         List<Filter.Value> yearValues = new ArrayList<>();
         yearValues.add(new Filter.Value("全部", ""));
-        for (int y = 2026; y >= 2002; y--) {
-            yearValues.add(new Filter.Value(String.valueOf(y), String.valueOf(y)));
-        }
+        for (int y = 2026; y >= 2002; y--) yearValues.add(new Filter.Value(String.valueOf(y), String.valueOf(y)));
 
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         List<Filter> filterList = new ArrayList<>();
         filterList.add(new Filter("type_slug", "影视类型", typeValues));
         filterList.add(new Filter("area", "制片地区", areaValues));
         filterList.add(new Filter("year", "上映时间", yearValues));
-
         filters.put("0", filterList);
         filters.put("1", filterList);
 
         return Result.get().classes(classes).filters(filters).string();
     }
 
-    // ====================== 分类列表 ======================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = TextUtils.isEmpty(pg) ? 1 : Integer.parseInt(pg);
-
         String typeSlug = extend != null ? extend.getOrDefault("type_slug", "").trim() : "";
         String area = extend != null ? extend.getOrDefault("area", "").trim() : "";
         String year = extend != null ? extend.getOrDefault("year", "").trim() : "";
 
         String slug = TextUtils.isEmpty(typeSlug) ? "all" : typeSlug;
         String url = String.format("%ss/all/%d?type=%s", HOST, page, tid);
-
         if (!TextUtils.isEmpty(area)) url += "&area=" + URLEncoder.encode(area, "UTF-8");
         if (!TextUtils.isEmpty(year)) url += "&year=" + year;
 
@@ -127,7 +116,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索 ======================
+    // ====================== 搜索（仅这里使用 Proxy 代理图片） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -135,16 +124,11 @@ public class LiangZi extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick, String pg) throws Exception {
-        if (TextUtils.isEmpty(key)) {
-            return Result.get().vod(new ArrayList<>()).string();
-        }
+        if (TextUtils.isEmpty(key)) return Result.get().vod(new ArrayList<>()).string();
 
         String searchUrl = "https://kwyili.dpdns.org/bdys.php?q=" + URLEncoder.encode(key, "UTF-8");
-
         String json = OkHttp.string(searchUrl, new HashMap<>());
-        if (TextUtils.isEmpty(json)) {
-            return Result.get().vod(new ArrayList<>()).string();
-        }
+        if (TextUtils.isEmpty(json)) return Result.get().vod(new ArrayList<>()).string();
 
         List<Vod> list = new ArrayList<>();
         try {
@@ -153,13 +137,10 @@ public class LiangZi extends Spider {
                 JSONObject item = arr.getJSONObject(i);
                 String title = item.optString("title");
                 String href = item.optString("href");
-
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
-                String proxyPic = Proxy.getPosterSync(title);
-                if (TextUtils.isEmpty(proxyPic)) {
-                    proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
-                }
+                // 只在搜索时使用 Proxy 代理图片
+                String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
 
                 Vod vod = new Vod();
                 vod.setVodId(href);
@@ -168,12 +149,11 @@ public class LiangZi extends Spider {
                 vod.setVodRemarks("搜索");
                 list.add(vod);
             }
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
         return Result.get().vod(list).string();
     }
 
-    // ====================== 详情（已修复多线路 + 真实分集） ======================
+    // ====================== 详情（不使用 Proxy） ======================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
@@ -181,13 +161,7 @@ public class LiangZi extends Spider {
 
         String url = vodId.startsWith("http") ? vodId : HOST + vodId.replaceFirst("^/", "");
 
-        Map<String, String> headers = new HashMap<>(baseHeaders);
-        if (url.contains("xl02.com.de")) {
-            headers.remove("Cookie");
-            headers.put("Referer", url);
-        }
-
-        String html = OkHttp.string(url, headers);
+        String html = OkHttp.string(url, baseHeaders);
         if (TextUtils.isEmpty(html)) return Result.error("详情请求失败");
 
         Document doc = Jsoup.parse(html);
@@ -197,94 +171,61 @@ public class LiangZi extends Spider {
         if (titleEl != null) name = titleEl.text().trim();
 
         String pic = "";
-        Element cover = doc.selectFirst(".cover-lg-max-25 img");
+        Element cover = doc.selectFirst(".cover-lg-max-25 img, .cover img, img[data-src]");
         if (cover != null) {
-            pic = cover.attr("src");
-            if (TextUtils.isEmpty(pic)) pic = cover.attr("data-src");
-        }
-
-        if (!TextUtils.isEmpty(name)) {
-            try {
-                String proxyPic = Proxy.getPosterSync(name);
-                if (!TextUtils.isEmpty(proxyPic)) pic = proxyPic;
-                else pic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(name, "UTF-8");
-            } catch (Exception ignored) {
-            }
+            pic = cover.attr("data-src");
+            if (TextUtils.isEmpty(pic)) pic = cover.attr("src");
         }
 
         String content = "暂无简介";
-        Element desc = doc.selectFirst(".desc");
+        Element desc = doc.selectFirst(".desc, .plot, .summary");
         if (desc != null) content = desc.text().trim();
 
         String director = "", actor = "", area = "", remarks = "";
-        Elements infoItems = doc.select(".info-list .info-item");
+        Elements infoItems = doc.select(".info-list .info-item, .info span, .meta li");
         for (Element item : infoItems) {
-            Element labelEl = item.selectFirst(".info-label");
-            if (labelEl == null) continue;
-            String label = labelEl.text().trim().replace("：", "");
-            Elements valueEls = item.select(".info-value");
-            List<String> values = new ArrayList<>();
-            for (Element v : valueEls) {
-                String t = v.text().trim();
-                if (!TextUtils.isEmpty(t)) values.add(t);
-            }
-            String value = TextUtils.join(", ", values);
-
-            if (label.contains("导演")) director = value;
-            else if (label.contains("主演")) actor = value;
-            else if (label.contains("地区")) area = value;
-            else if (label.contains("状态")) remarks = value;
+            String text = item.text().trim();
+            if (text.contains("导演")) director = text.replaceAll("导演[：:]*", "").trim();
+            else if (text.contains("主演") || text.contains("演员")) actor = text.replaceAll("(主演|演员)[：:]*", "").trim();
+            else if (text.contains("地区")) area = text.replaceAll("地区[：:]*", "").trim();
+            else if (text.contains("状态") || text.contains("更新")) remarks = text.replaceAll("(状态|更新)[：:]*", "").trim();
         }
 
-        // ==================== 解析真实分集链接 ====================
-        List<String> episodeList = new ArrayList<>();
-        Elements playItems = doc.select(".play-item a, .play-list a, .episode-list a, a[href*=/play/]");
-        if (playItems.isEmpty()) {
-            // 兜底：尝试从页面提取所有 play 链接
-            playItems = doc.select("a[href*=/play/]");
-        }
-
+        // 解析真实分集
+        List<String> episodes = new ArrayList<>();
+        Elements playItems = doc.select("a[href*=/play/]");
         for (Element a : playItems) {
-            String text = a.text().trim();
             String href = a.attr("href").trim();
-            if (TextUtils.isEmpty(href) || !href.contains("/play/")) continue;
+            if (TextUtils.isEmpty(href)) continue;
+            if (!href.startsWith("http")) href = HOST + href.replaceFirst("^/", "");
 
-            if (!href.startsWith("http")) {
-                if (href.startsWith("/")) {
-                    href = HOST + href.replaceFirst("^/", "");
-                } else {
-                    href = HOST + href;
-                }
+            String text = a.text().trim();
+            if (TextUtils.isEmpty(text)) {
+                Matcher m = Pattern.compile("/play/\\d+-(\\d+)\\.htm").matcher(href);
+                if (m.find()) text = "第" + (Integer.parseInt(m.group(1)) + 1) + "集";
+                else text = "播放";
             }
-
-            // 统一命名
-            if (TextUtils.isEmpty(text) || text.matches("\\d+")) {
-                text = "第" + text + "集";
-            }
-            episodeList.add(text + "$" + href);
+            episodes.add(text + "$" + href);
         }
 
-        // 如果还是空，生成默认 12 集（根据你给的示例）
-        if (episodeList.isEmpty()) {
-            // 从 vodId 提取数字 id
+        // 兜底
+        if (episodes.isEmpty()) {
             String numId = vodId.replaceAll("[^0-9]", "");
             for (int i = 0; i < 12; i++) {
-                episodeList.add("第" + (i + 1) + "集$" + HOST + "play/" + numId + "-" + i + ".htm");
+                episodes.add("第" + (i + 1) + "集$" + HOST + "play/" + numId + "-" + i + ".htm");
             }
         }
 
-        // 生成一组分集字符串
-        String episodeStr = TextUtils.join("#", episodeList);
+        String episodeStr = TextUtils.join("#", episodes);
 
-        // ==================== 官方多线路格式 ====================
-        // 4 条线路 → 4 组相同的分集列表，用 $$$ 分隔
+        // 官方多线路格式
         String playFrom = "量子资源（url3）$$$量子资源（m3u8_2）$$$量子资源（tos）$$$量子资源（m3u8）";
         String playUrl = episodeStr + "$$$" + episodeStr + "$$$" + episodeStr + "$$$" + episodeStr;
 
         Vod vod = new Vod();
         vod.setVodId(vodId);
         vod.setVodName(name);
-        vod.setVodPic(pic);
+        vod.setVodPic(pic);                 // 详情页用原始图片，不走 Proxy
         vod.setVodContent(content);
         vod.setVodDirector(director);
         vod.setVodActor(actor);
@@ -296,93 +237,69 @@ public class LiangZi extends Spider {
         return Result.get().vod(vod).string();
     }
 
-    // ====================== 播放（根据 flag 选择对应线路） ======================
+    // ====================== 播放 ======================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
-            String playUrl = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
+            String playPage = id.startsWith("http") ? id : HOST + id.replaceFirst("^/", "");
 
-            String html = OkHttp.string(playUrl, baseHeaders);
-            if (TextUtils.isEmpty(html)) {
-                return Result.get().url(playUrl).parse().string();
-            }
+            String html = OkHttp.string(playPage, baseHeaders);
+            if (TextUtils.isEmpty(html)) return Result.get().url(playPage).parse().string();
 
             Matcher pidMatcher = Pattern.compile("var\\s+pid\\s*=\\s*(\\d+)").matcher(html);
-            if (!pidMatcher.find()) {
-                return Result.get().url(playUrl).parse().string();
-            }
+            if (!pidMatcher.find()) return Result.get().url(playPage).parse().string();
             String pid = pidMatcher.group(1);
 
             String[] sgAndT = getSgAndT(pid);
-            String sg = sgAndT[0];
-            String tVal = sgAndT[1];
-
-            String apiUrl = HOST + "lines?t=" + tVal + "&sg=" + sg + "&pid=" + pid;
+            String apiUrl = HOST + "lines?t=" + sgAndT[1] + "&sg=" + sgAndT[0] + "&pid=" + pid;
 
             Map<String, String> apiHeaders = new HashMap<>();
             apiHeaders.put("User-Agent", COMMON_UA);
-            apiHeaders.put("Referer", playUrl);
+            apiHeaders.put("Referer", playPage);
             apiHeaders.put("X-Requested-With", "XMLHttpRequest");
             apiHeaders.put("Accept", "application/json, text/javascript, */*; q=0.01");
 
             String resp = OkHttp.string(apiUrl, apiHeaders);
-            if (TextUtils.isEmpty(resp)) {
-                return Result.get().url(playUrl).parse().string();
-            }
+            if (TextUtils.isEmpty(resp)) return Result.get().url(playPage).parse().string();
 
             JSONObject data = new JSONObject(resp);
             if (data.optInt("code") == 0 && data.has("data")) {
-                JSONObject resInfo = data.getJSONObject("data");
+                JSONObject res = data.getJSONObject("data");
 
                 String finalUrl = null;
-
-                // 根据 flag 选择对应线路
                 if (flag != null) {
-                    if (flag.contains("url3") && !TextUtils.isEmpty(resInfo.optString("url3"))) {
-                        finalUrl = resInfo.optString("url3");
-                    } else if (flag.contains("m3u8_2") && !TextUtils.isEmpty(resInfo.optString("m3u8_2"))) {
-                        finalUrl = resInfo.optString("m3u8_2");
-                    } else if (flag.contains("tos") && !TextUtils.isEmpty(resInfo.optString("tos"))) {
-                        finalUrl = resInfo.optString("tos");
-                    } else if (flag.contains("m3u8") && !TextUtils.isEmpty(resInfo.optString("m3u8"))) {
-                        finalUrl = resInfo.optString("m3u8");
-                    }
+                    if (flag.contains("url3")) finalUrl = res.optString("url3");
+                    else if (flag.contains("m3u8_2")) finalUrl = res.optString("m3u8_2");
+                    else if (flag.contains("tos")) finalUrl = res.optString("tos");
+                    else if (flag.contains("m3u8")) finalUrl = res.optString("m3u8");
                 }
 
-                // 兜底：按优先级取第一个可用
                 if (TextUtils.isEmpty(finalUrl)) {
-                    if (!TextUtils.isEmpty(resInfo.optString("url3"))) finalUrl = resInfo.optString("url3");
-                    else if (!TextUtils.isEmpty(resInfo.optString("m3u8_2"))) finalUrl = resInfo.optString("m3u8_2");
-                    else if (!TextUtils.isEmpty(resInfo.optString("tos"))) finalUrl = resInfo.optString("tos");
-                    else if (!TextUtils.isEmpty(resInfo.optString("m3u8"))) finalUrl = resInfo.optString("m3u8");
+                    if (!TextUtils.isEmpty(res.optString("url3"))) finalUrl = res.optString("url3");
+                    else if (!TextUtils.isEmpty(res.optString("m3u8_2"))) finalUrl = res.optString("m3u8_2");
+                    else if (!TextUtils.isEmpty(res.optString("tos"))) finalUrl = res.optString("tos");
+                    else if (!TextUtils.isEmpty(res.optString("m3u8"))) finalUrl = res.optString("m3u8");
                 }
 
                 if (!TextUtils.isEmpty(finalUrl)) {
-                    // 取第一个逗号前的地址（有些字段带多个）
                     finalUrl = finalUrl.split(",")[0].split("#")[0].trim();
-
                     Map<String, String> header = new HashMap<>();
                     header.put("User-Agent", COMMON_UA);
                     return Result.get().url(finalUrl).header(header).string();
                 }
             }
-        } catch (Exception e) {
-            // ignore
-        }
+        } catch (Exception ignored) {}
         return Result.get().url(id).parse().string();
     }
 
-    // ====================== 分类列表解析 ======================
     private List<Vod> parseVideosFromHtml(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
         Elements cards = doc.select(".movie-card");
-
         for (Element card : cards) {
             try {
                 Element a = card.selectFirst("a.card-img");
                 if (a == null) continue;
-
                 String href = a.attr("href");
                 String title = a.attr("title");
                 if (TextUtils.isEmpty(title)) {
@@ -392,25 +309,17 @@ public class LiangZi extends Spider {
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
                 Element img = a.selectFirst("img.lazy");
-                String pic = "";
-                if (img != null) {
-                    pic = img.attr("data-src");
-                    if (TextUtils.isEmpty(pic)) pic = img.attr("src");
-                }
-
+                String pic = img != null ? (TextUtils.isEmpty(img.attr("data-src")) ? img.attr("src") : img.attr("data-src")) : "";
                 Element badge = a.selectFirst(".episode-badge");
                 String remark = badge != null ? badge.text().trim() : "";
 
-                String vodId = href.startsWith("/") ? href : "/" + href;
-
                 Vod vod = new Vod();
-                vod.setVodId(vodId);
+                vod.setVodId(href.startsWith("/") ? href : "/" + href);
                 vod.setVodName(title);
                 vod.setVodPic(pic);
                 vod.setVodRemarks(remark);
                 list.add(vod);
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
         }
         return list;
     }
@@ -418,7 +327,6 @@ public class LiangZi extends Spider {
     private String[] getSgAndT(String pid) throws Exception {
         String currT = String.valueOf(System.currentTimeMillis());
         String plainText = pid + "-" + currT;
-
         MessageDigest md = MessageDigest.getInstance("MD5");
         byte[] md5Bytes = md.digest(plainText.getBytes(StandardCharsets.UTF_8));
         String md5Hex = bytesToHex(md5Bytes).toLowerCase();
@@ -428,16 +336,12 @@ public class LiangZi extends Spider {
         SecretKeySpec keySpec = new SecretKeySpec(aesKey.getBytes(StandardCharsets.UTF_8), "AES");
         cipher.init(Cipher.ENCRYPT_MODE, keySpec);
         byte[] encrypted = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
-
-        String sg = bytesToHex(encrypted).toUpperCase();
-        return new String[]{sg, currT};
+        return new String[]{bytesToHex(encrypted).toUpperCase(), currT};
     }
 
     private String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
+        for (byte b : bytes) sb.append(String.format("%02x", b));
         return sb.toString();
     }
 }
