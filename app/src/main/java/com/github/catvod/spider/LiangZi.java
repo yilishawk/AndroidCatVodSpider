@@ -31,10 +31,10 @@ import java.util.regex.Pattern;
 public class LiangZi extends Spider {
 
     private static final String HOST = "https://v.xl.in.ua/";
-    private static final String COMMON_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36";
+    private static final String COMMON_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
     private static final String COOKIE = "JSESSIONID=E926A709B559AB19FDC4B3A4F5C7A1D8";
 
-    // 最多支持 url3 里拆分出的线路数量
+    // url3 最多拆分出的线路数
     private static final int MAX_URL3_LINES = 5;
 
     private Map<String, String> baseHeaders;
@@ -49,6 +49,7 @@ public class LiangZi extends Spider {
         baseHeaders.put("Cookie", COOKIE);
     }
 
+    // ====================== 首页分类 ======================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -97,6 +98,7 @@ public class LiangZi extends Spider {
         return Result.get().classes(classes).filters(filters).string();
     }
 
+    // ====================== 分类列表 ======================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = TextUtils.isEmpty(pg) ? 1 : Integer.parseInt(pg);
@@ -118,7 +120,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（仅这里使用 Proxy） ======================
+    // ====================== 搜索（仅这里使用 Proxy 代理图片） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -141,6 +143,7 @@ public class LiangZi extends Spider {
                 String href = item.optString("href");
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
+                // 只在搜索时使用 Proxy 代理图片
                 String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
 
                 Vod vod = new Vod();
@@ -154,7 +157,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).string();
     }
 
-    // ====================== 详情（方案B：预生成 url3-1 ~ url3-5） ======================
+    // ====================== 详情（方案B：url3-1 \~ url3-5） ======================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
@@ -219,7 +222,7 @@ public class LiangZi extends Spider {
 
         String episodeStr = TextUtils.join("#", episodes);
 
-        // ========== 方案B：预生成 url3-1 ~ url3-5 ==========
+        // 方案B：预生成 url3-1 \~ url3-5
         StringBuilder playFrom = new StringBuilder();
         StringBuilder playUrl = new StringBuilder();
         for (int i = 1; i <= MAX_URL3_LINES; i++) {
@@ -246,7 +249,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(vod).string();
     }
 
-    // ====================== 播放（根据 flag 取 url3 里第 N 个链接） ======================
+    // ====================== 播放（url3 拆分 + 字节跳动 CDN 请求头） ======================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
@@ -277,7 +280,6 @@ public class LiangZi extends Spider {
                 String url3 = res.optString("url3");
 
                 if (!TextUtils.isEmpty(url3)) {
-                    // 拆分 url3 里的多个链接
                     String[] urls = url3.split(",");
                     List<String> validUrls = new ArrayList<>();
                     for (String u : urls) {
@@ -288,26 +290,33 @@ public class LiangZi extends Spider {
                     }
 
                     if (!validUrls.isEmpty()) {
-                        int index = 0; // 默认取第一个
-
-                        // 根据 flag 决定取第几个（url3-1 → 0, url3-2 → 1 ...）
+                        int index = 0;
                         if (flag != null && flag.startsWith("url3-")) {
                             try {
                                 int num = Integer.parseInt(flag.replace("url3-", "").trim());
                                 index = Math.max(0, num - 1);
                             } catch (Exception ignored) {}
                         }
-
-                        // 超出范围则取最后一个可用
-                        if (index >= validUrls.size()) {
-                            index = validUrls.size() - 1;
-                        }
+                        if (index >= validUrls.size()) index = validUrls.size() - 1;
 
                         String finalUrl = validUrls.get(index);
 
+                        // 字节跳动 CDN 必要请求头
                         Map<String, String> header = new HashMap<>();
                         header.put("User-Agent", COMMON_UA);
-                        return Result.get().url(finalUrl).header(header).string();
+                        header.put("Accept", "*/*");
+                        header.put("Accept-Encoding", "identity;q=1, *;q=0");
+                        header.put("Accept-Language", "zh-CN,zh;q=0.9");
+                        header.put("Referer", "https://v.xl.in.ua/");
+                        header.put("Origin", "https://v.xl.in.ua");
+                        header.put("sec-fetch-dest", "video");
+                        header.put("sec-fetch-mode", "no-cors");
+                        header.put("sec-fetch-site", "cross-site");
+
+                        return Result.get()
+                                .url(finalUrl)
+                                .header(header)
+                                .string();
                     }
                 }
             }
@@ -315,6 +324,7 @@ public class LiangZi extends Spider {
         return Result.get().url(id).parse().string();
     }
 
+    // ====================== 分类列表解析 ======================
     private List<Vod> parseVideosFromHtml(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
