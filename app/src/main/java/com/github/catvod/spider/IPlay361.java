@@ -33,6 +33,7 @@ import java.util.regex.Pattern;
  *
  * Pre-crawl strategy: async crawl starts when jar is loaded by TVBox,
  * local proxy http://127.0.0.1:9978/proxy?do=iptv361 returns cached data directly.
+ * Cache refreshes once per day (24h TTL).
  */
 public class IPlay361 extends Spider {
 
@@ -44,9 +45,11 @@ public class IPlay361 extends Spider {
     static final String OUTPUT_PROXY = "iptvpmigu.txt";
 
     // ==================== Static state (thread-safe) ====================
-    private static final ConcurrentHashMap<String, String> cache   = new ConcurrentHashMap<>();
-    private static final AtomicBoolean                   loading   = new AtomicBoolean(false);
-    private static final ExecutorService                 executor  = Executors.newSingleThreadExecutor(r -> {
+    private static final ConcurrentHashMap<String, String> cache         = new ConcurrentHashMap<>();
+    private static final AtomicBoolean                   loading         = new AtomicBoolean(false);
+    private static volatile long                         lastCrawlTime   = 0;
+    private static final long                            CACHE_TTL_MS    = 24 * 60 * 60 * 1000L; // 24小时
+    private static final ExecutorService                 executor        = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "IPlay361-Crawler");
         t.setDaemon(true);
         return t;
@@ -64,8 +67,8 @@ public class IPlay361 extends Spider {
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("hotel", "Hotel Source"));
-        classes.add(new Class("proxy", "Migu Source"));
+        classes.add(new Class("hotel", "酒店源"));
+        classes.add(new Class("proxy", "米菇源"));
         return Result.get().classes(classes).string();
     }
 
@@ -119,76 +122,85 @@ public class IPlay361 extends Spider {
         return loading.get();
     }
 
-    // ==================== Internal crawl logic (strictly matches Python) ====================
-
-    /** Trigger one-time async crawl (idempotent: ignore if already crawling) */
-    public static void triggerAsyncCrawl() {
-        if (loading.compareAndSet(false, true)) {
-            executor.execute(() -> {
-                try {
-                    crawlSource(OUTPUT_HOTEL, "iptvhotelx.php");
-                    crawlSource(OUTPUT_PROXY, "iptvproxy.php");
-                } catch (Exception e) {
-                    SpiderDebug.log("[IPlay361] Crawl exception: " + e.getMessage());
-                } finally {
-                    loading.set(false);
-                }
-            });
+    /**
+     * Trigger async crawl if not currently loading and cache is expired or empty.
+     * Cache TTL: 24 hours.
+     */
+    public static synchronized void triggerAsyncCrawl() {
+        long now = System.currentTimeMillis();
+        boolean shouldCrawl = !loading.get() && (
+            lastCrawlTime == 0 
+            || (now - lastCrawlTime) > CACHE_TTL_MS
+            || cache.get(OUTPUT_HOTEL) == null 
+            || cache.get(OUTPUT_PROXY) == null
+        );
+        
+        if (!shouldCrawl) {
+            SpiderDebug.log("[IPlay361] Cache is fresh, skipping crawl. Last crawl: " + lastCrawlTime);
+            return;
         }
+
+        SpiderDebug.log("[IPlay361] Starting async crawl...");
+        loading.set(true);
+        executor.execute(() -> {
+            try {
+                // 只爬取第一页的前 MAX_IP_PER_PAGE 个有效IP
+                crawlSource(OUTPUT_HOTEL, "iptvhotelx.php");
+                crawlSource(OUTPUT_PROXY, "iptvproxy.php");
+                lastCrawlTime = System.currentTimeMillis();
+                SpiderDebug.log("[IPlay361] Crawl completed, cache updated");
+            } catch (Exception e) {
+                SpiderDebug.log("[IPlay361] Crawl failed: " + e.getMessage());
+            } finally {
+                loading.set(false);
+            }
+        });
     }
 
     /**
      * Crawl single source, write to corresponding cache.
      * Corresponds to Python's crawl_source()
+     * Only crawls the first page, takes up to MAX_IP_PER_PAGE valid IPs.
      */
     private static void crawlSource(String outputKey, String listPhp) throws Exception {
         List<String> allLines = new ArrayList<>();
 
-        for (int page = 1; ; page++) {
-            String listUrl = page == 1
-                    ? WORKER_URL + "/" + listPhp
-                    : WORKER_URL + "/" + listPhp + "?page=" + page + "&iphone16=&code=";
-            String referer = page == 1 ? WORKER_URL + "/" : WORKER_URL + "/" + listPhp;
+        // 只请求第一页
+        String listUrl = WORKER_URL + "/" + listPhp;
+        String referer = WORKER_URL + "/";
+        SpiderDebug.log("[IPlay361] Crawling first page: " + listUrl);
 
-            SpiderDebug.log("[IPlay361] Crawling page " + page + ": " + listUrl);
+        String listHtml = fetchHtml(listUrl, referer);
+        List<Map<String, String>> entries = parseIpList(listHtml);
 
-            String listHtml = fetchHtml(listUrl, referer);
-            List<Map<String, String>> entries = parseIpList(listHtml);
+        // 只取前 MAX_IP_PER_PAGE 个有效IP
+        int takeCount = Math.min(MAX_IP_PER_PAGE, entries.size());
+        SpiderDebug.log("[IPlay361] Found " + entries.size() + " entries, processing first " + takeCount);
 
-            // Keep only first MAX_IP_PER_PAGE valid entries (same as Python)
-            int takeCount = Math.min(MAX_IP_PER_PAGE, entries.size());
-            SpiderDebug.log("[IPlay361] Extracted " + entries.size() + " entries, processing first " + takeCount);
+        for (int i = 0; i < takeCount; i++) {
+            Map<String, String> entry = entries.get(i);
+            String ip       = entry.get("ip");
+            String tk       = entry.get("tk");
+            String pVal     = entry.get("p");
+            String regionIs = entry.get("region_isp");
 
-            for (int i = 0; i < takeCount; i++) {
-                Map<String, String> entry = entries.get(i);
-                String ip       = entry.get("ip");
-                String tk       = entry.get("tk");
-                String pVal     = entry.get("p");
-                String regionIs = entry.get("region_isp");
+            String detailUrl    = WORKER_URL + "/getall26.php?ip=" + ip + "&c=&tk=" + tk + "&p=" + pVal;
+            String channelRef   = WORKER_URL + "/channellist.html?ip=" + ip + "&tk=" + tk + "&p=" + pVal;
 
-                String detailUrl    = WORKER_URL + "/getall26.php?ip=" + ip + "&c=&tk=" + tk + "&p=" + pVal;
-                String channelRef   = WORKER_URL + "/channellist.html?ip=" + ip + "&tk=" + tk + "&p=" + pVal;
+            SpiderDebug.log("[IPlay361] Parsing: " + regionIs);
 
-                SpiderDebug.log("[IPlay361] Parsing: " + regionIs);
+            String detailHtml = fetchHtml(detailUrl, channelRef);
+            List<Channel> channels = getChannelsFromDetail(detailHtml, channelRef);
 
-                String detailHtml = fetchHtml(detailUrl, channelRef);
-                List<Channel> channels = getChannelsFromDetail(detailHtml, channelRef);
-
-                if (!channels.isEmpty()) {
-                    allLines.add(regionIs + ",#genre#");
-                    for (Channel ch : channels) {
-                        allLines.add(ch.name + "," + ch.url);
-                    }
+            if (!channels.isEmpty()) {
+                allLines.add(regionIs + ",#genre#");
+                for (Channel ch : channels) {
+                    allLines.add(ch.name + "," + ch.url);
                 }
-
-                // time.sleep(random.uniform(1, 2))
-                Thread.sleep(ThreadLocalRandom.current().nextLong(1000, 2000));
             }
 
-            // Stop pagination if no more valid entries
-            if (entries.isEmpty() || takeCount < MAX_IP_PER_PAGE) {
-                break;
-            }
+            // 每个IP请求间隔随机1-2秒
+            Thread.sleep(ThreadLocalRandom.current().nextLong(1000, 2000));
         }
 
         if (!allLines.isEmpty()) {
@@ -209,9 +221,7 @@ public class IPlay361 extends Spider {
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
         if (referer != null && !referer.isEmpty()) {
-            // Replace WORKER_URL with https://tonkiang.us (same as Python)
-            String fixedReferer = referer.replace(WORKER_URL, "https://tonkiang.us");
-            headers.put("Referer", fixedReferer);
+            headers.put("Referer", referer);
         }
         try {
             String resp = OkHttp.string(url, headers);
@@ -227,74 +237,47 @@ public class IPlay361 extends Spider {
     // Strictly corresponds to Python's parse_ip_list()
 
     private static List<Map<String, String>> parseIpList(String html) {
-        List<Map<String, String>> entries = new ArrayList<>();
-        if (html == null) return entries;
+        List<Map<String, String>> result = new ArrayList<>();
+        if (html == null || html.isEmpty()) return result;
 
         Document doc = Jsoup.parse(html);
-        // soup.find_all('div', class_='result')
-        for (Element div : doc.select("div.result")) {
-            // if '暂时失效' in div.get_text(): continue
-            if (div.text().contains("暂时失效")) continue;
+        Element div = doc.selectFirst("div.container div.row");
+        if (div == null) return result;
 
-            // div.find('a', href=re.compile(r'channellist\.html\?ip='))
-            Element channelLink = div.selectFirst("a[href*=channellist.html][href*=ip]");
-            if (channelLink == null) continue;
-
-            String href = channelLink.attr("href");
-            // parse_qs(urlparse(href).query)
-            String query = href.contains("?") ? href.substring(href.indexOf('?') + 1) : "";
-            Map<String, String> params = parseQuery(query);
-
-            String ip  = params.getOrDefault("ip", "");
-            String tk  = params.getOrDefault("tk", "");
-            String pVal = params.getOrDefault("p", "1");
-            if (TextUtils.isEmpty(ip) || TextUtils.isEmpty(tk)) continue;
-
-            // info_tag = div.find('i')
-            Element infoTag = div.selectFirst("i");
-            String location = "Unknown Region";
-            String isp      = "Unknown ISP";
-            if (infoTag != null) {
-                String infoText = infoTag.text().trim();
-                // re.split(r'\d{2}:\d{2}上线\s*', info_text)
-                String[] parts = infoText.split("(?<=上线)\\s*");
-                String geoIspp = parts.length > 1 ? parts[parts.length - 1].strip() : infoText;
-
-                // re.match(r'(.+?)\s+((?:[\u4e00-\u9fa5]+)?(?:电信|联通|移动|广电|铁通|长宽|教育网))\s*$', ...)
-                Pattern geoPattern = Pattern.compile(
-                        "^(.+?)\\s+((?:[\\u4e00-\\u9fa5]+)?(?:电信|联通|移动|广电|铁通|长宽|教育网))\\s*$");
-                Matcher m = geoPattern.matcher(geoIspp);
-                if (m.matches()) {
-                    location = m.group(1).strip();
-                    isp      = m.group(2).strip();
-                } else {
-                    location = geoIspp;
-                }
-            }
+        Pattern hrefPattern = Pattern.compile(".*channellist.html\\?(ip=[^&]*&tk=([^&]*)&p=(\\d+))[^\\r\\n]*?>([^<]+)</a>.*");
+        
+        for (Element a : div.select("a[href*=channellist]")) {
+            String href = a.attr("href");
+            Matcher matcher = hrefPattern.matcher(href);
+            if (!matcher.matches()) continue;
 
             Map<String, String> entry = new HashMap<>();
-            entry.put("ip", ip);
-            entry.put("tk", tk);
-            entry.put("p",  pVal);
-            entry.put("region_isp", location + " " + isp);
-            entries.add(entry);
+            entry.put("ip", matcher.group(1));
+            entry.put("tk", matcher.group(2));
+            entry.put("p", matcher.group(3));
+            entry.put("region_isp", matcher.group(4).trim());
+            result.add(entry);
         }
-        return entries;
+        return result;
     }
 
-    /** Parse query string, corresponds to Python urllib.parse.parse_qs */
-    private static Map<String, String> parseQuery(String query) {
-        Map<String, String> map = new HashMap<>();
-        if (TextUtils.isEmpty(query)) return map;
-        for (String pair : query.split("&")) {
-            String[] kv = pair.split("=", 2);
-            if (kv.length == 2) {
-                map.put(kv[0], kv[1]);
-            } else if (kv.length == 1) {
-                map.put(kv[0], "");
-            }
+    // ==================== get_channels_from_detail() ====================
+    // Strictly corresponds to Python's get_channels_from_detail()
+
+    private static List<Channel> getChannelsFromDetail(String html, String referer) {
+        List<Channel> channels = new ArrayList<>();
+        
+        // Try M3U extraction first (from iframe src)
+        String m3uSubscribeUrl = extractM3uSubscribeUrl(html);
+        if (m3uSubscribeUrl != null) {
+            channels.addAll(parseM3uContent(fetchHtml(m3uSubscribeUrl, referer)));
+            if (!channels.isEmpty()) return channels;
         }
-        return map;
+
+        // Fallback to page HTML parsing
+        channels.addAll(parseChannelPage(html));
+        SpiderDebug.log("[IPlay361] Parsed " + channels.size() + " channels from page");
+        return channels;
     }
 
     // ==================== extract_m3u_subscribe_url() ====================
@@ -302,51 +285,42 @@ public class IPlay361 extends Spider {
 
     private static String extractM3uSubscribeUrl(String html) {
         if (html == null) return null;
-        // re.search(r"copytodr\(['\"](https?://[^'\"]+iptvlist\.php\?token=[^'\"]+)['\"],\s*['\"]m['\"]\)", ...)
-        Pattern p1 = Pattern.compile(
-                "copytodr\\(['\"](https?://[^'\"]+iptvlist\\.php\\?token=[^'\"]+)['\"],\\s*['\"]m['\"]\\)");
-        Matcher m1 = p1.matcher(html);
-        if (m1.find()) return m1.group(1);
-
-        // Fallback: re.search(r'订阅m3u链接\s*(https?://[^\s<>"\']+)', ...)
-        Pattern p2 = Pattern.compile("订阅m3u链接\\s*(https?://[^\\s<>\"']+)", Pattern.CASE_INSENSITIVE);
-        Matcher m2 = p2.matcher(html);
-        if (m2.find()) return m2.group(1);
-
+        Pattern pattern = Pattern.compile("copytodr\\(['\"]([^'\"]+)['\"]\\)");
+        Matcher matcher = pattern.matcher(html);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
         return null;
     }
 
     // ==================== parse_m3u_content() ====================
     // Strictly corresponds to Python's parse_m3u_content()
 
-    private static List<Channel> parseM3uContent(String m3uText) {
+    private static List<Channel> parseM3uContent(String html) {
         List<Channel> channels = new ArrayList<>();
-        if (m3uText == null) return channels;
+        if (html == null || !html.startsWith("#EXTM3U")) return channels;
 
-        String[] lines = m3uText.strip().split("\\n");
-        int i = 0;
-        while (i < lines.length) {
-            String line = lines[i].trim();
-            if (line.startsWith("#EXTINF:")) {
-                // Channel name after last comma
-                int lastComma = line.lastIndexOf(',');
-                String name = lastComma >= 0 ? line.substring(lastComma + 1).strip() : "Unknown Channel";
+        String[] lines = html.split("\n");
+        String currentGroup = "";
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
 
-                if (i + 1 < lines.length) {
-                    String url = lines[i + 1].trim();
-                    if (url.startsWith("http")) {
-                        channels.add(new Channel(name, url));
-                        i += 2;
-                        continue;
-                    }
-                }
+            int commaIdx = line.lastIndexOf(',');
+            if (commaIdx <= 0) continue;
+
+            String name = line.substring(0, commaIdx).trim();
+            String url = line.substring(commaIdx + 1).trim();
+            
+            if (!name.isEmpty() && !url.isEmpty()) {
+                channels.add(new Channel(name, url));
             }
-            i++;
         }
         return channels;
     }
 
-    // ==================== parse_channel_page() (fallback logic) ====================
+    // ==================== parse_channel_page() ====================
     // Strictly corresponds to Python's parse_channel_page()
 
     private static List<Channel> parseChannelPage(String html) {
@@ -354,55 +328,50 @@ public class IPlay361 extends Spider {
         if (html == null) return channels;
 
         Document doc = Jsoup.parse(html);
-        for (Element div : doc.select("div.result")) {
-            // channel_div = div.find('div', class_='channel')
-            Element channelDiv = div.selectFirst("div.channel");
-            if (channelDiv == null) continue;
+        Element table = doc.selectFirst("table.table");
+        if (table == null) return channels;
 
-            // tip_div = channel_div.find('div', class_='tip')
-            Element tipDiv = channelDiv.selectFirst("div.tip");
-            String channelName = tipDiv != null ? tipDiv.text().strip() : "Unknown Channel";
+        for (Element tr : table.select("tr:gt(0)")) {
+            Element[] tds = tr.select("td");
+            if (tds.length < 5) continue;
 
-            // m3u8_div = div.find('div', class_='m3u8')
-            Element m3u8Div = div.selectFirst("div.m3u8");
-            if (m3u8Div == null) continue;
+            String regionIsp = tds.get(0).text().trim();
+            String nameRaw = tds.get(1).text().trim();
+            String timeStr = tds.get(2).text().trim();
 
-            // for td in m3u8_div.find_all('td'):
-            for (Element td : m3u8Div.select("td")) {
-                String text = td.text().strip();
-                if (text.startsWith("http")) {
-                    channels.add(new Channel(channelName, text));
-                    break;
+            // Split time from name using same logic as Python
+            String[] nameParts = nameRaw.split("(?<=上线)\\s*");
+            String name = nameParts[0].trim();
+            if (name.isEmpty()) continue;
+
+            // Match regex pattern
+            Pattern pattern = Pattern.compile(
+                "(.+?)\\s+((?:中国大陆)?(?:电信|联通|移动|铁通|长城宽带|鹏博士|广电|其他)(?:教育|政企|海外|专线|公司|校园)?\\s*$)");
+            Matcher matcher = pattern.matcher(name);
+            if (!matcher.matches()) continue;
+
+            String cleanName = matcher.group(1).trim();
+            String isp = matcher.group(2).trim();
+            
+            // Build URL from remaining columns
+            StringBuilder urlBuilder = new StringBuilder();
+            for (int i = 3; i < tds.length; i++) {
+                String cellText = tds.get(i).text().trim();
+                if (!cellText.isEmpty()) {
+                    if (urlBuilder.length() > 0) urlBuilder.append("|");
+                    urlBuilder.append(cellText);
                 }
             }
-        }
-        return channels;
-    }
-
-    // ==================== get_channels_from_detail() ====================
-    // Strictly corresponds to Python's get_channels_from_detail()
-
-    private static List<Channel> getChannelsFromDetail(String detailHtml, String referer) {
-        String m3uUrl = extractM3uSubscribeUrl(detailHtml);
-        if (m3uUrl != null) {
-            SpiderDebug.log("[IPlay361] Found subscribe m3u URL, fetching full list...");
-            String m3uContent = fetchHtml(m3uUrl, referer);
-            if (m3uContent != null && m3uContent.trim().startsWith("#EXTM3U")) {
-                List<Channel> channels = parseM3uContent(m3uContent);
-                SpiderDebug.log("[IPlay361] Parsed " + channels.size() + " channels from subscribe URL");
-                return channels;
-            } else {
-                SpiderDebug.log("[IPlay361] Subscribe URL invalid or not M3U format, fallback to page parsing");
+            String url = urlBuilder.toString();
+            if (!url.isEmpty()) {
+                channels.add(new Channel(cleanName + " " + isp, url));
             }
         }
-        // Fallback to page HTML parsing
-        List<Channel> channels = parseChannelPage(detailHtml);
-        SpiderDebug.log("[IPlay361] Parsed " + channels.size() + " channels from page");
         return channels;
     }
 
     // ==================== Inner data structure ====================
-    private static class Channel {
+    static class Channel {
         final String name;
         final String url;
         Channel(String name, String url) { this.name = name; this.url = url; }
