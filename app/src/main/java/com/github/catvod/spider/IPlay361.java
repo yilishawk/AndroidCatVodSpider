@@ -30,10 +30,6 @@ import java.util.regex.Pattern;
 /**
  * Crawl IPTV sources from https://tonkiang.us
  * Logic strictly matches TVBox_Debug/361.py
- *
- * Pre-crawl strategy: async crawl starts when jar is loaded by TVBox,
- * local proxy http://127.0.0.1:9978/proxy?do=iptv361 returns cached data directly.
- * Cache refreshes once per day (24h TTL).
  */
 public class IPlay361 extends Spider {
 
@@ -148,6 +144,8 @@ public class IPlay361 extends Spider {
         });
     }
 
+    // ==================== crawl_source() ====================
+
     private static void crawlSource(String outputKey, String listPhp) throws Exception {
         List<String> allLines = new ArrayList<>();
 
@@ -192,13 +190,15 @@ public class IPlay361 extends Spider {
         }
     }
 
+    // ==================== fetch_html() ====================
+
     private static String fetchHtml(String url, String referer) {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36");
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
         if (referer != null && !referer.isEmpty()) {
-            headers.put("Referer", referer);
+            headers.put("Referer", referer.replace(WORKER_URL, "https://tonkiang.us"));
         }
         try {
             String resp = OkHttp.string(url, headers);
@@ -209,114 +209,177 @@ public class IPlay361 extends Spider {
         }
     }
 
+    // ==================== parse_ip_list() ====================
+
     private static List<Map<String, String>> parseIpList(String html) {
         List<Map<String, String>> result = new ArrayList<>();
         if (html == null || html.isEmpty()) return result;
 
         Document doc = Jsoup.parse(html);
-        Element div = doc.selectFirst("div.container div.row");
-        if (div == null) return result;
-
-        Pattern hrefPattern = Pattern.compile(".*channellist.html\\?(ip=[^&]*&tk=([^&]*)&p=(\\d+))[^\\r\\n]*?>([^<]+)</a>.*");
+        Elements resultDivs = doc.select("div.result");
         
-        for (Element a : div.select("a[href*=channellist]")) {
-            String href = a.attr("href");
-            Matcher matcher = hrefPattern.matcher(href);
-            if (!matcher.matches()) continue;
-
+        for (Element div : resultDivs) {
+            if (div.text().contains("temporary invalid")) continue;
+            
+            Element anchor = div.selectFirst("a[href*=channellist]");
+            if (anchor == null) continue;
+            
+            String href = anchor.attr("href");
+            String ip = getQueryParam(href, "ip");
+            String tk = getQueryParam(href, "tk");
+            String p = getQueryParam(href, "p");
+            if (p == null) p = "1";
+            
+            if (ip == null || ip.isEmpty() || tk == null || tk.isEmpty()) continue;
+            
+            String location = "unknown";
+            String isp = "unknown";
+            Element iTag = div.selectFirst("i");
+            if (iTag != null) {
+                String infoText = iTag.text().trim();
+                String[] parts = infoText.split("(?<=online)\\s*");
+                String geoIsp = parts.length > 1 ? parts[parts.length - 1].trim() : infoText;
+                
+                Matcher matcher = Pattern.compile(
+                    "(.+?)\\s+((?:China)?(?:Telecom|Unicom|Mobile|IronTone|GreatWall|Dragon)|\\s*$)"
+                ).matcher(geoIsp);
+                if (matcher.matches()) {
+                    location = matcher.group(1).trim();
+                    isp = matcher.group(2).trim();
+                } else {
+                    location = geoIsp;
+                }
+            }
+            
             Map<String, String> entry = new HashMap<>();
-            entry.put("ip", matcher.group(1));
-            entry.put("tk", matcher.group(2));
-            entry.put("p", matcher.group(3));
-            entry.put("region_isp", matcher.group(4).trim());
+            entry.put("ip", ip);
+            entry.put("tk", tk);
+            entry.put("p", p);
+            entry.put("region_isp", location + " " + isp);
             result.add(entry);
         }
         return result;
     }
+
+    private static String getQueryParam(String url, String key) {
+        if (url == null || !url.contains("?")) return null;
+        String query = url.substring(url.indexOf('?') + 1);
+        for (String param : query.split("&")) {
+            String[] parts = param.split("=");
+            if (parts.length >= 2 && key.equals(parts[0])) {
+                return parts[1];
+            }
+        }
+        return null;
+    }
+
+    // ==================== get_channels_from_detail() ====================
 
     private static List<Channel> getChannelsFromDetail(String html, String referer) {
         List<Channel> channels = new ArrayList<>();
         
         String m3uUrl = extractM3uSubscribeUrl(html);
         if (m3uUrl != null) {
-            channels.addAll(parseM3uContent(fetchHtml(m3uUrl, referer)));
-            if (!channels.isEmpty()) return channels;
+            SpiderDebug.log("[IPlay361] Found M3U URL");
+            String m3uContent = fetchHtml(m3uUrl, referer);
+            if (m3uContent != null && m3uContent.trim().startsWith("#EXTM3U")) {
+                channels.addAll(parseM3uContent(m3uContent));
+                SpiderDebug.log("[IPlay361] Parsed " + channels.size() + " from M3U");
+                if (!channels.isEmpty()) return channels;
+            }
         }
 
         channels.addAll(parseChannelPage(html));
+        SpiderDebug.log("[IPlay361] Parsed " + channels.size() + " from HTML");
         return channels;
     }
 
+    // ==================== extract_m3u_subscribe_url() ====================
+
     private static String extractM3uSubscribeUrl(String html) {
         if (html == null) return null;
-        Pattern pattern = Pattern.compile("copytodr\\(['\"]([^'\"]+)['\"]\\)");
-        Matcher matcher = pattern.matcher(html);
+        
+        // Match: copytodr('https://xxx/iptvlist.php?token=XXX','m')
+        Pattern pattern1 = Pattern.compile(
+            "copytodr\\(['\"](https?://[^'\"\\s]+iptvlist\\.php\\?token=[^'\"\\s]+)['\"],\\s*['\"]m['\"]",
+            Pattern.CASE_INSENSITIVE
+        );
+        Matcher matcher = pattern1.matcher(html);
         if (matcher.find()) {
             return matcher.group(1);
         }
+        
+        // Match: direct access m3u link url (English fallback)
+        Pattern pattern2 = Pattern.compile(
+            "[Dd]irect\\s+[Aa]ccess\\s+[Tt]he\\s+m3u\\s+[Ll]ink\\s*(https?://[^\\s<>\"']+)",
+            Pattern.CASE_INSENSITIVE
+        );
+        matcher = pattern2.matcher(html);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        
         return null;
     }
 
+    // ==================== parse_m3u_content() ====================
+
     private static List<Channel> parseM3uContent(String html) {
         List<Channel> channels = new ArrayList<>();
-        if (html == null || !html.startsWith("#EXTM3U")) return channels;
+        if (html == null) return channels;
 
-        for (String line : html.split("\n")) {
-            line = line.trim();
-            if (line.isEmpty() || line.startsWith("#")) continue;
-
-            int commaIdx = line.lastIndexOf(',');
-            if (commaIdx <= 0) continue;
-
-            String name = line.substring(0, commaIdx).trim();
-            String url = line.substring(commaIdx + 1).trim();
+        String[] lines = html.trim().split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (!line.startsWith("#EXTINF:")) continue;
             
-            if (!name.isEmpty() && !url.isEmpty()) {
-                channels.add(new Channel(name, url));
+            String namePart = line.substring(8);
+            int commaIdx = namePart.lastIndexOf(',');
+            String channelName = commaIdx > 0 ? namePart.substring(commaIdx + 1).trim() : "unknown";
+            
+            if (i + 1 < lines.length) {
+                String url = lines[i + 1].trim();
+                if (url.startsWith("http")) {
+                    channels.add(new Channel(channelName, url));
+                    i++;
+                }
             }
         }
         return channels;
     }
+
+    // ==================== parse_channel_page() ====================
 
     private static List<Channel> parseChannelPage(String html) {
         List<Channel> channels = new ArrayList<>();
         if (html == null) return channels;
 
         Document doc = Jsoup.parse(html);
-        Element table = doc.selectFirst("table.table");
-        if (table == null) return channels;
-
-        for (Element tr : table.select("tr:gt(0)")) {
-            Elements tds = tr.select("td");
-            if (tds.size() < 5) continue;
-
-            String nameRaw = tds.get(1).text().trim();
-            String[] nameParts = nameRaw.split("(?<=上线)\\s*");
-            String name = nameParts[0].trim();
-            if (name.isEmpty()) continue;
-
-            Pattern pattern = Pattern.compile(
-                "(.+?)\\s+((?:中国大陆)?(?:电信|联通|移动|铁通|长城宽带|鹏博士|广电|其他)(?:教育|政企|海外|专线|公司|校园)?\\s*$)");
-            Matcher matcher = pattern.matcher(name);
-            if (!matcher.matches()) continue;
-
-            StringBuilder urlBuilder = new StringBuilder();
-            for (int i = 3; i < tds.size(); i++) {
-                String cellText = tds.get(i).text().trim();
-                if (!cellText.isEmpty()) {
-                    if (urlBuilder.length() > 0) urlBuilder.append("|");
-                    urlBuilder.append(cellText);
-                }
-            }
+        Elements resultDivs = doc.select("div.result");
+        
+        for (Element div : resultDivs) {
+            Element channelDiv = div.selectFirst("div.channel");
+            if (channelDiv == null) continue;
             
-            String url = urlBuilder.toString();
-            if (!url.isEmpty()) {
-                channels.add(new Channel(name, url));
+            Element tipDiv = channelDiv.selectFirst("div.tip");
+            String channelName = tipDiv != null ? tipDiv.text().trim() : "unknown";
+            if (channelName.isEmpty()) continue;
+            
+            Element m3u8Div = div.selectFirst("div.m3u8");
+            if (m3u8Div == null) continue;
+            
+            for (Element td : m3u8Div.select("td")) {
+                String text = td.text().trim();
+                if (text.startsWith("http")) {
+                    channels.add(new Channel(channelName, text));
+                    break;
+                }
             }
         }
         return channels;
     }
 
+    // ==================== Inner data structure ====================
     static class Channel {
         final String name;
         final String url;
