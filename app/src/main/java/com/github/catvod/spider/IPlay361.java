@@ -14,7 +14,6 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,8 +45,12 @@ public class IPlay361 extends Spider {
     private static volatile long                         lastCrawlTime   = 0;
     private static final long                            CACHE_TTL_MS    = 24 * 60 * 60 * 1000L;
     private static final ExecutorService                 executor        = Executors.newSingleThreadExecutor(r -> {
-    // ==================== Static initializer ====================
-    // Trigger crawl when class is loaded (ensure it starts even if init() is not called)
+        Thread t = new Thread(r, "IPlay361-Crawler");
+        t.setDaemon(true);
+        return t;
+    });
+
+    // ==================== Static initializer (trigger crawl on class load) ====================
     static {
         try {
             SpiderDebug.log("[IPlay361] Class loaded, triggering async crawl...");
@@ -56,12 +59,6 @@ public class IPlay361 extends Spider {
             SpiderDebug.log("[IPlay361] Static init error: " + e.getMessage());
         }
     }
-
-
-        Thread t = new Thread(r, "IPlay361-Crawler");
-        t.setDaemon(true);
-        return t;
-    });
 
     // ==================== Spider interface implementation ====================
 
