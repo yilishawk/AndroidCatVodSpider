@@ -120,7 +120,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    // ====================== 搜索（仅这里使用 Proxy 代理图片） ======================
+    // ====================== 搜索（仅这里使用 Proxy 代理图片 + 域名替换） ======================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -143,6 +143,10 @@ public class LiangZi extends Spider {
                 String href = item.optString("href");
                 if (TextUtils.isEmpty(title) || TextUtils.isEmpty(href)) continue;
 
+                // 把 xl02.com.de 域名替换成爬虫域名
+                href = href.replace("https://xl02.com.de", "https://v.xl.in.ua")
+                           .replace("http://xl02.com.de", "https://v.xl.in.ua");
+
                 // 只在搜索时使用 Proxy 代理图片
                 String proxyPic = Proxy.getUrl() + "?do=getPoster&title=" + URLEncoder.encode(title, "UTF-8");
 
@@ -157,7 +161,7 @@ public class LiangZi extends Spider {
         return Result.get().vod(list).string();
     }
 
-    // ====================== 详情（方案B：url3-1 \~ url3-5） ======================
+    // ====================== 详情（方案B：url3-1 ~ url3-5） ======================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
@@ -222,7 +226,7 @@ public class LiangZi extends Spider {
 
         String episodeStr = TextUtils.join("#", episodes);
 
-        // 方案B：预生成 url3-1 \~ url3-5
+        // 方案B：预生成 url3-1 ~ url3-5
         StringBuilder playFrom = new StringBuilder();
         StringBuilder playUrl = new StringBuilder();
         for (int i = 1; i <= MAX_URL3_LINES; i++) {
