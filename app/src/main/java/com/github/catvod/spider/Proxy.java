@@ -475,26 +475,30 @@ public class Proxy {
         }
     }
 
-    // ====================== IPTV 361 直播源代理 ======================
+    // ====================== IPTV 361 Live Source Proxy ======================
     private static Object[] handleIptv361(Map<String, String> params) {
         try {
-            // 懒触发爬取（若尚未开始）
             IPlay361.triggerAsyncCrawl();
-            // 根据参数选择缓存 key，默认用 hotel 源
+            
+            // Wait for crawl to complete (max 15 seconds)
+            long start = System.currentTimeMillis();
+            while (IPlay361.isLoading() && (System.currentTimeMillis() - start) < 15000) {
+                try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+            }
+            
             String source = params.get("source");
             String key;
             if ("migu".equals(source) || "pmigu".equals(source)) {
-                key = IPlay361.OUTPUT_PROXY;   // iptvpmigu.txt
+                key = IPlay361.OUTPUT_PROXY;
             } else {
-                key = IPlay361.OUTPUT_HOTEL;   // iptvhote.txt
+                key = IPlay361.OUTPUT_HOTEL;
             }
-            // 获取缓存数据
             String txt = IPlay361.getCache(key);
             if (txt == null) txt = "";
             byte[] bytes = txt.getBytes("UTF-8");
             return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
         } catch (Exception e) {
-            log("❌ iptv361 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
+            log("? iptv361 error: " + e.getMessage());
             return errorResponse(500, e.getMessage());
         }
     }
