@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -83,6 +84,7 @@ public class Proxy {
         if ("danmu".equals(action)) return handleDanmu(params);
         if ("proxy".equals(action)) return handleCommonProxy(params);
         if ("iptvzb".equals(action)) return handleIptvZb(params);
+        if ("iptv361".equals(action)) return handleIptv361(params);
         return errorResponse(400, "Unknown action: " + action);
     }
 
@@ -469,6 +471,30 @@ public class Proxy {
             return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
         } catch (Exception e) {
             log("❌ iptvzb 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
+            return errorResponse(500, e.getMessage());
+        }
+    }
+
+    // ====================== IPTV 361 直播源代理 ======================
+    private static Object[] handleIptv361(Map<String, String> params) {
+        try {
+            // 懒触发爬取（若尚未开始）
+            IPlay361.triggerAsyncCrawl();
+            // 根据参数选择缓存 key，默认用 hotel 源
+            String source = params.get("source");
+            String key;
+            if ("migu".equals(source) || "pmigu".equals(source)) {
+                key = IPlay361.OUTPUT_PROXY;   // iptvpmigu.txt
+            } else {
+                key = IPlay361.OUTPUT_HOTEL;   // iptvhote.txt
+            }
+            // 获取缓存数据
+            String txt = IPlay361.getCache(key);
+            if (txt == null) txt = "";
+            byte[] bytes = txt.getBytes("UTF-8");
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            log("❌ iptv361 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
             return errorResponse(500, e.getMessage());
         }
     }
