@@ -57,25 +57,24 @@ public class JiuSe extends Spider {
         try {
             super.init(context, extend);
         } catch (Exception e) {
-            // 捕获父类抛出的 Exception，解决 compileReleaseJavaWithJavac 编译中断
+            // 捕获父类 throws Exception
         }
-        // 门禁校验
         this.unlocked = PasswordGate.ensureUnlocked(context);
     }
 
     @Override
     public String homeContent(boolean filter) {
         if (!unlocked) {
-            return Result.string(new ArrayList<Class>());
+            return Result.get().classes(new ArrayList<Class>()).string();
         }
         try {
             List<Class> classes = new ArrayList<Class>();
             for (Map.Entry<String, String> entry : CATEGORY_MAP.entrySet()) {
                 classes.add(new Class(entry.getValue(), entry.getKey()));
             }
-            return Result.string(classes);
+            return Result.get().classes(classes).string();
         } catch (Exception e) {
-            return Result.string(new ArrayList<Class>());
+            return Result.get().classes(new ArrayList<Class>()).string();
         }
     }
 
