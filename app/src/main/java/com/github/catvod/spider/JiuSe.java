@@ -29,9 +29,9 @@ public class JiuSe extends Spider {
     private static final String HOST = "https://dsc.jiuse20.asia";
     private static final String UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Mobile/15E148 Safari/604.1";
     private static final String VOD_SOURCE = "九色云播";
-    private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<String, String>();
 
-    private Context appContext;
+    private boolean unlocked = false;
 
     static {
         CATEGORY_MAP.put("舔逼", "舔逼");
@@ -43,7 +43,7 @@ public class JiuSe extends Spider {
     }
 
     private Map<String, String> getHeaders() {
-        Map<String, String> headers = new HashMap<>();
+        Map<String, String> headers = new HashMap<String, String>();
         headers.put("User-Agent", UA);
         headers.put("Referer", HOST + "/");
         return headers;
@@ -59,37 +59,37 @@ public class JiuSe extends Spider {
 
     @Override
     public void init(Context context, String extend) {
-        super.init(context, extend);
-        this.appContext = context;
-    }
-
-    private boolean checkGate() {
-        if (appContext == null) return true;
-        return PasswordGate.ensureUnlocked(appContext);
+        try {
+            super.init(context, extend);
+        } catch (Exception e) {
+            // 捕获父类抛出的 Exception，解决 compileReleaseJavaWithJavac 编译中断
+        }
+        
+        // 门禁校验
+        this.unlocked = PasswordGate.ensureUnlocked(context);
     }
 
     @Override
     public String homeContent(boolean filter) {
+        if (!unlocked) {
+            return Result.string(new ArrayList<Class>(), new ArrayList<String>());
+        }
+
         try {
-            List<Class> classes = new ArrayList<>();
+            List<Class> classes = new ArrayList<Class>();
             for (Map.Entry<String, String> entry : CATEGORY_MAP.entrySet()) {
                 classes.add(new Class(entry.getValue(), entry.getKey()));
             }
 
-            if (!checkGate()) {
-                return Result.string(new ArrayList<>(), new ArrayList<>());
-            }
-
-            // 只返回分类列表，不返回推荐列表，极大加快进入应用和加载主页的速度
-            return Result.string(classes, new ArrayList<>());
+            return Result.string(classes, new ArrayList<String>());
         } catch (Exception e) {
-            return Result.string(new ArrayList<>(), new ArrayList<>());
+            return Result.string(new ArrayList<Class>(), new ArrayList<String>());
         }
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        if (!checkGate()) return Result.string(new ArrayList<>());
+        if (!unlocked) return Result.string(new ArrayList<Vod>());
 
         try {
             String keyword = tid;
@@ -101,13 +101,13 @@ public class JiuSe extends Spider {
 
             return Result.string(list);
         } catch (Exception e) {
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
     @Override
     public String detailContent(List<String> ids) {
-        if (!checkGate()) return Result.string(new ArrayList<>());
+        if (!unlocked) return Result.string(new ArrayList<Vod>());
 
         try {
             String rawId = ids.get(0);
@@ -119,10 +119,9 @@ public class JiuSe extends Spider {
 
             String html = get(url);
             if (TextUtils.isEmpty(html)) {
-                return Result.string(new ArrayList<>());
+                return Result.string(new ArrayList<Vod>());
             }
 
-            // 使用字符串切片替代正则过滤，提速明显
             String startStr = "$avdt = ";
             String endStr = "</script>";
             int startPos = html.indexOf(startStr);
@@ -141,7 +140,7 @@ public class JiuSe extends Spider {
                         String hlsPath = data.getString("hls").replace("\\/", "/");
                         JSONArray cdns = data.optJSONArray("cdns");
 
-                        List<String> playLines = new ArrayList<>();
+                        List<String> playLines = new ArrayList<String>();
                         if (cdns != null && cdns.length() > 0) {
                             for (int i = 0; i < cdns.length(); i++) {
                                 String domain = cdns.getString(i).replaceAll("^/|/$", "");
@@ -160,18 +159,18 @@ public class JiuSe extends Spider {
                     }
                 }
             }
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         } catch (Exception e) {
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        if (!checkGate()) return Result.get().string();
+        if (!unlocked) return Result.get().string();
 
         try {
-            Map<String, String> headers = new HashMap<>();
+            Map<String, String> headers = new HashMap<String, String>();
             headers.put("User-Agent", UA);
             headers.put("Referer", HOST + "/");
 
@@ -183,9 +182,9 @@ public class JiuSe extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        if (!checkGate()) return Result.string(new ArrayList<>());
+        if (!unlocked) return Result.string(new ArrayList<Vod>());
 
-        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
+        if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<Vod>());
         try {
             String url = HOST + "/search?keywords=" + URLEncoder.encode(key, "UTF-8") + "&page=1";
             String html = get(url);
@@ -193,23 +192,19 @@ public class JiuSe extends Spider {
             List<Vod> list = parseVodListWithJsoup(html, "搜索:" + key);
             return Result.string(list);
         } catch (Exception e) {
-            return Result.string(new ArrayList<>());
+            return Result.string(new ArrayList<Vod>());
         }
     }
 
-    /**
-     * 改用 Jsoup 进行 DOM 解析，效率大幅提升，避免正则死循环回溯
-     */
     private List<Vod> parseVodListWithJsoup(String html, String displayType) {
-        List<Vod> list = new ArrayList<>();
+        List<Vod> list = new ArrayList<Vod>();
         if (TextUtils.isEmpty(html)) return list;
 
         try {
             Document doc = Jsoup.parse(html);
-            // 根据 class 结构定位视频卡片容器
             Elements items = doc.select("a.card-image, div.card-image a");
             if (items.isEmpty()) {
-                items = doc.select("a[href*=/view/]"); // 兜底选择器
+                items = doc.select("a[href*=/view/]");
             }
 
             for (Element item : items) {
@@ -239,7 +234,7 @@ public class JiuSe extends Spider {
                 list.add(vod);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            // 忽略解析错误
         }
         return list;
     }
