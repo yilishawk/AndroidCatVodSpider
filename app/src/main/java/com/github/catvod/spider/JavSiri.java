@@ -38,9 +38,6 @@ public class JavSiri extends Spider {
         return headers;
     }
 
-    /**
-     * 直接请求目标 URL
-     */
     private String get(String targetUrl) {
         logger("请求: " + targetUrl);
         try {
@@ -57,19 +54,24 @@ public class JavSiri extends Spider {
     }
 
     @Override
-    public void init(Context context, String extend) throws Exception {
-        super.init(context, extend);
+    public void init(Context context, String extend) {
+        try {
+            super.init(context, extend);
+        } catch (Exception e) {
+            logger("super.init 异常: " + e.getMessage());
+        }
         logger("🚀 初始化 JavSiri（直连模式）...");
 
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
-            throw new Exception("Password verification failed. Source initialization aborted.");
+            logger("密码门禁未通过，初始化终止");
+        } else {
+            logger("密码门禁通过");
         }
-        logger("密码门禁通过");
     }
 
     @Override
-    public String homeContent(boolean filter) throws Exception {
+    public String homeContent(boolean filter) {
         if (!unlocked) {
             return Result.get().classes(new ArrayList<Class>()).string();
         }
@@ -100,115 +102,131 @@ public class JavSiri extends Spider {
     }
 
     @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         if (!unlocked) {
             int page = Integer.parseInt(pg);
             return Result.get().vod(new ArrayList<Vod>()).page(page, 0, 0, 0).string();
         }
 
-        int page = Integer.parseInt(pg);
-        String url = HOST + "/zh/tags/" + tid + "/?mode=async&function=get_block&block_id=list_videos_common_videos_list&sort_by=post_date&from=" + page + "&_=" + System.currentTimeMillis();
-        logger("分类请求 tid=" + tid + " page=" + page);
+        try {
+            int page = Integer.parseInt(pg);
+            String url = HOST + "/zh/tags/" + tid + "/?mode=async&function=get_block&block_id=list_videos_common_videos_list&sort_by=post_date&from=" + page + "&_=" + System.currentTimeMillis();
+            logger("分类请求 tid=" + tid + " page=" + page);
 
-        String html = get(url);
-        List<Vod> list = parseVideoList(html);
-        logger("分类解析结果数量: " + list.size());
+            String html = get(url);
+            List<Vod> list = parseVideoList(html);
+            logger("分类解析结果数量: " + list.size());
 
-        int totalPage = page;
-        if (list.size() >= 10) {
-            totalPage = page + 1;
+            int totalPage = page;
+            if (list.size() >= 10) {
+                totalPage = page + 1;
+            }
+
+            return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
+        } catch (Exception e) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
         }
-
-        return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
     }
 
     @Override
-    public String detailContent(List<String> ids) throws Exception {
+    public String detailContent(List<String> ids) {
         if (!unlocked) {
             return Result.get().string();
         }
 
-        String id = ids.get(0);
-        String detailUrl = HOST + "/zh/video/" + id;
-        logger("详情请求: " + detailUrl);
+        try {
+            String id = ids.get(0);
+            String detailUrl = HOST + "/zh/video/" + id;
+            logger("详情请求: " + detailUrl);
 
-        String html = get(detailUrl);
-        logger("详情页长度: " + (html == null ? 0 : html.length()));
+            String html = get(detailUrl);
+            logger("详情页长度: " + (html == null ? 0 : html.length()));
 
-        Vod vod = new Vod();
-        vod.setVodId(id);
+            Vod vod = new Vod();
+            vod.setVodId(id);
 
-        Pattern pTitle = Pattern.compile("video_title:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mTitle = pTitle.matcher(html == null ? "" : html);
-        String title = mTitle.find() ? mTitle.group(1) : "Video " + id;
-        vod.setVodName(title);
-        logger("标题: " + title);
+            Pattern pTitle = Pattern.compile("video_title:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+            Matcher mTitle = pTitle.matcher(html == null ? "" : html);
+            String title = mTitle.find() ? mTitle.group(1) : "Video " + id;
+            vod.setVodName(title);
+            logger("标题: " + title);
 
-        Pattern pPic = Pattern.compile("preview_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mPic = pPic.matcher(html == null ? "" : html);
-        if (mPic.find()) {
-            vod.setVodPic(mPic.group(1));
+            Pattern pPic = Pattern.compile("preview_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+            Matcher mPic = pPic.matcher(html == null ? "" : html);
+            if (mPic.find()) {
+                vod.setVodPic(mPic.group(1));
+            }
+
+            vod.setVodPlayFrom("JavSiri主线");
+            vod.setVodPlayUrl("立即播放$" + id);
+
+            return Result.get().vod(vod).string();
+        } catch (Exception e) {
+            return Result.get().string();
         }
-
-        vod.setVodPlayFrom("JavSiri主线");
-        vod.setVodPlayUrl("立即播放$" + id);
-
-        return Result.get().vod(vod).string();
     }
 
     @Override
-    public String searchContent(String key, boolean quick) throws Exception {
+    public String searchContent(String key, boolean quick) {
         if (!unlocked) {
             return Result.get().vod(new ArrayList<Vod>()).string();
         }
 
-        String url = HOST + "/zh/search/" + key + "/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=" + key + "&category_ids=&sort_by=post_date&from_videos=1&from_albums=1&_" + System.currentTimeMillis();
-        logger("搜索请求: " + key);
+        try {
+            String url = HOST + "/zh/search/" + key + "/?mode=async&function=get_block&block_id=list_videos_videos_list_search_result&q=" + key + "&category_ids=&sort_by=post_date&from_videos=1&from_albums=1&_" + System.currentTimeMillis();
+            logger("搜索请求: " + key);
 
-        String html = get(url);
-        List<Vod> list = parseVideoList(html);
-        logger("搜索结果数量: " + list.size());
+            String html = get(url);
+            List<Vod> list = parseVideoList(html);
+            logger("搜索结果数量: " + list.size());
 
-        return Result.get().vod(list).string();
+            return Result.get().vod(list).string();
+        } catch (Exception e) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
+        }
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String detailUrl = HOST + "/zh/video/" + id;
-        logger("播放解析: " + detailUrl);
+    public String playerContent(String flag, String id, List<String> vipFlags) {
+        try {
+            String detailUrl = HOST + "/zh/video/" + id;
+            logger("播放解析: " + detailUrl);
 
-        String html = get(detailUrl);
-        logger("播放页长度: " + (html == null ? 0 : html.length()));
+            String html = get(detailUrl);
+            logger("播放页长度: " + (html == null ? 0 : html.length()));
 
-        String playUrl = "";
+            String playUrl = "";
 
-        // 优先 720p
-        Pattern pAltUrl = Pattern.compile("video_alt_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-        Matcher mAltUrl = pAltUrl.matcher(html == null ? "" : html);
-        if (mAltUrl.find()) {
-            playUrl = mAltUrl.group(1);
-            logger("匹配到 720p: " + playUrl);
-        }
-
-        // 降级 480p
-        if (TextUtils.isEmpty(playUrl)) {
-            Pattern pUrl = Pattern.compile("video_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-            Matcher mUrl = pUrl.matcher(html == null ? "" : html);
-            if (mUrl.find()) {
-                playUrl = mUrl.group(1);
-                logger("匹配到 480p: " + playUrl);
+            // 优先 720p
+            Pattern pAltUrl = Pattern.compile("video_alt_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+            Matcher mAltUrl = pAltUrl.matcher(html == null ? "" : html);
+            if (mAltUrl.find()) {
+                playUrl = mAltUrl.group(1);
+                logger("匹配到 720p: " + playUrl);
             }
+
+            // 降级 480p
+            if (TextUtils.isEmpty(playUrl)) {
+                Pattern pUrl = Pattern.compile("video_url:\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+                Matcher mUrl = pUrl.matcher(html == null ? "" : html);
+                if (mUrl.find()) {
+                    playUrl = mUrl.group(1);
+                    logger("匹配到 480p: " + playUrl);
+                }
+            }
+
+            if (TextUtils.isEmpty(playUrl)) {
+                logger("❌ 未提取到播放地址");
+            }
+
+            Map<String, String> headers = new HashMap<String, String>();
+            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            headers.put("Referer", HOST + "/");
+
+            return Result.get().url(playUrl).header(headers).string();
+        } catch (Exception e) {
+            return Result.get().url("").string();
         }
-
-        if (TextUtils.isEmpty(playUrl)) {
-            logger("❌ 未提取到播放地址");
-        }
-
-        Map<String, String> headers = new HashMap<String, String>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        headers.put("Referer", HOST + "/");
-
-        return Result.get().url(playUrl).header(headers).string();
     }
 
     private List<Vod> parseVideoList(String html) {
