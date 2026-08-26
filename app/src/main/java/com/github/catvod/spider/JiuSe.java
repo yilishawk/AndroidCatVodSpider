@@ -23,8 +23,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class JiuSe extends Spider {
 
@@ -33,9 +31,11 @@ public class JiuSe extends Spider {
     private static final String VOD_SOURCE = "九色云播";
     private static final LinkedHashMap<String, String> CATEGORY_MAP = new LinkedHashMap<>();
 
+    private Context appContext;
+
     static {
         CATEGORY_MAP.put("舔逼", "舔逼");
-        CATEGORY_MAP.put("双洞", "三人"); // 兼容 PHP 中的映射逻辑
+        CATEGORY_MAP.put("双洞", "三人");
         CATEGORY_MAP.put("自慰", "自慰");
         CATEGORY_MAP.put("群交", "群交");
         CATEGORY_MAP.put("肛交", "肛交");
@@ -58,12 +58,29 @@ public class JiuSe extends Spider {
     }
 
     @Override
+    public void init(Context context, String extend) {
+        super.init(context, extend);
+        this.appContext = context;
+    }
+
+    private boolean checkGate() {
+        if (appContext == null) return true;
+        return PasswordGate.ensureUnlocked(appContext);
+    }
+
+    @Override
     public String homeContent(boolean filter) {
         try {
             List<Class> classes = new ArrayList<>();
             for (Map.Entry<String, String> entry : CATEGORY_MAP.entrySet()) {
                 classes.add(new Class(entry.getValue(), entry.getKey()));
             }
+
+            if (!checkGate()) {
+                return Result.string(new ArrayList<>(), new ArrayList<>());
+            }
+
+            // 只返回分类列表，不返回推荐列表，极大加快进入应用和加载主页的速度
             return Result.string(classes, new ArrayList<>());
         } catch (Exception e) {
             return Result.string(new ArrayList<>(), new ArrayList<>());
@@ -72,14 +89,16 @@ public class JiuSe extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
+        if (!checkGate()) return Result.string(new ArrayList<>());
+
         try {
             String keyword = tid;
             String displayType = "三人".equals(tid) ? "双洞" : tid;
             String url = HOST + "/search?keywords=" + URLEncoder.encode(keyword, "UTF-8") + "&page=" + pg;
-            
+
             String html = get(url);
-            List<Vod> list = parseVodList(html, displayType);
-            
+            List<Vod> list = parseVodListWithJsoup(html, displayType);
+
             return Result.string(list);
         } catch (Exception e) {
             return Result.string(new ArrayList<>());
@@ -88,11 +107,12 @@ public class JiuSe extends Spider {
 
     @Override
     public String detailContent(List<String> ids) {
+        if (!checkGate()) return Result.string(new ArrayList<>());
+
         try {
             String rawId = ids.get(0);
             String url = rawId.startsWith("http") ? rawId : HOST + rawId;
 
-            // 从带参数的 URL 中提取预传的 name 与 type
             Uri uri = Uri.parse(url);
             String vName = uri.getQueryParameter("name");
             if (TextUtils.isEmpty(vName)) vName = "未知标题";
@@ -102,7 +122,7 @@ public class JiuSe extends Spider {
                 return Result.string(new ArrayList<>());
             }
 
-            // 匹配字符串: $avdt = { ... };
+            // 使用字符串切片替代正则过滤，提速明显
             String startStr = "$avdt = ";
             String endStr = "</script>";
             int startPos = html.indexOf(startStr);
@@ -148,8 +168,9 @@ public class JiuSe extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
+        if (!checkGate()) return Result.get().string();
+
         try {
-            // 匹配到的播放链接为直接可播的 m3u8，直接追加 Request Headers 返回
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Referer", HOST + "/");
@@ -162,12 +183,14 @@ public class JiuSe extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
+        if (!checkGate()) return Result.string(new ArrayList<>());
+
         if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
         try {
             String url = HOST + "/search?keywords=" + URLEncoder.encode(key, "UTF-8") + "&page=1";
             String html = get(url);
 
-            List<Vod> list = parseVodList(html, "搜索:" + key);
+            List<Vod> list = parseVodListWithJsoup(html, "搜索:" + key);
             return Result.string(list);
         } catch (Exception e) {
             return Result.string(new ArrayList<>());
@@ -175,37 +198,48 @@ public class JiuSe extends Spider {
     }
 
     /**
-     * 对应 PHP 中的正则匹配解析逻辑
+     * 改用 Jsoup 进行 DOM 解析，效率大幅提升，避免正则死循环回溯
      */
-    private List<Vod> parseVodList(String html, String displayType) {
+    private List<Vod> parseVodListWithJsoup(String html, String displayType) {
         List<Vod> list = new ArrayList<>();
         if (TextUtils.isEmpty(html)) return list;
 
-        // 原 PHP 正则：card-image.*?href="(.*?)".*?alt="(.*?)".*?src="(.*?)".*?duration">(.*?)<\/span>
-        Pattern pattern = Pattern.compile("card-image.*?href=\"(.*?)\".*?alt=\"(.*?)\".*?src=\"(.*?)\".*?duration\">(.*?)<\\/span>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
-        Matcher matcher = pattern.matcher(html);
-
-        while (matcher.find()) {
-            String link = matcher.group(1).trim();
-            String vTitle = matcher.group(2).trim();
-            String pic = matcher.group(3).trim();
-            String duration = matcher.group(4).trim();
-
-            // 拼接自定义 query 参数，与 PHP parse_str 传递参数逻辑一致
-            String sep = link.contains("?") ? "&" : "?";
-            String jumpId;
-            try {
-                jumpId = HOST + link + sep + "name=" + URLEncoder.encode(vTitle, "UTF-8") + "&type=" + URLEncoder.encode(displayType, "UTF-8");
-            } catch (Exception e) {
-                jumpId = HOST + link;
+        try {
+            Document doc = Jsoup.parse(html);
+            // 根据 class 结构定位视频卡片容器
+            Elements items = doc.select("a.card-image, div.card-image a");
+            if (items.isEmpty()) {
+                items = doc.select("a[href*=/view/]"); // 兜底选择器
             }
 
-            Vod vod = new Vod();
-            vod.setVodId(jumpId);
-            vod.setVodName(vTitle);
-            vod.setVodPic(pic);
-            vod.setVodRemarks(duration);
-            list.add(vod);
+            for (Element item : items) {
+                String link = item.attr("href");
+                Element img = item.selectFirst("img");
+                Element durationEl = item.selectFirst("span.duration");
+
+                String vTitle = img != null ? img.attr("alt") : "";
+                String pic = img != null ? img.attr("src") : "";
+                String duration = durationEl != null ? durationEl.text() : "";
+
+                if (TextUtils.isEmpty(link) || TextUtils.isEmpty(vTitle)) continue;
+
+                String sep = link.contains("?") ? "&" : "?";
+                String jumpId;
+                try {
+                    jumpId = HOST + link + sep + "name=" + URLEncoder.encode(vTitle, "UTF-8") + "&type=" + URLEncoder.encode(displayType, "UTF-8");
+                } catch (Exception e) {
+                    jumpId = HOST + link;
+                }
+
+                Vod vod = new Vod();
+                vod.setVodId(jumpId);
+                vod.setVodName(vTitle);
+                vod.setVodPic(pic);
+                vod.setVodRemarks(duration);
+                list.add(vod);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
         return list;
     }
