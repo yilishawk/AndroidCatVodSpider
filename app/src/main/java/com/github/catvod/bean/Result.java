@@ -9,7 +9,6 @@ import com.google.gson.reflect.TypeToken;
 import org.json.JSONObject;
 
 import java.lang.reflect.Type;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -59,11 +58,9 @@ public class Result {
     public static String string(List<Class> classes, List<Vod> list, LinkedHashMap<String, List<Filter>> filters) {
         return Result.get().classes(classes).vod(list).filters(filters).string();
     }
-
-    public static String string(Integer page, Integer pagecount, Integer limit, Integer total, List<Vod> list) {
-        return Result.get().page(page, pagecount, limit, total).vod(list).string();
+    public static String string(Integer page,Integer pagecount,Integer limit,Integer total,List<Vod> list){
+        return Result.get().page(page,pagecount,limit,total).vod(list).string();
     }
-
     public static String string(List<Class> classes, List<Vod> list, JSONObject filters) {
         return Result.get().classes(classes).vod(list).filters(filters).string();
     }
@@ -88,30 +85,8 @@ public class Result {
         return Result.get().classes(classes).vod(list).string();
     }
 
-    /** 只返回分类列表（兼容 Result.string(classes) 写法） */
-    public static String string(List<Class> classes) {
-        return Result.get().classes(classes == null ? new ArrayList<Class>() : classes).string();
-    }
-
     public static String string(List<Vod> list) {
         return Result.get().vod(list).string();
-    }
-
-    /**
-     * 兼容 FongMi 写法：自动判断 List 里是 Class 还是 Vod
-     * 空列表返回空字符串
-     */
-    @SuppressWarnings("unchecked")
-    public static String string(List<?> list) {
-        if (list == null || list.isEmpty()) return "";
-        Object first = list.get(0);
-        if (first instanceof Vod) {
-            return Result.get().vod((List<Vod>) list).string();
-        }
-        if (first instanceof Class) {
-            return Result.get().classes((List<Class>) list).string();
-        }
-        return "";
     }
 
     public static String string(Vod item) {
