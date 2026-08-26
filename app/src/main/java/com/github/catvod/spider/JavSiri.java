@@ -86,7 +86,7 @@ public class JavSiri extends Spider {
         classes.add(new Class("nice-tits", "好奶子"));
         classes.add(new Class("fair-skin", "白皙皮肤"));
         classes.add(new Class("mature-woman", "熟女"));
-        classes.add(new Class("orgy", "群交"));
+        classes.add(new Class("orgy", "群交吧"));
         classes.add(new Class("high-school-girl", "高中女生"));
         classes.add(new Class("slim", "苗条"));
         classes.add(new Class("uncensored", "无码"));
