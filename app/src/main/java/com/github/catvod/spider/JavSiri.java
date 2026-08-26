@@ -2,7 +2,6 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
-import android.util.Base64;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
@@ -20,7 +19,6 @@ import java.util.regex.Pattern;
 public class JavSiri extends Spider {
 
     private static final String HOST = "https://javsiri.cc";
-    private static final String AZURE_PROXY = "https://azureserv.com/?__cpo=";
 
     private boolean unlocked = false;
 
@@ -41,27 +39,12 @@ public class JavSiri extends Spider {
     }
 
     /**
-     * 把目标 URL 转成 azureserv 代理地址
-     */
-    private String toAzureUrl(String targetUrl) {
-        try {
-            String encoded = Base64.encodeToString(targetUrl.getBytes("UTF-8"), Base64.NO_WRAP);
-            return AZURE_PROXY + encoded;
-        } catch (Exception e) {
-            logger("Base64 编码失败: " + e.getMessage());
-            return targetUrl;
-        }
-    }
-
-    /**
-     * 通过 azureserv 代理请求页面
+     * 直接请求目标 URL
      */
     private String get(String targetUrl) {
-        String proxyUrl = toAzureUrl(targetUrl);
         logger("请求: " + targetUrl);
-        logger("代理: " + proxyUrl);
         try {
-            String html = OkHttp.string(proxyUrl, getHeaders());
+            String html = OkHttp.string(targetUrl, getHeaders());
             if (!TextUtils.isEmpty(html) && html.length() > 200) {
                 logger("成功，长度: " + html.length());
                 return html;
@@ -76,7 +59,7 @@ public class JavSiri extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
-        logger("🚀 初始化 JavSiri（Azure 代理模式）...");
+        logger("🚀 初始化 JavSiri（直连模式）...");
 
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
@@ -221,7 +204,6 @@ public class JavSiri extends Spider {
             logger("❌ 未提取到播放地址");
         }
 
-        // 播放直链不走 azureserv，直接返回给播放器
         Map<String, String> headers = new HashMap<String, String>();
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         headers.put("Referer", HOST + "/");
