@@ -24,7 +24,7 @@ public class Xszav2 extends Spider {
     private static final String HOST = "https://cn.xszav2.com";
     private boolean unlocked = false;
 
-    // ==================== 分类映射（ID → 中文标题） ====================
+    // ==================== 分类映射 ====================
     private static final Map<String, String> CATEGORY_MAP = new LinkedHashMap<>();
     static {
         CATEGORY_MAP.put("アナル", "肛交");
@@ -38,6 +38,8 @@ public class Xszav2 extends Spider {
         CATEGORY_MAP.put("摄像头", "摄像头");
         CATEGORY_MAP.put("麻豆", "麻豆");
         CATEGORY_MAP.put("五十路 無修正リーク", "五十路 無修正リーク");
+        // 额外加一个英文测试
+        CATEGORY_MAP.put("anal", "anal(测试)");
     }
 
     private void logger(String msg) {
@@ -50,9 +52,19 @@ public class Xszav2 extends Spider {
 
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+        headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7");
+        headers.put("Accept-Encoding", "gzip, deflate, br");
+        headers.put("Sec-Ch-Ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"");
+        headers.put("Sec-Ch-Ua-Mobile", "?1");
+        headers.put("Sec-Ch-Ua-Platform", "\"Android\"");
+        headers.put("Sec-Fetch-Dest", "document");
+        headers.put("Sec-Fetch-Mode", "navigate");
+        headers.put("Sec-Fetch-Site", "none");
+        headers.put("Sec-Fetch-User", "?1");
+        headers.put("Upgrade-Insecure-Requests", "1");
+        headers.put("Cache-Control", "max-age=0");
         headers.put("Referer", HOST + "/");
         return headers;
     }
@@ -61,11 +73,19 @@ public class Xszav2 extends Spider {
         logger("请求: " + targetUrl);
         try {
             String html = OkHttp.string(targetUrl, getHeaders());
-            if (!TextUtils.isEmpty(html) && html.length() > 200) {
-                logger("成功，长度: " + html.length());
-                return html;
+            if (TextUtils.isEmpty(html)) {
+                logger("返回空");
+                return "";
             }
-            logger("返回空或过短，长度: " + (html == null ? 0 : html.length()));
+            // Cloudflare 检测
+            if (html.contains("Just a moment") || html.contains("cf-browser-verification") ||
+                html.contains("Verify you are human") || html.contains("challenge-platform") ||
+                html.contains("Performing security verification")) {
+                logger("❌ Cloudflare 拦截！返回了验证页，长度: " + html.length());
+                return "";
+            }
+            logger("成功，长度: " + html.length());
+            return html;
         } catch (Exception e) {
             logger("请求异常: " + e.getMessage());
         }
@@ -79,10 +99,10 @@ public class Xszav2 extends Spider {
         } catch (Exception e) {
             logger("super.init 异常: " + e.getMessage());
         }
-        logger("🚀 初始化 Xszav2（直连模式）...");
+        logger("🚀 初始化 Xszav2...");
         this.unlocked = PasswordGate.ensureUnlocked(context);
         if (!this.unlocked) {
-            logger("密码门禁未通过，初始化终止");
+            logger("密码门禁未通过");
         } else {
             logger("密码门禁通过");
         }
@@ -114,15 +134,12 @@ public class Xszav2 extends Spider {
             if (page > 1) {
                 url += "?page=" + page;
             }
-            logger("分类请求 tid=" + tid + " page=" + page);
+            logger("分类请求 tid=" + tid + " page=" + page + " → " + url);
             String html = get(url);
             List<Vod> list = parseVideoList(html);
             logger("分类解析结果数量: " + list.size());
 
-            int totalPage = page;
-            if (list.size() >= 20) {
-                totalPage = page + 1;
-            }
+            int totalPage = list.size() >= 15 ? page + 1 : page;
             return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
         } catch (Exception e) {
             logger("categoryContent 异常: " + e.getMessage());
@@ -140,28 +157,18 @@ public class Xszav2 extends Spider {
             String detailUrl = HOST + "/video/" + id;
             logger("详情请求: " + detailUrl);
             String html = get(detailUrl);
-            logger("详情页长度: " + (html == null ? 0 : html.length()));
 
             Vod vod = new Vod();
             vod.setVodId(id);
 
-            // 标题
             String title = "Video " + id;
-            Pattern pTitle = Pattern.compile("alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+            Pattern pTitle = Pattern.compile("(?:alt|title)=\"([^\"]{5,})\"", Pattern.CASE_INSENSITIVE);
             Matcher mTitle = pTitle.matcher(html == null ? "" : html);
             if (mTitle.find()) {
                 title = mTitle.group(1);
-            } else {
-                Pattern pTitle2 = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-                Matcher mTitle2 = pTitle2.matcher(html == null ? "" : html);
-                if (mTitle2.find()) {
-                    title = mTitle2.group(1);
-                }
             }
             vod.setVodName(title);
-            logger("标题: " + title);
 
-            // 封面
             Pattern pPic = Pattern.compile("src=\"(https://img\\.xszav2\\.com[^\"]+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mPic = pPic.matcher(html == null ? "" : html);
             if (mPic.find()) {
@@ -170,7 +177,6 @@ public class Xszav2 extends Spider {
 
             vod.setVodPlayFrom("Xszav2");
             vod.setVodPlayUrl("立即播放$" + id);
-
             return Result.get().vod(vod).string();
         } catch (Exception e) {
             logger("detailContent 异常: " + e.getMessage());
@@ -184,7 +190,6 @@ public class Xszav2 extends Spider {
             return Result.get().vod(new ArrayList<Vod>()).string();
         }
         try {
-            // 搜索与分类格式完全相同
             String encoded = URLEncoder.encode(key, StandardCharsets.UTF_8.name()).replace("+", "%20");
             String url = HOST + "/search/videos/" + encoded;
             logger("搜索请求: " + key);
@@ -204,15 +209,9 @@ public class Xszav2 extends Spider {
             String detailUrl = HOST + "/video/" + id;
             logger("播放解析: " + detailUrl);
             String html = get(detailUrl);
-            logger("播放页长度: " + (html == null ? 0 : html.length()));
 
             String playUrl = "";
-
-            // 真实地址：<video src="/media/videos/xxxxx.m3u8">
-            Pattern pSrc = Pattern.compile(
-                    "<video[^>]+src=[\"']([^\"']+\\.m3u8)[\"']",
-                    Pattern.CASE_INSENSITIVE
-            );
+            Pattern pSrc = Pattern.compile("<video[^>]+src=[\"']([^\"']+\\.m3u8)[\"']", Pattern.CASE_INSENSITIVE);
             Matcher mSrc = pSrc.matcher(html == null ? "" : html);
             if (mSrc.find()) {
                 String src = mSrc.group(1).trim();
@@ -231,10 +230,10 @@ public class Xszav2 extends Spider {
                 return Result.get().url("").string();
             }
 
-            // Referer 必须使用当前视频详情页
+            // Referer 必须是当前视频详情页
             Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            headers.put("Referer", detailUrl);          // https://cn.xszav2.com/video/145394
+            headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+            headers.put("Referer", detailUrl);
             headers.put("Origin", HOST);
             headers.put("Accept", "*/*");
 
@@ -245,7 +244,7 @@ public class Xszav2 extends Spider {
         }
     }
 
-    // ==================== 列表页解析 ====================
+    // ==================== 更鲁棒的列表解析 ====================
     private List<Vod> parseVideoList(String html) {
         List<Vod> list = new ArrayList<>();
         if (TextUtils.isEmpty(html)) {
@@ -253,61 +252,89 @@ public class Xszav2 extends Spider {
             return list;
         }
 
-        // 匹配每个视频卡片
+        // 方法1：优先匹配带 class 的完整卡片（你之前提供的结构）
         Pattern pBlock = Pattern.compile(
-                "<div class=\"relative aspect-w-16 aspect-h-9[\\s\\S]*?</div>\\s*<div class=\"my-2 text-sm truncate\">[\\s\\S]*?</div>",
+                "<div class=\"relative aspect-w-16[\\s\\S]*?</div>\\s*<div class=\"my-2 text-sm truncate\">[\\s\\S]*?</div>",
                 Pattern.CASE_INSENSITIVE
         );
         Matcher mBlock = pBlock.matcher(html);
-        int blockCount = 0;
-
+        int count = 0;
         while (mBlock.find()) {
-            blockCount++;
+            count++;
             String block = mBlock.group(0);
-
-            // 视频ID
-            Pattern pId = Pattern.compile("cn\\.xszav2\\.com/video/(\\d+)", Pattern.CASE_INSENSITIVE);
-            Matcher mId = pId.matcher(block);
-            if (!mId.find()) continue;
-            String id = mId.group(1);
-
-            // 标题
-            String title = "Video " + id;
-            Pattern pTitle = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-            Matcher mTitle = pTitle.matcher(block);
-            if (mTitle.find()) {
-                title = mTitle.group(1);
-            } else {
-                Pattern pAlt = Pattern.compile("alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-                Matcher mAlt = pAlt.matcher(block);
-                if (mAlt.find()) title = mAlt.group(1);
-            }
-
-            // 封面
-            String img = "";
-            Pattern pImg = Pattern.compile("data-src=\"(https://img\\.xszav2\\.com[^\"]+)\"", Pattern.CASE_INSENSITIVE);
-            Matcher mImg = pImg.matcher(block);
-            if (mImg.find()) {
-                img = mImg.group(1);
-            }
-
-            // 时长
-            String duration = "";
-            Pattern pDur = Pattern.compile("<span[^>]*>\\s*([0-9:]+)\\s*</span>", Pattern.CASE_INSENSITIVE);
-            Matcher mDur = pDur.matcher(block);
-            if (mDur.find()) {
-                duration = mDur.group(1).trim();
-            }
-
-            Vod vod = new Vod();
-            vod.setVodId(id);
-            vod.setVodName(title);
-            vod.setVodPic(img);
-            vod.setVodRemarks(duration);
-            list.add(vod);
+            Vod vod = extractFromBlock(block);
+            if (vod != null) list.add(vod);
         }
 
-        logger("parseVideoList: 匹配到 block=" + blockCount + "，有效视频=" + list.size());
+        // 方法2：如果方法1没匹配到，用通用方式（找所有 /video/数字）
+        if (list.isEmpty()) {
+            logger("方法1无结果，启用通用解析");
+            Pattern pLink = Pattern.compile(
+                    "href=\"[^\"]*?/video/(\\d+)\"[^>]*(?:title|alt)=\"([^\"]+)\"|" +
+                    "(?:title|alt)=\"([^\"]+)\"[^>]*href=\"[^\"]*?/video/(\\d+)\"|" +
+                    "href=\"[^\"]*?/video/(\\d+)\"",
+                    Pattern.CASE_INSENSITIVE
+            );
+            Matcher mLink = pLink.matcher(html);
+            Map<String, Vod> map = new LinkedHashMap<>();
+            while (mLink.find()) {
+                String id = null;
+                String title = null;
+                if (mLink.group(1) != null) {
+                    id = mLink.group(1);
+                    title = mLink.group(2);
+                } else if (mLink.group(4) != null) {
+                    id = mLink.group(4);
+                    title = mLink.group(3);
+                } else if (mLink.group(5) != null) {
+                    id = mLink.group(5);
+                }
+                if (id == null || map.containsKey(id)) continue;
+
+                Vod vod = new Vod();
+                vod.setVodId(id);
+                vod.setVodName(TextUtils.isEmpty(title) ? "Video " + id : title);
+                // 尝试找封面
+                Pattern pImg = Pattern.compile("data-src=\"(https://img\\.xszav2\\.com[^\"]*" + id + "[^\"]*)\"", Pattern.CASE_INSENSITIVE);
+                Matcher mImg = pImg.matcher(html);
+                if (mImg.find()) {
+                    vod.setVodPic(mImg.group(1));
+                }
+                map.put(id, vod);
+            }
+            list.addAll(map.values());
+        }
+
+        logger("parseVideoList 最终数量: " + list.size() + " (方法1匹配块=" + count + ")");
         return list;
+    }
+
+    private Vod extractFromBlock(String block) {
+        Pattern pId = Pattern.compile("/video/(\\d+)", Pattern.CASE_INSENSITIVE);
+        Matcher mId = pId.matcher(block);
+        if (!mId.find()) return null;
+        String id = mId.group(1);
+
+        String title = "Video " + id;
+        Pattern pTitle = Pattern.compile("(?:title|alt)=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+        Matcher mTitle = pTitle.matcher(block);
+        if (mTitle.find()) title = mTitle.group(1);
+
+        String img = "";
+        Pattern pImg = Pattern.compile("data-src=\"(https://img\\.xszav2\\.com[^\"]+)\"", Pattern.CASE_INSENSITIVE);
+        Matcher mImg = pImg.matcher(block);
+        if (mImg.find()) img = mImg.group(1);
+
+        String duration = "";
+        Pattern pDur = Pattern.compile("<span[^>]*>\\s*([0-9:]+)\\s*</span>", Pattern.CASE_INSENSITIVE);
+        Matcher mDur = pDur.matcher(block);
+        if (mDur.find()) duration = mDur.group(1).trim();
+
+        Vod vod = new Vod();
+        vod.setVodId(id);
+        vod.setVodName(title);
+        vod.setVodPic(img);
+        vod.setVodRemarks(duration);
+        return vod;
     }
 }
