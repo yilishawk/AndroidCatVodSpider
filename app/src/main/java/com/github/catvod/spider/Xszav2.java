@@ -120,7 +120,7 @@ public class Xszav2 extends Spider {
             logger("分类解析结果数量: " + list.size());
 
             int totalPage = page;
-            if (list.size() >= 20) {          // 根据实际每页数量调整
+            if (list.size() >= 20) {
                 totalPage = page + 1;
             }
             return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
@@ -146,14 +146,17 @@ public class Xszav2 extends Spider {
             vod.setVodId(id);
 
             // 标题
+            String title = "Video " + id;
             Pattern pTitle = Pattern.compile("alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
             Matcher mTitle = pTitle.matcher(html == null ? "" : html);
-            String title = mTitle.find() ? mTitle.group(1) : "Video " + id;
-            // 备用 title 属性
-            if (title.startsWith("Video ")) {
+            if (mTitle.find()) {
+                title = mTitle.group(1);
+            } else {
                 Pattern pTitle2 = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-                Matcher mTitle2 = pTitle2.matcher(html);
-                if (mTitle2.find()) title = mTitle2.group(1);
+                Matcher mTitle2 = pTitle2.matcher(html == null ? "" : html);
+                if (mTitle2.find()) {
+                    title = mTitle2.group(1);
+                }
             }
             vod.setVodName(title);
             logger("标题: " + title);
@@ -225,11 +228,16 @@ public class Xszav2 extends Spider {
 
             if (TextUtils.isEmpty(playUrl)) {
                 logger("❌ 未提取到播放地址");
+                return Result.get().url("").string();
             }
 
+            // Referer 必须使用当前视频详情页
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            headers.put("Referer", HOST + "/");
+            headers.put("Referer", detailUrl);          // https://cn.xszav2.com/video/145394
+            headers.put("Origin", HOST);
+            headers.put("Accept", "*/*");
+
             return Result.get().url(playUrl).header(headers).string();
         } catch (Exception e) {
             logger("playerContent 异常: " + e.getMessage());
