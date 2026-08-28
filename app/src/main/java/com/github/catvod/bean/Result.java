@@ -15,6 +15,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+/**
+ * Crawl IPTV sources from https://tonkiang.us
+ * JAR 被加载后异步抓取，结果写入 /sdcard/TV/ 本地文件。
+ * 用免费 API 取北京时间，缓存不是当天则重新爬取。
+ */
 
 public class Result {
 
