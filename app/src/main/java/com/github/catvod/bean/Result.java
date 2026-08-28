@@ -85,11 +85,8 @@ public class Result {
         return Result.get().classes(classes).vod(list).string();
     }
 
-    public static String string(List<Vod> list) {
-        return Result.get().vod(list).string();
-    }
-
-    // ✅ 新增：泛型方法，兼容 List<Class> 和 List<Vod>，旧爬虫无需修改
+    // ========== 统一泛型方法，替代原有的 string(List<Vod>) ==========
+    // 自动识别 List 元素类型，支持 List<Vod> 和 List<Class>
     public static String string(List<?> list) {
         if (list == null || list.isEmpty()) return "";
         if (list.get(0) instanceof Vod) {
