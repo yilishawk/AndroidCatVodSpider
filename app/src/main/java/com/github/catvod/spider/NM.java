@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 
 /**
  * 农民影视
- * 网络走项目 OkHttp；返回走Class / Vod / Result，兼容新 FongMi 壳
+ * 网络走项目 OkHttp；返回走 Class / Vod / Result，兼容新 FongMi 壳
  */
 public class NM extends Spider {
 
