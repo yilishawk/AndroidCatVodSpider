@@ -34,7 +34,8 @@ import java.util.regex.Pattern;
 
 /**
  * Xszav2
- * 流程：WebView 打开域名过 CF → 取出 Cookie → OkHttp 带 Cookie 访问分类/搜索/详情/播放
+ * WebView 打开域名过 CF 取 Cookie → OkHttp 带 Cookie 访问分类/搜索/详情/播放
+ * 翻页: /search/videos/{kw}  第2页起 ?page=N
  */
 public class Xszav2 extends Spider {
 
@@ -43,7 +44,6 @@ public class Xszav2 extends Spider {
             "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
     private static final long CF_TIMEOUT_SEC = 30L;
-    /** Cookie 缓存时间，避免每个分类都开 WebView */
     private static final long COOKIE_TTL_MS = 20 * 60 * 1000L;
 
     private boolean unlocked = false;
@@ -78,7 +78,7 @@ public class Xszav2 extends Spider {
         }
     }
 
-    // ==================== Cookie / CF ====================
+    // ==================== Cookie / 请求 ====================
 
     private boolean hasFreshCookie() {
         return !TextUtils.isEmpty(cachedCookie)
@@ -104,7 +104,6 @@ public class Xszav2 extends Spider {
         return headers;
     }
 
-    /** 严格判断挑战页，避免 challenge-platform 误伤正常页 */
     private boolean isChallenge(String html) {
         if (TextUtils.isEmpty(html)) return true;
         String h = html.toLowerCase();
@@ -116,28 +115,25 @@ public class Xszav2 extends Spider {
         return false;
     }
 
-    /**
-     * 业务请求：确保已有会话 Cookie → OkHttp 访问分类等 URL
-     */
+    /** 确保 Cookie → OkHttp 拉业务页 */
     private String get(String targetUrl) {
         logger("请求: " + targetUrl);
         try {
             if (!hasFreshCookie()) {
-                logger("Cookie 无效/过期，WebView 访问域名取 Cookie…");
+                logger("Cookie 无效/过期，WebView 打开域名取 Cookie…");
                 boolean ok = ensureCookieByWebView();
-                logger("WebView 取 Cookie 结果=" + ok + " len="
-                        + (cachedCookie == null ? 0 : cachedCookie.length()));
+                logger("取 Cookie 结果=" + ok + " len=" + (cachedCookie == null ? 0 : cachedCookie.length()));
                 if (!ok && TextUtils.isEmpty(cachedCookie)) {
-                    logger("无可用 Cookie，放弃");
+                    logger("无可用 Cookie");
                     return "";
                 }
             }
 
             String html = OkHttp.string(targetUrl, getHeaders());
-            logger("OkHttp 返回 len=" + (html == null ? 0 : html.length()));
+            logger("OkHttp len=" + (html == null ? 0 : html.length()));
 
             if (isChallenge(html)) {
-                logger("OkHttp 仍像挑战页，强制 WebView 刷新 Cookie 再试一次");
+                logger("仍像挑战页，强制刷新 Cookie 再试");
                 cachedCookie = "";
                 cachedCookieAt = 0;
                 if (!ensureCookieByWebView()) {
@@ -161,9 +157,8 @@ public class Xszav2 extends Spider {
     }
 
     /**
-     * 仅打开 HOST 域名，用 WebView 过 CF，把 CookieManager 里的 Cookie 缓存下来。
-     * 成功条件：拿到任意站点 Cookie，且页面 title 不是 Just a moment
-     * （不强制必须有 cf_clearance，你日志里 WebView 已进站但可能没有 clearance）
+     * 只打开 HOST，WebView 过 CF，缓存 CookieManager 中的 Cookie。
+     * 不强制 cf_clearance，有 _xsz_hks / session 等即可。
      */
     @SuppressLint("SetJavaScriptEnabled")
     private boolean ensureCookieByWebView() {
@@ -193,9 +188,6 @@ public class Xszav2 extends Spider {
                 try {
                     CookieManager cm = CookieManager.getInstance();
                     cm.setAcceptCookie(true);
-                    // 可选：清掉旧 CF 状态再走一遍
-                    // cm.removeAllCookies(null);
-                    // cm.flush();
 
                     WebView webView = new WebView(appContext);
                     webRef.set(webView);
@@ -220,12 +212,11 @@ public class Xszav2 extends Spider {
                                 try {
                                     String cookie = CookieManager.getInstance().getCookie(HOST);
                                     logger("collect from=" + from
-                                            + " cookieNull=" + (cookie == null)
+                                            + " null=" + (cookie == null)
                                             + " len=" + (cookie == null ? 0 : cookie.length())
                                             + " clearance=" + (cookie != null && cookie.contains("cf_clearance"))
                                             + " hks=" + (cookie != null && cookie.contains("_xsz_hks")));
 
-                                    // 有站点 Cookie 即可（不强制 cf_clearance）
                                     if (!TextUtils.isEmpty(cookie)
                                             && (cookie.contains("_xsz_hks")
                                             || cookie.contains("xszav-session")
@@ -257,7 +248,6 @@ public class Xszav2 extends Spider {
                                             logger("仍在 CF 挑战，继续等…");
                                             return;
                                         }
-                                        // 已是真实站点标题 → 收 Cookie
                                         tryCollect("onPageFinished");
                                     }
                             );
@@ -281,7 +271,7 @@ public class Xszav2 extends Spider {
             try {
                 boolean finished = latch.await(CF_TIMEOUT_SEC, TimeUnit.SECONDS);
                 if (!finished) {
-                    logger("WebView 等 Cookie 超时，尝试最后读一次 CookieManager");
+                    logger("WebView 等 Cookie 超时，最后读一次 CookieManager");
                     final CountDownLatch last = new CountDownLatch(1);
                     main.post(() -> {
                         try {
@@ -290,7 +280,6 @@ public class Xszav2 extends Spider {
                             if (!TextUtils.isEmpty(c)) {
                                 cachedCookie = c;
                                 cachedCookieAt = System.currentTimeMillis();
-                                // 超时也尽量用上（你之前超时后已有 _xsz_hks）
                                 success.set(c.contains("_xsz_hks")
                                         || c.contains("cf_clearance")
                                         || c.contains("xszav-session"));
@@ -347,7 +336,28 @@ public class Xszav2 extends Spider {
                 + " (len=" + cookie.length() + ")";
     }
 
-    // ==================== Spider 生命周期 ====================
+    private String buildSearchUrl(String keyword, int page) throws Exception {
+        String encoded = URLEncoder.encode(keyword, StandardCharsets.UTF_8.name()).replace("+", "%20");
+        String url = HOST + "/search/videos/" + encoded;
+        if (page > 1) {
+            url += "?page=" + page;
+        }
+        return url;
+    }
+
+    /**
+     * Result.page(page, count, limit, total)
+     * count → pagecount；有数据则 page+1，空则停
+     */
+    private String vodPageResult(List<Vod> list, int page) {
+        int pagecount = list.isEmpty() ? page : (page + 1);
+        int limit = list.isEmpty() ? 24 : Math.max(list.size(), 1);
+        int total = pagecount * limit;
+        logger("分页 page=" + page + " pagecount=" + pagecount + " limit=" + limit + " size=" + list.size());
+        return Result.get().vod(list).page(page, pagecount, limit, total).string();
+    }
+
+    // ==================== Spider ====================
 
     @Override
     public void init(Context context, String extend) {
@@ -356,7 +366,9 @@ public class Xszav2 extends Spider {
         } catch (Exception e) {
             logger("super.init: " + e.getMessage());
         }
-        if (context != null) appContext = context.getApplicationContext();
+        if (context != null) {
+            appContext = context.getApplicationContext();
+        }
         if (appContext == null) {
             try {
                 appContext = Init.context();
@@ -384,24 +396,17 @@ public class Xszav2 extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         if (!unlocked) {
-            int page = 1;
-            try {
-                page = Integer.parseInt(pg);
-            } catch (Exception ignored) {
-            }
-            return Result.get().vod(new ArrayList<Vod>()).page(page, 0, 0, 0).string();
+            int page = parsePage(pg);
+            return Result.get().vod(new ArrayList<Vod>()).page(page, page, 0, 0).string();
         }
         try {
-            int page = Integer.parseInt(pg);
-            String encoded = URLEncoder.encode(tid, StandardCharsets.UTF_8.name()).replace("+", "%20");
-            String url = HOST + "/search/videos/" + encoded;
-            if (page > 1) url += "?page=" + page;
+            int page = parsePage(pg);
+            String url = buildSearchUrl(tid, page);
             logger("分类 tid=" + tid + " page=" + page + " → " + url);
             String html = get(url);
             List<Vod> list = parseVideoList(html);
             logger("分类结果数: " + list.size());
-            int totalPage = list.size() >= 15 ? page + 1 : page;
-            return Result.get().vod(list).page(page, totalPage, 20, 2000).string();
+            return vodPageResult(list, page);
         } catch (Exception e) {
             logger("categoryContent: " + e.getMessage());
             return Result.get().vod(new ArrayList<Vod>()).string();
@@ -410,22 +415,34 @@ public class Xszav2 extends Spider {
 
     @Override
     public String detailContent(List<String> ids) {
-        if (!unlocked) return Result.get().string();
+        if (!unlocked) {
+            return Result.get().string();
+        }
         try {
             String id = ids.get(0);
             String detailUrl = HOST + "/video/" + id;
             logger("详情: " + detailUrl);
             String html = get(detailUrl);
+
             Vod vod = new Vod();
             vod.setVodId(id);
+
             String title = "Video " + id;
             Matcher mTitle = Pattern.compile("(?:alt|title)=\"([^\"]{5,})\"", Pattern.CASE_INSENSITIVE)
                     .matcher(html == null ? "" : html);
-            if (mTitle.find()) title = mTitle.group(1);
+            if (mTitle.find()) {
+                title = mTitle.group(1);
+            }
             vod.setVodName(title);
-            Matcher mPic = Pattern.compile("(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
-                    Pattern.CASE_INSENSITIVE).matcher(html == null ? "" : html);
-            if (mPic.find()) vod.setVodPic(mPic.group(1));
+
+            Matcher mPic = Pattern.compile(
+                    "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
+                    Pattern.CASE_INSENSITIVE
+            ).matcher(html == null ? "" : html);
+            if (mPic.find()) {
+                vod.setVodPic(mPic.group(1));
+            }
+
             vod.setVodPlayFrom("Xszav2");
             vod.setVodPlayUrl("立即播放$" + id);
             return Result.get().vod(vod).string();
@@ -437,15 +454,22 @@ public class Xszav2 extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        if (!unlocked) return Result.get().vod(new ArrayList<Vod>()).string();
+        return searchContent(key, quick, "1");
+    }
+
+    @Override
+    public String searchContent(String key, boolean quick, String pg) {
+        if (!unlocked) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
+        }
         try {
-            String encoded = URLEncoder.encode(key, StandardCharsets.UTF_8.name()).replace("+", "%20");
-            String url = HOST + "/search/videos/" + encoded;
-            logger("搜索: " + key);
+            int page = parsePage(pg);
+            String url = buildSearchUrl(key, page);
+            logger("搜索 key=" + key + " page=" + page + " → " + url);
             String html = get(url);
             List<Vod> list = parseVideoList(html);
             logger("搜索结果数: " + list.size());
-            return Result.get().vod(list).string();
+            return vodPageResult(list, page);
         } catch (Exception e) {
             logger("searchContent: " + e.getMessage());
             return Result.get().vod(new ArrayList<Vod>()).string();
@@ -458,30 +482,61 @@ public class Xszav2 extends Spider {
             String detailUrl = HOST + "/video/" + id;
             logger("播放解析: " + detailUrl);
             String html = get(detailUrl);
+
             String playUrl = "";
-            Matcher m1 = Pattern.compile("<video[^>]+src=[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
-                    Pattern.CASE_INSENSITIVE).matcher(html == null ? "" : html);
-            if (m1.find()) playUrl = absUrl(m1.group(1).trim());
-            if (TextUtils.isEmpty(playUrl)) {
-                Matcher m2 = Pattern.compile("(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)",
-                        Pattern.CASE_INSENSITIVE).matcher(html == null ? "" : html);
-                if (m2.find()) playUrl = m2.group(1);
+            Matcher m1 = Pattern.compile(
+                    "<video[^>]+src=[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
+                    Pattern.CASE_INSENSITIVE
+            ).matcher(html == null ? "" : html);
+            if (m1.find()) {
+                playUrl = absUrl(m1.group(1).trim());
             }
+            if (TextUtils.isEmpty(playUrl)) {
+                Matcher m2 = Pattern.compile(
+                        "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)",
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(html == null ? "" : html);
+                if (m2.find()) {
+                    playUrl = m2.group(1);
+                }
+            }
+            if (TextUtils.isEmpty(playUrl)) {
+                Matcher m3 = Pattern.compile(
+                        "source\\s*:\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(html == null ? "" : html);
+                if (m3.find()) {
+                    playUrl = absUrl(m3.group(1).trim());
+                }
+            }
+
             if (TextUtils.isEmpty(playUrl)) {
                 logger("未找到 m3u8");
                 return Result.get().url("").string();
             }
             logger("播放地址: " + playUrl);
+
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", UA);
             headers.put("Referer", detailUrl);
             headers.put("Origin", HOST);
             headers.put("Accept", "*/*");
-            if (!TextUtils.isEmpty(cachedCookie)) headers.put("Cookie", cachedCookie);
+            if (!TextUtils.isEmpty(cachedCookie)) {
+                headers.put("Cookie", cachedCookie);
+            }
             return Result.get().url(playUrl).header(headers).string();
         } catch (Exception e) {
             logger("playerContent: " + e.getMessage());
             return Result.get().url("").string();
+        }
+    }
+
+    private int parsePage(String pg) {
+        try {
+            int p = Integer.parseInt(pg);
+            return p < 1 ? 1 : p;
+        } catch (Exception e) {
+            return 1;
         }
     }
 
@@ -501,6 +556,7 @@ public class Xszav2 extends Spider {
             logger("parseVideoList: html 为空");
             return list;
         }
+
         Pattern pBlock = Pattern.compile(
                 "<div class=\"relative aspect-w-16[\\s\\S]*?</div>\\s*<div class=\"my-2 text-sm truncate\">[\\s\\S]*?</div>",
                 Pattern.CASE_INSENSITIVE
@@ -512,6 +568,7 @@ public class Xszav2 extends Spider {
             Vod vod = extractFromBlock(mBlock.group(0));
             if (vod != null) list.add(vod);
         }
+
         if (list.isEmpty()) {
             logger("方法1无结果，通用解析 /video/");
             Pattern pLink = Pattern.compile(
@@ -523,7 +580,8 @@ public class Xszav2 extends Spider {
             Matcher mLink = pLink.matcher(html);
             Map<String, Vod> map = new LinkedHashMap<>();
             while (mLink.find()) {
-                String id = null, title = null;
+                String id = null;
+                String title = null;
                 if (mLink.group(1) != null) {
                     id = mLink.group(1);
                     title = mLink.group(2);
@@ -539,12 +597,16 @@ public class Xszav2 extends Spider {
                 vod.setVodName(TextUtils.isEmpty(title) ? "Video " + id : title);
                 Matcher mImg = Pattern.compile(
                         "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]*" + id + "[^\"]*)\"",
-                        Pattern.CASE_INSENSITIVE).matcher(html);
-                if (mImg.find()) vod.setVodPic(mImg.group(1));
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(html);
+                if (mImg.find()) {
+                    vod.setVodPic(mImg.group(1));
+                }
                 map.put(id, vod);
             }
             list.addAll(map.values());
         }
+
         logger("parseVideoList 最终=" + list.size() + " 块=" + blocks);
         return list;
     }
@@ -553,16 +615,22 @@ public class Xszav2 extends Spider {
         Matcher mId = Pattern.compile("/video/(\\d+)", Pattern.CASE_INSENSITIVE).matcher(block);
         if (!mId.find()) return null;
         String id = mId.group(1);
+
         String title = "Video " + id;
         Matcher mTitle = Pattern.compile("(?:title|alt)=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(block);
         if (mTitle.find()) title = mTitle.group(1);
+
         String img = "";
-        Matcher mImg = Pattern.compile("(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
-                Pattern.CASE_INSENSITIVE).matcher(block);
+        Matcher mImg = Pattern.compile(
+                "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
+                Pattern.CASE_INSENSITIVE
+        ).matcher(block);
         if (mImg.find()) img = mImg.group(1);
+
         String duration = "";
         Matcher mDur = Pattern.compile("<span[^>]*>\\s*([0-9:]+)\\s*</span>", Pattern.CASE_INSENSITIVE).matcher(block);
         if (mDur.find()) duration = mDur.group(1).trim();
+
         Vod vod = new Vod();
         vod.setVodId(id);
         vod.setVodName(title);
