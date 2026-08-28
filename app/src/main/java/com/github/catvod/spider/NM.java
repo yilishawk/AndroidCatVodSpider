@@ -467,7 +467,8 @@ public class NM extends Spider {
                     if (targetEncrypted != null) break;
                 }
                 if (targetEncrypted == null) {
-                    Pattern p = Pattern.compile("第" + currentNum + "集\\\( (.*?)(?=#| \))");
+                    // 修复：正则中匹配字面括号，使用 \\( 和 \\)
+                    Pattern p = Pattern.compile("第" + currentNum + "集\\( (.*?)(?=#| \\))");
                     for (String line : lines) {
                         Matcher m = p.matcher(line);
                         if (m.find()) {
@@ -506,6 +507,7 @@ public class NM extends Spider {
     private String fallbackToParse(String url) {
         Map<String, String> header = new HashMap<>();
         header.put("User-Agent", UA);
+        header.put("Referer", siteUrl);
         return Result.get()
                 .parse(1)
                 .url(url != null ? url : "")
