@@ -85,17 +85,8 @@ public class Result {
         return Result.get().classes(classes).vod(list).string();
     }
 
-    // ========== 统一泛型方法，替代原有的 string(List<Vod>) ==========
-    // 自动识别 List 元素类型，支持 List<Vod> 和 List<Class>
-    public static String string(List<?> list) {
-        if (list == null || list.isEmpty()) return "";
-        if (list.get(0) instanceof Vod) {
-            return Result.get().vod((List<Vod>) list).string();
-        }
-        if (list.get(0) instanceof Class) {
-            return Result.get().classes((List<Class>) list).string();
-        }
-        return "";
+    public static String string(List<Vod> list) {
+        return Result.get().vod(list).string();
     }
 
     public static String string(Vod item) {
