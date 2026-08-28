@@ -89,6 +89,18 @@ public class Result {
         return Result.get().vod(list).string();
     }
 
+    // ✅ 新增：泛型方法，兼容 List<Class> 和 List<Vod>，旧爬虫无需修改
+    public static String string(List<?> list) {
+        if (list == null || list.isEmpty()) return "";
+        if (list.get(0) instanceof Vod) {
+            return Result.get().vod((List<Vod>) list).string();
+        }
+        if (list.get(0) instanceof Class) {
+            return Result.get().classes((List<Class>) list).string();
+        }
+        return "";
+    }
+
     public static String string(Vod item) {
         return Result.get().vod(item).string();
     }
