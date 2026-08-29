@@ -1,13 +1,9 @@
 package com.github.catvod.spider;
 
-import com.github.catvod.bean.Class;
-import com.github.catvod.bean.Filter;
-import com.github.catvod.bean.Result;
-import com.github.catvod.bean.Vod;
-import com.github.catvod.bean.Filter.Value;
+import android.content.Context;
+
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttp;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -17,12 +13,20 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.Headers;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 /**
- * 九州空间 - Fongmi 规范最终版（修复无列表）
+ * 九州空间 - 自建 OkHttpClient + 手写 JSONObject，兼容 Fongmi
+ * 站点: m.9zhoukj.com
  */
 public class JP extends Spider {
 
@@ -31,7 +35,33 @@ public class JP extends Spider {
     private static final String DEVICE_ID = "7dbc13a7-7976-4d7b-89d2-c110d09d7410";
     private static final String UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
-    // ----- 签名工具 -----
+    private final OkHttpClient client;
+    private final Map<String, String> headers;
+
+    public JP() {
+        // 自建 OkHttpClient（兼容老旧 TLS）
+        this.client = new OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .sslSocketFactory(new com.github.catvod.net.SSLCompat(),
+                        com.github.catvod.net.SSLCompat.TM)
+                .hostnameVerifier((hostname, session) -> true)
+                .build();
+
+        this.headers = new HashMap<>();
+        this.headers.put("User-Agent", UA);
+        this.headers.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        this.headers.put("Accept", "application/json, text/plain, */*");
+        this.headers.put("Referer", HOST + "/");
+    }
+
+    private void log(String msg) {
+        SpiderDebug.log("[JP] " + msg);
+    }
+
+    // ----- 签名工具（原封不动） -----
     private String md5(String input) throws Exception {
         MessageDigest md = MessageDigest.getInstance("MD5");
         byte[] digest = md.digest(input.getBytes("UTF-8"));
@@ -55,7 +85,7 @@ public class JP extends Spider {
             if (v != null && !v.isEmpty()) valid.put(e.getKey(), v);
         }
         List<String> keys = new ArrayList<>(valid.keySet());
-        Collections.sort(keys); // 必须排序
+        Collections.sort(keys);
         StringBuilder query = new StringBuilder();
         for (int i = 0; i < keys.size(); i++) {
             if (i > 0) query.append("&");
@@ -70,161 +100,217 @@ public class JP extends Spider {
 
     private Map<String, String> buildHeaders(Map<String, String> params) throws Exception {
         String[] ts = generateSign(params).split("\\|");
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Host", "m.9zhoukj.com");
-        headers.put("client-type", "3");
-        headers.put("deviceId", DEVICE_ID);
-        headers.put("sign", ts[1]);
-        headers.put("t", ts[0]);
-        headers.put("User-Agent", UA);
-        headers.put("Referer", HOST + "/");
-        return headers;
+        Map<String, String> h = new HashMap<>(headers);
+        h.put("Host", "m.9zhoukj.com");
+        h.put("client-type", "3");
+        h.put("deviceId", DEVICE_ID);
+        h.put("sign", ts[1]);
+        h.put("t", ts[0]);
+        return h;
+    }
+
+    // ----- 网络请求封装 -----
+    private String get(String url, Map<String, String> extraHeaders) throws Exception {
+        Map<String, String> allHeaders = new HashMap<>(headers);
+        if (extraHeaders != null) allHeaders.putAll(extraHeaders);
+        Request request = new Request.Builder()
+                .url(url)
+                .headers(Headers.of(allHeaders))
+                .build();
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new Exception("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private String postForm(String url, Map<String, String> formData, Map<String, String> extraHeaders) throws Exception {
+        Map<String, String> allHeaders = new HashMap<>(headers);
+        if (extraHeaders != null) allHeaders.putAll(extraHeaders);
+        // 构建表单
+        StringBuilder bodyBuilder = new StringBuilder();
+        for (Map.Entry<String, String> e : formData.entrySet()) {
+            if (bodyBuilder.length() > 0) bodyBuilder.append("&");
+            bodyBuilder.append(URLEncoder.encode(e.getKey(), "UTF-8"))
+                    .append("=")
+                    .append(URLEncoder.encode(e.getValue(), "UTF-8"));
+        }
+        RequestBody body = RequestBody.create(
+                MediaType.parse("application/x-www-form-urlencoded; charset=UTF-8"),
+                bodyBuilder.toString()
+        );
+        Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .headers(Headers.of(allHeaders))
+                .build();
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new Exception("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
     }
 
     /**
-     * 请求时参数按 key 排序拼接，与签名保持一致，避免部分环境因顺序问题签名失败
+     * 通用 API 请求（自动加签名头）
      */
-    private String fetch(String path, Map<String, String> params) throws Exception {
+    private String fetchApi(String path, Map<String, String> params) throws Exception {
         if (params == null) params = new HashMap<>();
-        // 过滤空值，并保证顺序稳定
-        Map<String, String> valid = new LinkedHashMap<>();
-        List<String> keys = new ArrayList<>(params.keySet());
-        Collections.sort(keys);
-        for (String k : keys) {
-            String v = params.get(k);
-            if (v != null && !v.isEmpty()) valid.put(k, v);
-        }
-
-        StringBuilder urlBuilder = new StringBuilder(HOST).append(path);
-        if (!valid.isEmpty()) {
-            urlBuilder.append("?");
-            int i = 0;
-            for (Map.Entry<String, String> e : valid.entrySet()) {
-                if (i > 0) urlBuilder.append("&");
-                urlBuilder.append(e.getKey())
-                        .append("=")
-                        .append(URLEncoder.encode(e.getValue(), "UTF-8"));
-                i++;
+        // 签名仅对非空参数进行，且需要排序
+        Map<String, String> valid = new HashMap<>();
+        for (Map.Entry<String, String> e : params.entrySet()) {
+            if (e.getValue() != null && !e.getValue().isEmpty()) {
+                valid.put(e.getKey(), e.getValue());
             }
         }
-        String url = urlBuilder.toString();
-        String body = OkHttp.string(url, buildHeaders(valid));
-        SpiderDebug.log("[JP] " + path + " -> " + (body == null ? 0 : body.length()) + " bytes");
-        return body == null ? "" : body;
+        // 构建 URL（GET）
+        String url;
+        if (path.contains("?")) {
+            url = HOST + path;
+        } else {
+            StringBuilder urlBuilder = new StringBuilder(HOST).append(path);
+            if (!valid.isEmpty()) {
+                urlBuilder.append("?");
+                List<String> keys = new ArrayList<>(valid.keySet());
+                Collections.sort(keys);
+                for (int i = 0; i < keys.size(); i++) {
+                    if (i > 0) urlBuilder.append("&");
+                    urlBuilder.append(keys.get(i)).append("=")
+                            .append(URLEncoder.encode(valid.get(keys.get(i)), "UTF-8"));
+                }
+            }
+            url = urlBuilder.toString();
+        }
+        // 签名头（基于原始参数，非 URL 编码）
+        Map<String, String> headersWithSign = buildHeaders(valid);
+        return get(url, headersWithSign);
     }
 
-    // ----- 首页 -----
+    // ----- homeContent -----
     @Override
     public String homeContent(boolean filter) {
         try {
-            List<Class> classes = new ArrayList<>();
-            classes.add(new Class("2_14", "国产剧"));
-            classes.add(new Class("2_15", "欧美剧"));
-            classes.add(new Class("2_62", "日韩剧"));
-            classes.add(new Class("2_16", "港台剧"));
-            classes.add(new Class("1_", "电影"));
-            classes.add(new Class("3_", "综艺"));
-
-            if (!filter) {
-                return Result.get().classes(classes).string();
+            JSONObject result = new JSONObject();
+            JSONArray classes = new JSONArray();
+            String[][] classArr = {
+                    {"2_14", "国产剧"}, {"2_15", "欧美剧"}, {"2_62", "日韩剧"},
+                    {"2_16", "港台剧"}, {"1_", "电影"}, {"3_", "综艺"}
+            };
+            for (String[] c : classArr) {
+                JSONObject cls = new JSONObject();
+                cls.put("type_id", c[0]);
+                cls.put("type_name", c[1]);
+                classes.put(cls);
             }
+            result.put("class", classes);
 
-            // 公共年份
-            List<Value> yearValues = new ArrayList<>();
-            yearValues.add(new Value("全部", ""));
-            for (int y = 2026; y >= 2010; y--) {
-                yearValues.add(new Value(String.valueOf(y), String.valueOf(y)));
+            if (filter) {
+                // 构建 filters（与之前一致，改用 JSONObject）
+                JSONObject filters = new JSONObject();
+
+                // 公共年份
+                JSONArray yearValues = new JSONArray();
+                yearValues.put(createOption("全部", ""));
+                for (int y = 2026; y >= 2010; y--) {
+                    yearValues.put(createOption(String.valueOf(y), String.valueOf(y)));
+                }
+                JSONArray sortValues = new JSONArray();
+                sortValues.put(createOption("最新", "1"));
+                sortValues.put(createOption("最热", "2"));
+
+                // 电视剧通用
+                JSONArray tvFilters = new JSONArray();
+                tvFilters.put(createFilter("v_class", "剧情", new String[][]{
+                        {"全部",""},{"古装","古装"},{"战争","战争"},{"喜剧","喜剧"},{"家庭","家庭"},
+                        {"犯罪","犯罪"},{"动作","动作"},{"奇幻","奇幻"},{"剧情","剧情"},{"历史","历史"},{"短片","短片"}
+                }));
+                tvFilters.put(createFilter("area", "地区", new String[][]{
+                        {"全部",""},{"中国大陆","中国大陆"},{"中国香港","中国香港"},{"美国","美国"}
+                }));
+                tvFilters.put(createFilter("year", "年代", yearValues));
+                tvFilters.put(createFilter("sort", "排序", sortValues));
+
+                // 电影
+                JSONArray movieFilters = new JSONArray();
+                movieFilters.put(createFilter("type", "类型", new String[][]{
+                        {"全部",""},{"喜剧","22"},{"动作","23"},{"科幻","30"},{"爱情","26"},{"悬疑","27"},
+                        {"奇幻","87"},{"剧情","37"},{"恐怖","36"},{"犯罪","35"},{"动画","33"},{"惊悚","34"},
+                        {"战争","25"},{"冒险","31"},{"灾难","81"}
+                }));
+                movieFilters.put(createFilter("v_class", "剧情", new String[][]{
+                        {"全部",""},{"爱情","爱情"},{"动作","动作"},{"科幻","科幻"},{"恐怖","恐怖"}
+                }));
+                movieFilters.put(createFilter("area", "地区", new String[][]{
+                        {"全部",""},{"中国大陆","中国大陆"},{"中国香港","中国香港"},{"中国台湾","中国台湾"},
+                        {"美国","美国"},{"日本","日本"},{"韩国","韩国"},{"印度","印度"},{"泰国","泰国"},
+                        {"英国","英国"},{"法国","法国"}
+                }));
+                movieFilters.put(createFilter("year", "年代", yearValues));
+                movieFilters.put(createFilter("sort", "排序", sortValues));
+
+                // 综艺
+                JSONArray zyFilters = new JSONArray();
+                zyFilters.put(createFilter("type", "类型", new String[][]{
+                        {"全部",""},{"国产综艺","69"},{"港台综艺","70"},{"日韩综艺","72"}
+                }));
+                zyFilters.put(createFilter("v_class", "剧情", new String[][]{
+                        {"全部",""},{"真人秀","真人秀"},{"音乐","音乐"},{"脱口秀","脱口秀"}
+                }));
+                zyFilters.put(createFilter("year", "年代", yearValues));
+
+                filters.put("2_14", tvFilters);
+                filters.put("2_15", tvFilters);
+                filters.put("2_62", tvFilters);
+                filters.put("2_16", tvFilters);
+                filters.put("1_", movieFilters);
+                filters.put("3_", zyFilters);
+                result.put("filters", filters);
             }
-            List<Value> sortValues = new ArrayList<>();
-            sortValues.add(new Value("最新", "1"));
-            sortValues.add(new Value("最热", "2"));
-
-            // 电视剧通用筛选
-            List<Filter> tvFilters = new ArrayList<>();
-            List<Value> vClassValues = new ArrayList<>();
-            String[][] vClassOpts = {
-                    {"全部", ""}, {"古装", "古装"}, {"战争", "战争"}, {"喜剧", "喜剧"},
-                    {"家庭", "家庭"}, {"犯罪", "犯罪"}, {"动作", "动作"}, {"奇幻", "奇幻"},
-                    {"剧情", "剧情"}, {"历史", "历史"}, {"短片", "短片"}
-            };
-            for (String[] o : vClassOpts) vClassValues.add(new Value(o[0], o[1]));
-            tvFilters.add(new Filter("v_class", "剧情", vClassValues));
-
-            List<Value> areaValues = new ArrayList<>();
-            String[][] areaOpts = {{"全部", ""}, {"中国大陆", "中国大陆"}, {"中国香港", "中国香港"}, {"美国", "美国"}};
-            for (String[] o : areaOpts) areaValues.add(new Value(o[0], o[1]));
-            tvFilters.add(new Filter("area", "地区", areaValues));
-            tvFilters.add(new Filter("year", "年代", yearValues));
-            tvFilters.add(new Filter("sort", "排序", sortValues));
-
-            // 电影筛选
-            List<Filter> movieFilters = new ArrayList<>();
-            List<Value> typeValues = new ArrayList<>();
-            String[][] typeOpts = {
-                    {"全部", ""}, {"喜剧", "22"}, {"动作", "23"}, {"科幻", "30"}, {"爱情", "26"},
-                    {"悬疑", "27"}, {"奇幻", "87"}, {"剧情", "37"}, {"恐怖", "36"}, {"犯罪", "35"},
-                    {"动画", "33"}, {"惊悚", "34"}, {"战争", "25"}, {"冒险", "31"}, {"灾难", "81"}
-            };
-            for (String[] o : typeOpts) typeValues.add(new Value(o[0], o[1]));
-            movieFilters.add(new Filter("type", "类型", typeValues));
-
-            List<Value> movieVClass = new ArrayList<>();
-            String[][] movieVOpts = {{"全部", ""}, {"爱情", "爱情"}, {"动作", "动作"}, {"科幻", "科幻"}, {"恐怖", "恐怖"}};
-            for (String[] o : movieVOpts) movieVClass.add(new Value(o[0], o[1]));
-            movieFilters.add(new Filter("v_class", "剧情", movieVClass));
-
-            List<Value> movieArea = new ArrayList<>();
-            String[][] movieAreaOpts = {
-                    {"全部", ""}, {"中国大陆", "中国大陆"}, {"中国香港", "中国香港"}, {"中国台湾", "中国台湾"},
-                    {"美国", "美国"}, {"日本", "日本"}, {"韩国", "韩国"}, {"印度", "印度"},
-                    {"泰国", "泰国"}, {"英国", "英国"}, {"法国", "法国"}
-            };
-            for (String[] o : movieAreaOpts) movieArea.add(new Value(o[0], o[1]));
-            movieFilters.add(new Filter("area", "地区", movieArea));
-            movieFilters.add(new Filter("year", "年代", yearValues));
-            movieFilters.add(new Filter("sort", "排序", sortValues));
-
-            // 综艺筛选
-            List<Filter> zyFilters = new ArrayList<>();
-            List<Value> zyType = new ArrayList<>();
-            String[][] zyOpts = {{"全部", ""}, {"国产综艺", "69"}, {"港台综艺", "70"}, {"日韩综艺", "72"}};
-            for (String[] o : zyOpts) zyType.add(new Value(o[0], o[1]));
-            zyFilters.add(new Filter("type", "类型", zyType));
-
-            List<Value> zyVClass = new ArrayList<>();
-            String[][] zyVOpts = {{"全部", ""}, {"真人秀", "真人秀"}, {"音乐", "音乐"}, {"脱口秀", "脱口秀"}};
-            for (String[] o : zyVOpts) zyVClass.add(new Value(o[0], o[1]));
-            zyFilters.add(new Filter("v_class", "剧情", zyVClass));
-            zyFilters.add(new Filter("year", "年代", yearValues));
-
-            LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
-            filters.put("2_14", tvFilters);
-            filters.put("2_15", tvFilters);
-            filters.put("2_62", tvFilters);
-            filters.put("2_16", tvFilters);
-            filters.put("1_", movieFilters);
-            filters.put("3_", zyFilters);
-
-            return Result.get().classes(classes).filters(filters).string();
+            return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log(e);
-            return Result.error("首页加载失败");
+            log("homeContent error: " + e.getMessage());
+            return "{\"class\":[],\"filters\":{}}";
         }
     }
 
-    // ----- 分类（修复 totalCount） -----
+    private JSONObject createOption(String n, String v) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("n", n);
+        o.put("v", v);
+        return o;
+    }
+
+    private JSONObject createFilter(String key, String name, String[][] opts) throws Exception {
+        JSONObject f = new JSONObject();
+        f.put("key", key);
+        f.put("name", name);
+        JSONArray arr = new JSONArray();
+        for (String[] opt : opts) {
+            arr.put(createOption(opt[0], opt[1]));
+        }
+        f.put("value", arr);
+        return f;
+    }
+
+    private JSONObject createFilter(String key, String name, JSONArray values) throws Exception {
+        JSONObject f = new JSONObject();
+        f.put("key", key);
+        f.put("name", name);
+        f.put("value", values);
+        return f;
+    }
+
+    // ----- categoryContent（关键修复） -----
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             if (extend == null) extend = new HashMap<>();
-            int pageNum;
-            try {
-                pageNum = Integer.parseInt(pg);
-            } catch (Exception e) {
-                pageNum = 1;
-            }
+            int pageNum = 1;
+            try { pageNum = Integer.parseInt(pg); } catch (Exception ignored) {}
             if (tid == null || tid.isEmpty()) {
-                return Result.get().vod(new ArrayList<>()).page(pageNum, 1, 30, 0).string();
+                return "{\"list\":[],\"page\":" + pageNum + ",\"pagecount\":1}";
             }
 
             String[] parts = tid.split("_", 2);
@@ -238,11 +324,8 @@ public class JP extends Spider {
             params.put("sort", extend.getOrDefault("sort", "1"));
             params.put("sortBy", "1");
 
-            // 子分类 type：优先用筛选里的 type，没有则用 tid 里的
             String finalType = extend.getOrDefault("type", subType);
-            if (finalType != null && !finalType.isEmpty()) {
-                params.put("type", finalType);
-            }
+            if (finalType != null && !finalType.isEmpty()) params.put("type", finalType);
             String area = extend.getOrDefault("area", "");
             if (!area.isEmpty()) params.put("area", area);
             String vClass = extend.getOrDefault("v_class", "");
@@ -250,35 +333,34 @@ public class JP extends Spider {
             String year = extend.getOrDefault("year", "");
             if (!year.isEmpty()) params.put("year", year);
 
-            String json = fetch("/api/mw-movie/anonymous/video/list", params);
-            if (json.isEmpty()) {
-                return Result.get().vod(new ArrayList<>()).page(pageNum, 1, 30, 0).string();
+            String json = fetchApi("/api/mw-movie/anonymous/video/list", params);
+            if (json == null || json.isEmpty()) {
+                return "{\"list\":[],\"page\":" + pageNum + ",\"pagecount\":1}";
             }
 
             JSONObject root = new JSONObject(json);
             int code = root.optInt("code", -1);
             if (code != 0 && code != 200) {
-                SpiderDebug.log("[JP] list API error: " + root.optString("msg") + " raw=" + json.substring(0, Math.min(200, json.length())));
-                return Result.get().vod(new ArrayList<>()).page(pageNum, 1, 30, 0).string();
+                log("list API error: " + root.optString("msg"));
+                return "{\"list\":[],\"page\":" + pageNum + ",\"pagecount\":1}";
             }
 
             JSONObject data = root.optJSONObject("data");
             JSONArray list = data != null ? data.optJSONArray("list") : null;
-            List<Vod> videos = new ArrayList<>();
+            JSONArray videos = new JSONArray();
             if (list != null) {
                 for (int i = 0; i < list.length(); i++) {
                     JSONObject item = list.getJSONObject(i);
-                    Vod vod = new Vod();
-                    // vodId 可能是数字，optString 可正常取
-                    vod.setVodId(item.optString("vodId"));
-                    vod.setVodName(item.optString("vodName"));
-                    vod.setVodPic(item.optString("vodPic"));
-                    vod.setVodRemarks(item.optString("vodRemarks", ""));
-                    videos.add(vod);
+                    JSONObject vod = new JSONObject();
+                    vod.put("vod_id", item.optString("vodId"));
+                    vod.put("vod_name", item.optString("vodName"));
+                    vod.put("vod_pic", item.optString("vodPic"));
+                    vod.put("vod_remarks", item.optString("vodRemarks", ""));
+                    videos.put(vod);
                 }
             }
 
-            // ★ 关键修复：接口字段是 totalCount，不是 total
+            // 计算总页数
             int totalCount = 0;
             int totalPage = 1;
             if (data != null) {
@@ -290,32 +372,38 @@ public class JP extends Spider {
             }
             if (totalPage <= 0) totalPage = 1;
 
-            SpiderDebug.log("[JP] category tid=" + tid + " page=" + pageNum + " size=" + videos.size() + " total=" + totalCount);
-            return Result.get().vod(videos).page(pageNum, totalPage, 30, totalCount).string();
+            JSONObject result = new JSONObject();
+            result.put("list", videos);
+            result.put("page", pageNum);
+            result.put("pagecount", totalPage);
+            result.put("limit", 30);
+            result.put("total", totalCount);
+            return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log(e);
-            return Result.error(e.getMessage());
+            log("categoryContent error: " + e.getMessage());
+            return "{\"list\":[],\"page\":1,\"pagecount\":1}";
         }
     }
 
-    // ----- 详情 -----
+    // ----- detailContent -----
     @Override
     public String detailContent(List<String> ids) {
         try {
+            if (ids == null || ids.isEmpty()) return "{\"list\":[]}";
             String vodId = ids.get(0);
             Map<String, String> params = new HashMap<>();
             params.put("id", vodId);
-            String json = fetch("/api/mw-movie/anonymous/video/detail", params);
-            if (json.isEmpty()) return Result.error("详情获取失败");
+            String json = fetchApi("/api/mw-movie/anonymous/video/detail", params);
+            if (json == null || json.isEmpty()) return "{\"list\":[]}";
 
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return Result.error("数据为空");
+            if (data == null) return "{\"list\":[]}";
 
-            Vod vod = new Vod();
-            vod.setVodId(data.optString("vodId", vodId));
-            vod.setVodName(data.optString("vodName", ""));
-            vod.setVodPic(data.optString("vodPic", ""));
-            vod.setVodContent(data.optString("vodContent", data.optString("vodBlurb", "")));
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", data.optString("vodId", vodId));
+            vod.put("vod_name", data.optString("vodName", ""));
+            vod.put("vod_pic", data.optString("vodPic", ""));
+            vod.put("vod_content", data.optString("vodContent", data.optString("vodBlurb", "")));
 
             JSONArray episodes = data.optJSONArray("episodeList");
             List<String> epList = new ArrayList<>();
@@ -329,21 +417,25 @@ public class JP extends Spider {
             }
 
             if (epList.isEmpty()) {
-                vod.setVodPlayFrom("");
-                vod.setVodPlayUrl("");
+                vod.put("vod_play_from", "");
+                vod.put("vod_play_url", "");
             } else {
-                vod.setVodPlayFrom("九州空间");
-                vod.setVodPlayUrl(String.join("#", epList));
+                vod.put("vod_play_from", "九州空间");
+                vod.put("vod_play_url", String.join("#", epList));
             }
 
-            return Result.get().vod(vod).string();
+            JSONArray list = new JSONArray();
+            list.put(vod);
+            JSONObject result = new JSONObject();
+            result.put("list", list);
+            return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log(e);
-            return Result.error(e.getMessage());
+            log("detailContent error: " + e.getMessage());
+            return "{\"list\":[]}";
         }
     }
 
-    // ----- 搜索（去掉本地 contains 过滤） -----
+    // ----- searchContent -----
     @Override
     public String searchContent(String key, boolean quick) {
         try {
@@ -353,48 +445,53 @@ public class JP extends Spider {
             params.put("pageSize", "30");
             params.put("sourceCode", "1");
 
-            String json = fetch("/api/mw-movie/anonymous/video/searchByWord", params);
-            if (json.isEmpty()) return Result.error("搜索失败");
+            String json = fetchApi("/api/mw-movie/anonymous/video/searchByWord", params);
+            if (json == null || json.isEmpty()) return "{\"list\":[]}";
 
             JSONObject root = new JSONObject(json);
             JSONObject data = root.optJSONObject("data");
             JSONObject resultObj = data != null ? data.optJSONObject("result") : null;
             JSONArray rawList = resultObj != null ? resultObj.optJSONArray("list") : null;
-
-            // 兼容另一种返回结构
             if (rawList == null && data != null) {
                 rawList = data.optJSONArray("list");
             }
 
-            List<Vod> list = new ArrayList<>();
+            JSONArray videos = new JSONArray();
             if (rawList != null) {
                 for (int i = 0; i < rawList.length(); i++) {
                     JSONObject item = rawList.getJSONObject(i);
-                    Vod vod = new Vod();
-                    vod.setVodId(item.optString("vodId"));
-                    vod.setVodName(item.optString("vodName"));
-                    vod.setVodPic(item.optString("vodPic"));
-                    vod.setVodRemarks(item.optString("vodRemarks", ""));
-                    list.add(vod);
+                    JSONObject vod = new JSONObject();
+                    vod.put("vod_id", item.optString("vodId"));
+                    vod.put("vod_name", item.optString("vodName"));
+                    vod.put("vod_pic", item.optString("vodPic"));
+                    vod.put("vod_remarks", item.optString("vodRemarks", ""));
+                    videos.put(vod);
                 }
             }
 
-            int total = data != null ? data.optInt("totalCount", data.optInt("total", list.size())) : list.size();
+            int total = data != null ? data.optInt("totalCount", data.optInt("total", videos.length())) : videos.length();
             int totalPage = Math.max(1, (int) Math.ceil(total / 30.0));
-            return Result.get().vod(list).page(1, totalPage, 30, total).string();
+            JSONObject result = new JSONObject();
+            result.put("list", videos);
+            result.put("page", 1);
+            result.put("pagecount", totalPage);
+            result.put("limit", 30);
+            result.put("total", total);
+            return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log(e);
-            return Result.error(e.getMessage());
+            log("searchContent error: " + e.getMessage());
+            return "{\"list\":[]}";
         }
     }
 
-    // ----- 播放 -----
+    // ----- playerContent -----
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
             String[] parts = id.split("@@");
-            if (parts.length < 2) return Result.get().parse(1).url(id).string();
-
+            if (parts.length < 2) {
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
             String vodId = parts[0];
             String nid = parts[1];
 
@@ -403,17 +500,18 @@ public class JP extends Spider {
             params.put("id", vodId);
             params.put("nid", nid);
 
-            String json = fetch("/api/mw-movie/anonymous/v2/video/episode/url", params);
-            if (json.isEmpty()) return Result.get().parse(1).url(id).string();
+            String json = fetchApi("/api/mw-movie/anonymous/v2/video/episode/url", params);
+            if (json == null || json.isEmpty()) {
+                return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            }
 
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return Result.get().parse(1).url(id).string();
+            if (data == null) return "{\"parse\":1,\"url\":\"" + id + "\"}";
 
             JSONArray list = data.optJSONArray("list");
-            if (list == null || list.length() == 0) return Result.get().parse(1).url(id).string();
+            if (list == null || list.length() == 0) return "{\"parse\":1,\"url\":\"" + id + "\"}";
 
             String url = null;
-            // 优先 1080
             for (int i = 0; i < list.length(); i++) {
                 JSONObject v = list.getJSONObject(i);
                 if (v.optInt("resolution") == 1080) {
@@ -424,16 +522,21 @@ public class JP extends Spider {
             if (url == null || url.isEmpty()) {
                 url = list.getJSONObject(0).optString("url");
             }
-            if (url == null || url.isEmpty()) return Result.get().parse(1).url(id).string();
+            if (url == null || url.isEmpty()) return "{\"parse\":1,\"url\":\"" + id + "\"}";
 
-            Map<String, String> header = new HashMap<>();
+            JSONObject header = new JSONObject();
             header.put("User-Agent", UA);
             header.put("Referer", HOST + "/");
             header.put("Origin", HOST);
-            return Result.get().url(url).header(header).parse(0).string();
+
+            JSONObject result = new JSONObject();
+            result.put("parse", 0);
+            result.put("url", url);
+            result.put("header", header);
+            return result.toString();
         } catch (Exception e) {
-            SpiderDebug.log(e);
-            return Result.get().parse(1).url(id).string();
+            log("playerContent error: " + e.getMessage());
+            return "{\"parse\":1,\"url\":\"" + id + "\"}";
         }
     }
 }
