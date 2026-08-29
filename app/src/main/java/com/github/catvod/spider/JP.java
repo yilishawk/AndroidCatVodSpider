@@ -30,6 +30,7 @@ import java.util.Map;
  * 2. 网络请求统一使用 OkHttp.string()
  * 3. 筛选器使用 Filter、Value 构建
  * 4. 保留原签名逻辑
+ * 5. 修正 Result.error 调用（该方法已返回 String）
  */
 public class JP extends Spider {
 
@@ -230,7 +231,7 @@ public class JP extends Spider {
             }
         } catch (Exception e) {
             SpiderDebug.log(e);
-            return Result.error("首页加载失败").string();
+            return Result.error("首页加载失败");
         }
     }
 
@@ -296,7 +297,7 @@ public class JP extends Spider {
             return Result.get().vod(videos).page(page, totalPage, videos.size(), totalPage * 30).string();
         } catch (Exception e) {
             SpiderDebug.log(e);
-            return Result.error(e.getMessage()).string();
+            return Result.error(e.getMessage());
         }
     }
 
@@ -309,10 +310,10 @@ public class JP extends Spider {
             Map<String, String> params = new HashMap<>();
             params.put("id", vodId);
             String json = fetch("/api/mw-movie/anonymous/video/detail", params);
-            if (json == null || json.isEmpty()) return Result.error("详情获取失败").string();
+            if (json == null || json.isEmpty()) return Result.error("详情获取失败");
 
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return Result.error("数据为空").string();
+            if (data == null) return Result.error("数据为空");
 
             Vod vod = new Vod();
             vod.setVodId(data.optString("vodId", vodId));
@@ -343,7 +344,7 @@ public class JP extends Spider {
             return Result.get().vod(vod).string();
         } catch (Exception e) {
             SpiderDebug.log(e);
-            return Result.error(e.getMessage()).string();
+            return Result.error(e.getMessage());
         }
     }
 
@@ -359,7 +360,7 @@ public class JP extends Spider {
             params.put("sourceCode", "1");
 
             String json = fetch("/api/mw-movie/anonymous/video/searchByWord", params);
-            if (json == null || json.isEmpty()) return Result.error("搜索失败").string();
+            if (json == null || json.isEmpty()) return Result.error("搜索失败");
 
             JSONObject data = new JSONObject(json).optJSONObject("data");
             JSONObject resultObj = data != null ? data.optJSONObject("result") : null;
@@ -381,7 +382,7 @@ public class JP extends Spider {
             return Result.get().vod(list).string();
         } catch (Exception e) {
             SpiderDebug.log(e);
-            return Result.error(e.getMessage()).string();
+            return Result.error(e.getMessage());
         }
     }
 
