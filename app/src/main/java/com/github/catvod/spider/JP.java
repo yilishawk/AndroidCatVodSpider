@@ -2,7 +2,7 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttp; // 引入系统最稳的网络框架
+import com.github.catvod.net.OkHttp; // 系统最稳的网络框架
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -16,8 +16,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * @author 九州空间全修复版（电视防崩溃稳定版）
+ * @author 九州空间全修复版（Fongmi 兼容版）
  * 站点: m.9zhoukj.com
+ *
+ * 修复记录：
+ * 1. categoryContent 增加 extend null 保护
+ * 2. detailContent 确保播放线路数量匹配，无剧集时两者置空
+ * 3. 统一使用 OkHttp 工具类，避免自定义 OkHttpClient 带来的兼容性问题
+ * 4. 所有返回 JSON 均合法，异常时返回空列表
  */
 public class JP extends Spider {
 
@@ -26,7 +32,8 @@ public class JP extends Spider {
     private static final String DEVICE_ID = "7dbc13a7-7976-4d7b-89d2-c110d09d7410";
     private static final String UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
-    // ================== 电视兼容：最稳字符串拼接工具 ==================
+    // ================== 工具方法 ==================
+
     private String safeJoin(String delimiter, List<String> list) {
         if (list == null || list.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
@@ -39,7 +46,6 @@ public class JP extends Spider {
         return sb.toString();
     }
 
-    // ================== 签名工具 ==================
     private String md5(String input) throws Exception {
         MessageDigest md = MessageDigest.getInstance("MD5");
         byte[] digest = md.digest(input.getBytes("UTF-8"));
@@ -64,8 +70,7 @@ public class JP extends Spider {
         }
         List<String> keys = new ArrayList<>(valid.keySet());
         Collections.sort(keys);
-        
-        // 电视兼容：改用 StringBuilder 拼接 URL 参数
+
         StringBuilder query = new StringBuilder();
         for (int i = 0; i < keys.size(); i++) {
             if (i > 0) query.append("&");
@@ -83,8 +88,7 @@ public class JP extends Spider {
         String[] ts = generateSign(params).split("\\|");
         String t = ts[0];
         String sign = ts[1];
-        
-        // 电视兼容：直接用最常规的 Map 传递请求头
+
         Map<String, String> headers = new HashMap<>();
         headers.put("Host", "m.9zhoukj.com");
         headers.put("client-type", "3");
@@ -96,9 +100,8 @@ public class JP extends Spider {
         return headers;
     }
 
-    // 通用请求方法：全面改用系统内置 OkHttp 工具类
+    // 通用请求方法：使用系统 OkHttp 工具
     private String fetch(String path, Map<String, String> params) throws Exception {
-        // 电视兼容：手工安全拼接带有 Query 参数的 URL
         StringBuilder urlBuilder = new StringBuilder(HOST).append(path);
         if (params != null && !params.isEmpty()) {
             urlBuilder.append("?");
@@ -111,14 +114,12 @@ public class JP extends Spider {
                 }
             }
         }
-        
         Map<String, String> reqHeaders = buildHeaders(params != null ? params : new HashMap<>());
-        
-        // 关键点：直接调用系统封装，自带低版本证书和防崩溃处理
         return OkHttp.string(urlBuilder.toString(), reqHeaders);
     }
 
     // ================== 首页 ==================
+
     @Override
     public String homeContent(boolean filter) {
         try {
@@ -204,7 +205,7 @@ public class JP extends Spider {
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        return "";
+        return "{\"class\":[], \"filters\":{}}";
     }
 
     private JSONObject createOption(String n, String v) throws Exception {
@@ -228,10 +229,14 @@ public class JP extends Spider {
         return createFilter(key, name, arr);
     }
 
-    // ================== 分类列表 ==================
+    // ================== 分类列表（修复 extend null 问题） ==================
+
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            // 【Fongmi 兼容】保护 extend 为 null
+            if (extend == null) extend = new HashMap<>();
+
             String[] parts = tid.split("_");
             String type1 = parts[0];
             String subType = parts.length > 1 ? parts[1] : "";
@@ -248,14 +253,26 @@ public class JP extends Spider {
                 params.put("type", finalType);
             }
 
-            if (extend.containsKey("area")) params.put("area", extend.get("area"));
-            if (extend.containsKey("v_class")) params.put("v_class", extend.get("v_class"));
-            if (extend.containsKey("year")) params.put("year", extend.get("year"));
+            // 这些字段可能为 null，使用 getOrDefault 确保非空
+            String area = extend.getOrDefault("area", "");
+            if (!area.isEmpty()) params.put("area", area);
+            String vClass = extend.getOrDefault("v_class", "");
+            if (!vClass.isEmpty()) params.put("v_class", vClass);
+            String year = extend.getOrDefault("year", "");
+            if (!year.isEmpty()) params.put("year", year);
 
             String json = fetch("/api/mw-movie/anonymous/video/list", params);
             if (json == null || json.isEmpty()) return "{\"list\":[], \"page\":" + pg + "}";
 
-            JSONObject data = new JSONObject(json).optJSONObject("data");
+            JSONObject root = new JSONObject(json);
+            // 检查接口返回码（假设成功为 0 或 200）
+            int code = root.optInt("code", -1);
+            if (code != 0 && code != 200) {
+                SpiderDebug.log("[JP] API error: " + root.optString("msg"));
+                return "{\"list\":[], \"page\":" + pg + "}";
+            }
+
+            JSONObject data = root.optJSONObject("data");
             JSONArray list = data != null ? data.optJSONArray("list") : null;
             JSONArray videos = new JSONArray();
             if (list != null) {
@@ -281,6 +298,7 @@ public class JP extends Spider {
     }
 
     // ================== 详情 ==================
+
     @Override
     public String detailContent(List<String> ids) {
         try {
@@ -303,7 +321,6 @@ public class JP extends Spider {
             vod.put("vod_director", "");
             vod.put("vod_actor", "");
             vod.put("vod_content", data.optString("vodContent", ""));
-            vod.put("vod_play_from", "九州空间");
 
             JSONArray episodes = data.optJSONArray("episodeList");
             List<String> epList = new ArrayList<>();
@@ -314,11 +331,16 @@ public class JP extends Spider {
                     String nid = ep.optString("nid", "0");
                     epList.add(name + "$" + vodId + "@@" + nid);
                 }
-            } else {
-                epList.add("正片$" + vodId + "@@0");
             }
-            // 电视兼容：改用安全拼接
-            vod.put("vod_play_url", safeJoin("#", epList));
+
+            // 【Fongmi 兼容】若没有剧集，则线路和 URL 均置空，否则正常赋值
+            if (epList.isEmpty()) {
+                vod.put("vod_play_from", "");
+                vod.put("vod_play_url", "");
+            } else {
+                vod.put("vod_play_from", "九州空间");
+                vod.put("vod_play_url", safeJoin("#", epList));
+            }
 
             JSONArray list = new JSONArray();
             list.put(vod);
@@ -332,6 +354,7 @@ public class JP extends Spider {
     }
 
     // ================== 搜索 ==================
+
     @Override
     public String searchContent(String key, boolean quick) {
         try {
@@ -376,11 +399,13 @@ public class JP extends Spider {
     }
 
     // ================== 播放解析 ==================
+
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
             String[] parts = id.split("@@");
-            if (parts.length < 2) return fallbackParse();
+            if (parts.length < 2) return fallbackParse(id);
+
             String vodId = parts[0];
             String nid = parts[1];
 
@@ -390,12 +415,12 @@ public class JP extends Spider {
             params.put("nid", nid);
 
             String json = fetch("/api/mw-movie/anonymous/v2/video/episode/url", params);
-            if (json == null || json.isEmpty()) return fallbackParse();
+            if (json == null || json.isEmpty()) return fallbackParse(id);
 
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return fallbackParse();
+            if (data == null) return fallbackParse(id);
             JSONArray list = data.optJSONArray("list");
-            if (list == null || list.length() == 0) return fallbackParse();
+            if (list == null || list.length() == 0) return fallbackParse(id);
 
             String url = null;
             for (int i = 0; i < list.length(); i++) {
@@ -406,7 +431,7 @@ public class JP extends Spider {
                 }
             }
             if (url == null) url = list.getJSONObject(0).optString("url");
-            if (url == null || url.isEmpty()) return fallbackParse();
+            if (url == null || url.isEmpty()) return fallbackParse(id);
 
             JSONObject result = new JSONObject();
             result.put("parse", 0);
@@ -421,18 +446,17 @@ public class JP extends Spider {
         } catch (Exception e) {
             SpiderDebug.log(e);
         }
-        return fallbackParse();
+        return fallbackParse(id);
     }
 
-    private String fallbackParse() {
-    try {
-        JSONObject result = new JSONObject();
-        result.put("parse", 1); // 👈 这里是 1
-        result.put("url", "");
-        return result.toString();
-    } catch (Exception ignored) {
-        return "{\"parse\":1,\"url\":\"\"}";
+    private String fallbackParse(String id) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("parse", 1);
+            result.put("url", id != null ? id : "");
+            return result.toString();
+        } catch (Exception ignored) {
+            return "{\"parse\":1,\"url\":\"\"}";
+        }
     }
-}
-
 }
