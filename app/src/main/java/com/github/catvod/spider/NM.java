@@ -27,6 +27,7 @@ import java.util.regex.Pattern;
 /**
  * @author wwgz
  * 农民影视 (Python 版逻辑，对齐 TVBox Spider 规格)
+ * 修改：移除 parse=0 时的 Referer 请求头
  */
 public class NM extends Spider {
 
@@ -562,8 +563,6 @@ public class NM extends Spider {
                 if (numMatcher.find()) currentNum = Integer.parseInt(numMatcher.group(1));
 
                 String targetEncrypted = null;
-                // 注意：此处 macUrl 可能包含多线路（$$$），但 player 只处理当前线路，需按顺序取第一个？实际 TVBox 传入的 id 是加密串，不会传线路分隔符。
-                // 因此我们尝试在所有线路中查找匹配集数的加密串。
                 String[] lines = macUrl.split("\\$\\$\\$");
                 for (String line : lines) {
                     String[] parts = line.split("#");
@@ -577,7 +576,6 @@ public class NM extends Spider {
                     if (targetEncrypted != null) break;
                 }
                 if (targetEncrypted == null) {
-                    // 尝试用正则找当前集
                     Pattern p = Pattern.compile("第" + currentNum + "集\\$(.*?)(?=#|$)");
                     for (String line : lines) {
                         Matcher m = p.matcher(line);
@@ -604,14 +602,16 @@ public class NM extends Spider {
         return fallbackToParse(id);
     }
 
+    // ==================== 修改点：移除 Referer ====================
     private String successPlayerResult(String realUrl) {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 0);
             result.put("url", realUrl);
-            result.put("header", new JSONObject()
-                    .put("User-Agent", getHeaders().get("User-Agent"))
-                    .put("Referer", siteUrl));
+            // 仅保留 User-Agent，移除 Referer
+            JSONObject header = new JSONObject();
+            header.put("User-Agent", getHeaders().get("User-Agent"));
+            result.put("header", header);
             return result.toString();
         } catch (Exception ignored) {}
         return "{\"parse\":0,\"url\":\"\"}";
@@ -622,9 +622,10 @@ public class NM extends Spider {
             JSONObject result = new JSONObject();
             result.put("parse", 1);
             result.put("url", url != null ? url : "");
-            result.put("header", new JSONObject()
-                    .put("User-Agent", getHeaders().get("User-Agent"))
-                    .put("Referer", siteUrl));
+            // 仅保留 User-Agent，移除 Referer
+            JSONObject header = new JSONObject();
+            header.put("User-Agent", getHeaders().get("User-Agent"));
+            result.put("header", header);
             return result.toString();
         } catch (Exception ignored) {}
         return "{\"parse\":1,\"url\":\"\"}";
