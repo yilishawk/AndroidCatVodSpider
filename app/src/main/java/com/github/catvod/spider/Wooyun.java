@@ -75,10 +75,13 @@ public class Wooyun extends Spider {
         return filters;
     }
 
-    // ==================== 通用搜索/分类请求 ====================
-    private List<Vod> searchApi(String topCode, String searchKey, String sortCode,
-                                List<String> menuCodes, int page, int pageSize) {
+    /**
+     * 统一请求，返回 {list, total}
+     */
+    private Object[] searchApi(String topCode, String searchKey, String sortCode,
+                               List<String> menuCodes, int page, int pageSize) {
         List<Vod> list = new ArrayList<>();
+        int total = 0;
         try {
             JSONArray menuCodeList = new JSONArray();
             if (menuCodes != null) {
@@ -98,42 +101,49 @@ public class Wooyun extends Spider {
             String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search",
                     body.toString(), getHeader()).getBody();
 
-            if (TextUtils.isEmpty(res)) return list;
+            log("searchApi topCode=" + topCode + " page=" + page + " bodyLen=" + (res == null ? 0 : res.length()));
 
-            JSONObject data = new JSONObject(res).optJSONObject("data");
-            if (data == null) return list;
+            if (TextUtils.isEmpty(res)) return new Object[]{list, 0};
 
-            JSONArray records = data.optJSONArray("records");
-            if (records == null) return list;
-
-            for (int i = 0; i < records.length(); i++) {
-                JSONObject item = records.getJSONObject(i);
-                String id = item.optString("id", item.optString("mediaId", ""));
-                if (TextUtils.isEmpty(id)) continue;
-
-                String pic = item.optString("posterUrlS3", "");
-                if (TextUtils.isEmpty(pic)) pic = item.optString("posterUrl", "");
-
-                Vod vod = new Vod();
-                vod.setVodId(id);
-                vod.setVodName(item.optString("title", ""));
-                vod.setVodPic(pic);
-                vod.setVodRemarks(item.optString("episodeStatus", ""));
-                list.add(vod);
+            JSONObject root = new JSONObject(res);
+            JSONObject data = root.optJSONObject("data");
+            if (data == null) {
+                log("data为空: " + res.substring(0, Math.min(150, res.length())));
+                return new Object[]{list, 0};
             }
+
+            total = data.optInt("total", 0);
+            JSONArray records = data.optJSONArray("records");
+            if (records != null) {
+                for (int i = 0; i < records.length(); i++) {
+                    JSONObject item = records.getJSONObject(i);
+                    String id = item.optString("id", item.optString("mediaId", ""));
+                    if (TextUtils.isEmpty(id)) continue;
+
+                    String pic = item.optString("posterUrlS3", "");
+                    if (TextUtils.isEmpty(pic)) pic = item.optString("posterUrl", "");
+
+                    Vod vod = new Vod();
+                    vod.setVodId(id);
+                    vod.setVodName(item.optString("title", ""));
+                    vod.setVodPic(pic);
+                    vod.setVodRemarks(item.optString("episodeStatus", ""));
+                    list.add(vod);
+                }
+            }
+            log("searchApi 解析到 " + list.size() + " 条, total=" + total);
         } catch (Exception e) {
             log("searchApi 异常: " + e.getMessage());
         }
-        return list;
+        return new Object[]{list, total};
     }
 
-    // ==================== 生命周期 ====================
     @Override
     public void init(Context context, String extend) throws Exception {
         log("初始化完成");
     }
 
-    // 首页分类 + 推荐
+    // 首页：分类 + 推荐（推荐有数据，说明接口通）
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -149,13 +159,17 @@ public class Wooyun extends Spider {
             filterMap.put(c.getTypeId(), filters);
         }
 
-        // 首页推荐片
-        List<Vod> list = searchApi("tv_series", "", "", null, 1, 24);
+        Object[] ret = searchApi("tv_series", "", "", null, 1, 24);
+        @SuppressWarnings("unchecked")
+        List<Vod> list = (List<Vod>) ret[0];
 
         return Result.get().classes(classes).filters(filterMap).vod(list).string();
     }
 
-    // 分类列表
+    /**
+     * ★ 关键：分类必须带 page / pagecount / limit / total
+     *   只返回 list 时，Fongmi 经常显示空列表
+     */
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         if (extend == null) extend = new HashMap<>();
@@ -166,18 +180,31 @@ public class Wooyun extends Spider {
 
         String sortCode = extend.getOrDefault("sort", "");
         List<String> menuCodes = new ArrayList<>();
-        if (!TextUtils.isEmpty(extend.get("genre"))) menuCodes.add(extend.get("genre"));
-        if (!TextUtils.isEmpty(extend.get("region"))) menuCodes.add(extend.get("region"));
-        if (!TextUtils.isEmpty(extend.get("language"))) menuCodes.add(extend.get("language"));
-        if (!TextUtils.isEmpty(extend.get("year"))) menuCodes.add(extend.get("year"));
+        // 只有非空才加，避免传空字符串干扰
+        String genre = extend.get("genre");
+        String region = extend.get("region");
+        String language = extend.get("language");
+        String year = extend.get("year");
+        if (!TextUtils.isEmpty(genre)) menuCodes.add(genre);
+        if (!TextUtils.isEmpty(region)) menuCodes.add(region);
+        if (!TextUtils.isEmpty(language)) menuCodes.add(language);
+        if (!TextUtils.isEmpty(year)) menuCodes.add(year);
 
-        List<Vod> list = searchApi(tid, "", sortCode, menuCodes, page, 24);
+        log("categoryContent tid=[" + tid + "] page=" + page + " sort=" + sortCode + " menus=" + menuCodes);
 
-        // 简单写法，FongMi 会自动处理分页（和你给的 QiYou 一样）
-        return Result.string(list);
+        Object[] ret = searchApi(tid, "", sortCode, menuCodes, page, 24);
+        @SuppressWarnings("unchecked")
+        List<Vod> list = (List<Vod>) ret[0];
+        int total = (Integer) ret[1];
+
+        int pageSize = 24;
+        int totalPage = total > 0 ? (int) Math.ceil(total / (double) pageSize) : 1;
+        if (totalPage < 1) totalPage = 1;
+
+        // 必须带分页信息
+        return Result.get().vod(list).page(page, totalPage, pageSize, total).string();
     }
 
-    // 详情
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String mediaId = ids.get(0);
@@ -185,7 +212,6 @@ public class Wooyun extends Spider {
         vod.setVodId(mediaId);
 
         try {
-            // 基础信息
             String detailRes = OkHttp.string(HOST + "/api/proxy?url=/movie/media/base/detail?mediaId=" + mediaId, getHeader());
             JSONObject info = new JSONObject(detailRes).optJSONObject("data");
             if (info == null) return Result.string(vod);
@@ -212,13 +238,11 @@ public class Wooyun extends Spider {
             vod.setVodActor(TextUtils.join(", ", actors));
             vod.setVodDirector(TextUtils.join(", ", directors));
 
-            // 分集
             String epRes = OkHttp.string(HOST + "/api/proxy?url=/movie/media/video/list?mediaId=" + mediaId + "&lineName=&resolutionCode=", getHeader());
             JSONArray seasons = new JSONObject(epRes).optJSONArray("data");
 
             List<String> fromList = new ArrayList<>();
             List<String> urlList = new ArrayList<>();
-
             if (seasons != null) {
                 for (int s = 0; s < seasons.length(); s++) {
                     JSONObject season = seasons.getJSONObject(s);
@@ -253,17 +277,18 @@ public class Wooyun extends Spider {
         return Result.string(vod);
     }
 
-    // 搜索
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        List<Vod> list = searchApi("", key, "", null, 1, 24);
-        return Result.string(list);
+        Object[] ret = searchApi("", key, "", null, 1, 24);
+        @SuppressWarnings("unchecked")
+        List<Vod> list = (List<Vod>) ret[0];
+        int total = (Integer) ret[1];
+        int totalPage = total > 0 ? (int) Math.ceil(total / 24.0) : 1;
+        return Result.get().vod(list).page(1, totalPage, 24, total).string();
     }
 
-    // 播放
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 直接返回播放地址（已是 m3u8 或 gen_overseas 包装）
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Referer", HOST + "/");
