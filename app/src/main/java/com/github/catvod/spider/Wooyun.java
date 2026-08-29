@@ -22,7 +22,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Wooyun.tv - 符合 Fongmi 规范最终版
+ * Wooyun.tv - 最终兼容版（Fongmi 分类手动构造 JSON）
+ * 修复：分类列表在 Fongmi 不显示的问题（手动构造 JSON 确保字段类型正确）
  */
 public class Wooyun extends Spider {
 
@@ -101,6 +102,7 @@ public class Wooyun extends Spider {
         }
     }
 
+    // ================== 分类列表（手动构造 JSON 确保 Fongmi 兼容） ==================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
@@ -130,44 +132,56 @@ public class Wooyun extends Spider {
             String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search",
                     body.toString(), getHeaders()).getBody();
 
+            logger("分类请求响应: " + (res != null ? res.substring(0, Math.min(200, res.length())) : "null"));
+
             if (res == null || res.isEmpty()) {
-                return Result.get().vod(new ArrayList<>()).page(page, 1, 0, 0).string();
+                return "{\"list\":[], \"page\":" + page + ", \"pagecount\":1}";
             }
 
             JSONObject root = new JSONObject(res);
             JSONObject data = root.optJSONObject("data");
             if (data == null) {
                 logger("data 为空");
-                return Result.get().vod(new ArrayList<>()).page(page, 1, 0, 0).string();
+                return "{\"list\":[], \"page\":" + page + ", \"pagecount\":1}";
             }
 
             JSONArray records = data.optJSONArray("records");
-            List<Vod> list = new ArrayList<>();
+            JSONArray videoList = new JSONArray();
             if (records != null) {
                 for (int i = 0; i < records.length(); i++) {
                     JSONObject item = records.getJSONObject(i);
                     String pic = item.optString("posterUrlS3", "");
                     if (TextUtils.isEmpty(pic)) pic = item.optString("posterUrl", "");
-                    Vod vod = new Vod();
-                    vod.setVodId(String.valueOf(item.optInt("id")));
-                    vod.setVodName(item.optString("title", ""));
-                    vod.setVodPic(pic);
-                    vod.setVodRemarks(item.optString("episodeStatus", ""));
-                    list.add(vod);
+                    JSONObject vod = new JSONObject();
+                    vod.put("vod_id", String.valueOf(item.optInt("id")));
+                    vod.put("vod_name", item.optString("title", ""));
+                    vod.put("vod_pic", pic);
+                    vod.put("vod_remarks", item.optString("episodeStatus", ""));
+                    videoList.put(vod);
                 }
             }
 
+            // 计算总页数
             int total = data.optInt("total", 0);
             int pageSize = 24;
             int totalPage = 1;
-            if (total > 0) totalPage = (int) Math.ceil((double) total / pageSize);
-            else if (records != null && records.length() < pageSize) totalPage = 1;
-            else totalPage = 100;
+            if (total > 0) {
+                totalPage = (int) Math.ceil((double) total / pageSize);
+            } else if (records != null && records.length() < pageSize) {
+                totalPage = 1;
+            } else {
+                totalPage = 100;
+            }
 
-            return Result.get().vod(list).page(page, totalPage, list.size(), total).string();
+            // 【关键】手动构造 JSON，确保 page 和 pagecount 是数字类型
+            JSONObject result = new JSONObject();
+            result.put("list", videoList);
+            result.put("page", page);
+            result.put("pagecount", totalPage);
+            return result.toString();
         } catch (Exception e) {
             logger("categoryContent 异常: " + e.getMessage());
-            return Result.error(e.getMessage());
+            return "{\"list\":[], \"page\":1, \"pagecount\":1}";
         }
     }
 
