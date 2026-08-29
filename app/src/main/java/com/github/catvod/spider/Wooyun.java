@@ -27,13 +27,13 @@ import okhttp3.Response;
 
 /**
  * Wooyun.tv - 兼容 Fongmi / OK影视
- * Fongmi 的 OkHttp 没有 post(json)，统一用 newCall + RequestBody
+ * 使用 OkHttp.newCall + RequestBody（Fongmi 无 post 方法）
+ * RequestBody.create 按 OkHttp 4.x：content 在前
  */
 public class Wooyun extends Spider {
 
     private static final String HOST = "https://wooyun.tv";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private Map<String, String> getHeader() {
         Map<String, String> h = new HashMap<>();
@@ -49,10 +49,11 @@ public class Wooyun extends Spider {
         SpiderDebug.log("[Wooyun] " + msg);
     }
 
-    /** POST JSON，兼容 Fongmi OkHttp（无 post 方法） */
+    /** POST JSON（OkHttp 4.x） */
     private String postJson(String url, String json) {
         try {
-            RequestBody body = RequestBody.create(JSON, json);
+            MediaType mediaType = MediaType.parse("application/json; charset=utf-8");
+            RequestBody body = RequestBody.create(json, mediaType);
             try (Response response = OkHttp.newCall(url, getHeader(), body).execute()) {
                 if (response.body() == null) return "";
                 return response.body().string();
@@ -112,7 +113,7 @@ public class Wooyun extends Spider {
 
     /**
      * 统一搜索/分类
-     * @return Object[]{ List&lt;Vod&gt; list, Integer total }
+     * @return Object[]{ List&lt;Vod&gt;, Integer total }
      */
     private Object[] searchApi(String topCode, String searchKey, String sortCode,
                                List<String> menuCodes, int page, int pageSize) {
@@ -135,8 +136,7 @@ public class Wooyun extends Spider {
             body.put("topCode", topCode == null ? "" : topCode);
 
             String res = postJson(HOST + "/api/proxy?url=/movie/media/search", body.toString());
-            log("api topCode=" + topCode + " key=" + searchKey + " page=" + page
-                    + " len=" + res.length());
+            log("api topCode=" + topCode + " key=" + searchKey + " page=" + page + " len=" + res.length());
 
             if (TextUtils.isEmpty(res)) return new Object[]{list, 0};
 
@@ -179,7 +179,6 @@ public class Wooyun extends Spider {
         log("初始化完成");
     }
 
-    /** 首页：分类 + 筛选 */
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -197,7 +196,6 @@ public class Wooyun extends Spider {
         return Result.get().classes(classes).filters(filterMap).string();
     }
 
-    /** 首页推荐（Fongmi 走这里） */
     @Override
     public String homeVideoContent() throws Exception {
         Object[] ret = searchApi("tv_series", "", "", null, 1, 24);
@@ -206,16 +204,18 @@ public class Wooyun extends Spider {
         return Result.get().vod(list).string();
     }
 
-    /** 分类列表（必须带 page） */
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         if (extend == null) extend = new HashMap<>();
         int page = 1;
         try {
             page = Integer.parseInt(pg);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        String sortCode = extend.getOrDefault("sort", "");
+        String sortCode = extend.containsKey("sort") ? extend.get("sort") : "";
+        if (sortCode == null) sortCode = "";
+
         List<String> menuCodes = new ArrayList<>();
         for (String k : new String[]{"genre", "region", "language", "year"}) {
             String v = extend.get(k);
@@ -236,7 +236,6 @@ public class Wooyun extends Spider {
         return Result.get().vod(list).page(page, pagecount, pageSize, total).string();
     }
 
-    /** 详情 */
     @Override
     public String detailContent(List<String> ids) throws Exception {
         String mediaId = ids.get(0);
@@ -309,7 +308,6 @@ public class Wooyun extends Spider {
         return Result.string(vod);
     }
 
-    /** 搜索 */
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         Object[] ret = searchApi("", key, "", null, 1, 24);
@@ -321,7 +319,6 @@ public class Wooyun extends Spider {
         return Result.get().vod(list).page(1, pagecount, 24, total).string();
     }
 
-    /** 播放 */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         Map<String, String> headers = new HashMap<>();
