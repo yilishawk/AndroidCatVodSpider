@@ -22,8 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Wooyun.tv - 最终兼容版（Fongmi 分类手动构造 JSON）
- * 修复：分类列表在 Fongmi 不显示的问题（手动构造 JSON 确保字段类型正确）
+ * Wooyun.tv - 完整兼容版（符合 Fongmi / CatVod 规范）
  */
 public class Wooyun extends Spider {
 
@@ -45,7 +44,7 @@ public class Wooyun extends Spider {
     private List<Filter> buildFilters() {
         List<Filter> filters = new ArrayList<>();
         filters.add(new Filter("sort", "排序", Arrays.asList(
-                new Filter.Value("全部",   "default"),
+                new Filter.Value("全部",   ""),
                 new Filter.Value("新上映", "newest"),
                 new Filter.Value("热播榜", "hot"),
                 new Filter.Value("评分榜", "rating"),
@@ -102,14 +101,13 @@ public class Wooyun extends Spider {
         }
     }
 
-    // ================== 分类列表（手动构造 JSON 确保 Fongmi 兼容） ==================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
             if (extend == null) extend = new HashMap<>();
             int page = Integer.parseInt(pg);
 
-            String sortCode = extend.getOrDefault("sort", "default");
+            String sortCode = extend.getOrDefault("sort", "");
             String genre = extend.getOrDefault("genre", "");
             String region = extend.getOrDefault("region", "");
             String language = extend.getOrDefault("language", "");
@@ -123,7 +121,7 @@ public class Wooyun extends Spider {
 
             JSONObject body = new JSONObject();
             body.put("menuCodeList", menuCodeList);
-            body.put("pageIndex", String.valueOf(page));
+            body.put("pageIndex", page);
             body.put("pageSize", 24);
             body.put("searchKey", "");
             body.put("sortCode", sortCode);
@@ -134,54 +132,44 @@ public class Wooyun extends Spider {
 
             logger("分类请求响应: " + (res != null ? res.substring(0, Math.min(200, res.length())) : "null"));
 
-            if (res == null || res.isEmpty()) {
-                return "{\"list\":[], \"page\":" + page + ", \"pagecount\":1}";
+            if (TextUtils.isEmpty(res)) {
+                return Result.get().vod(new ArrayList<>()).page(page, 1, 24, 0).string();
             }
 
             JSONObject root = new JSONObject(res);
             JSONObject data = root.optJSONObject("data");
             if (data == null) {
-                logger("data 为空");
-                return "{\"list\":[], \"page\":" + page + ", \"pagecount\":1}";
+                return Result.get().vod(new ArrayList<>()).page(page, 1, 24, 0).string();
             }
 
             JSONArray records = data.optJSONArray("records");
-            JSONArray videoList = new JSONArray();
+            List<Vod> list = new ArrayList<>();
             if (records != null) {
                 for (int i = 0; i < records.length(); i++) {
                     JSONObject item = records.getJSONObject(i);
                     String pic = item.optString("posterUrlS3", "");
                     if (TextUtils.isEmpty(pic)) pic = item.optString("posterUrl", "");
-                    JSONObject vod = new JSONObject();
-                    vod.put("vod_id", String.valueOf(item.optInt("id")));
-                    vod.put("vod_name", item.optString("title", ""));
-                    vod.put("vod_pic", pic);
-                    vod.put("vod_remarks", item.optString("episodeStatus", ""));
-                    videoList.put(vod);
+
+                    String vodId = item.optString("id", item.optString("mediaId", ""));
+
+                    Vod vod = new Vod();
+                    vod.setVodId(vodId);
+                    vod.setVodName(item.optString("title", ""));
+                    vod.setVodPic(pic);
+                    vod.setVodRemarks(item.optString("episodeStatus", ""));
+                    list.add(vod);
                 }
             }
 
-            // 计算总页数
-            int total = data.optInt("total", 0);
+            int total = data.optInt("total", list.size());
             int pageSize = 24;
-            int totalPage = 1;
-            if (total > 0) {
-                totalPage = (int) Math.ceil((double) total / pageSize);
-            } else if (records != null && records.length() < pageSize) {
-                totalPage = 1;
-            } else {
-                totalPage = 100;
-            }
+            int totalPage = (int) Math.ceil((double) total / pageSize);
+            if (totalPage <= 0) totalPage = 1;
 
-            // 【关键】手动构造 JSON，确保 page 和 pagecount 是数字类型
-            JSONObject result = new JSONObject();
-            result.put("list", videoList);
-            result.put("page", page);
-            result.put("pagecount", totalPage);
-            return result.toString();
+            return Result.get().vod(list).page(page, totalPage, pageSize, total).string();
         } catch (Exception e) {
             logger("categoryContent 异常: " + e.getMessage());
-            return "{\"list\":[], \"page\":1, \"pagecount\":1}";
+            return Result.get().vod(new ArrayList<>()).page(1, 1, 24, 0).string();
         }
     }
 
@@ -258,7 +246,7 @@ public class Wooyun extends Spider {
         try {
             JSONObject body = new JSONObject();
             body.put("menuCodeList", new JSONArray());
-            body.put("pageIndex", "1");
+            body.put("pageIndex", 1);
             body.put("pageSize", 10);
             body.put("searchKey", key);
             body.put("sortCode", "");
@@ -267,12 +255,12 @@ public class Wooyun extends Spider {
             String res = OkHttp.post(HOST + "/api/proxy?url=/movie/media/search",
                     body.toString(), getHeaders()).getBody();
 
-            if (res == null || res.isEmpty()) {
-                return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+            if (TextUtils.isEmpty(res)) {
+                return Result.get().vod(new ArrayList<>()).page(1, 1, 10, 0).string();
             }
 
             JSONObject data = new JSONObject(res).optJSONObject("data");
-            if (data == null) return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+            if (data == null) return Result.get().vod(new ArrayList<>()).page(1, 1, 10, 0).string();
 
             JSONArray records = data.optJSONArray("records");
             List<Vod> list = new ArrayList<>();
@@ -283,8 +271,11 @@ public class Wooyun extends Spider {
                     if (title.toLowerCase().contains(key.toLowerCase())) {
                         String pic = item.optString("posterUrlS3", "");
                         if (TextUtils.isEmpty(pic)) pic = item.optString("posterUrl", "");
+
+                        String vodId = item.optString("id", item.optString("mediaId", ""));
+
                         Vod vod = new Vod();
-                        vod.setVodId(String.valueOf(item.optInt("id")));
+                        vod.setVodId(vodId);
                         vod.setVodName(title);
                         vod.setVodPic(pic);
                         vod.setVodRemarks(item.optString("episodeStatus", ""));
@@ -295,7 +286,9 @@ public class Wooyun extends Spider {
 
             int total = data.optInt("total", list.size());
             int totalPage = (int) Math.ceil((double) total / 10);
-            return Result.get().vod(list).page(1, totalPage, list.size(), total).string();
+            if (totalPage <= 0) totalPage = 1;
+
+            return Result.get().vod(list).page(1, totalPage, 10, total).string();
         } catch (Exception e) {
             logger("searchContent 异常: " + e.getMessage());
             return Result.error(e.getMessage());
