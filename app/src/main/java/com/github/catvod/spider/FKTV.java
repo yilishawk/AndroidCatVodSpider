@@ -50,7 +50,7 @@ import okhttp3.Response;
  *     （库自身的"无限/未知"语义，不是 bug）。
  *   - Vod 用传统 setXxx()，但**没有 type_id 字段**，只有 setTypeName()，所以列表/详情里
  *     都不再设置 type_id。
- *   - Class 完全没有 setter，只能用构造函数 new Class(typeId, typeName)。
+ *   - Class 完全没有 setter，只能用构造函数new Class(typeId, typeName)。
  *   - OkHttp 没有 newCall(url, headers, body) 这个三参数重载，POST 自定义 Content-Type
  *     的原始字节流必须自己拼 okhttp3.Request 再调用 OkHttp.newCall(Request)。
  *   - OkHttp.string() 内部吞掉了 IOException，失败时返回空字符串而不是抛异常，因此用
