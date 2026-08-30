@@ -2,7 +2,7 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-import com.github.catvod.net.OkHttp; // 引入系统最稳的网络框架
+import com.github.catvod.net.OkHttp; //引入系统最稳的网络框架
 
 import org.json.JSONArray;
 import org.json.JSONObject;
