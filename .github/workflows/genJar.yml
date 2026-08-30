@@ -2,7 +2,7 @@ name: Spider Jar Gen CI (Simplified)
 
 on:
   push:
-    branches: [ "multiThread" ]
+    branches: [ "Catvod" ]
   workflow_dispatch:
 
 jobs:
