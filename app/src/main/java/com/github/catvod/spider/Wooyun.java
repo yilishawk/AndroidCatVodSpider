@@ -8,10 +8,15 @@ import com.github.catvod.crawler.SpiderDebug;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Headers;
@@ -22,13 +27,17 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * Wooyun.tv - 按骚火风格重写，兼容 Fongmi
- * 自己 OkHttpClient + 手写 JSONObject，不依赖 Result / 壳子 OkHttp
+ * Wooyun.tv - Fongmi 兼容版 + 本地代理日志
+ * 查看日志: http://设备IP:9978/proxy?do=log
+ * 清空日志: http://设备IP:9978/proxy?do=log&clear=1
  */
 public class Wooyun extends Spider {
 
     private static final String HOST = "https://wooyun.tv";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+    private static final CopyOnWriteArrayList<String> LOGS = new CopyOnWriteArrayList<>();
+    private static final int LOG_MAX = 300;
 
     private final OkHttpClient client;
     private final Map<String, String> headers;
@@ -50,7 +59,12 @@ public class Wooyun extends Spider {
     }
 
     private void log(String msg) {
+        String line = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()) + " " + msg;
         SpiderDebug.log("[Wooyun] " + msg);
+        LOGS.add(line);
+        while (LOGS.size() > LOG_MAX) {
+            LOGS.remove(0);
+        }
     }
 
     private String postJson(String url, String json) throws Exception {
@@ -84,7 +98,6 @@ public class Wooyun extends Spider {
         }
     }
 
-    /** 统一搜索/分类 API */
     private JSONArray searchApi(String topCode, String searchKey, String sortCode,
                                 List<String> menuCodes, int page, int pageSize,
                                 int[] totalOut) throws Exception {
@@ -131,6 +144,8 @@ public class Wooyun extends Spider {
                     list.put(vod);
                 }
             }
+        } else {
+            log("data 为空: " + res.substring(0, Math.min(150, res.length())));
         }
         log("解析 " + list.length() + " 条, total=" + total);
         if (totalOut != null && totalOut.length > 0) totalOut[0] = total;
@@ -216,12 +231,13 @@ public class Wooyun extends Spider {
 
     @Override
     public void init(Context context, String extend) {
-        log("初始化完成");
+        log("init extend=" + (extend == null ? "" : extend));
     }
 
     @Override
     public String homeContent(boolean filter) {
         try {
+            log("homeContent filter=" + filter);
             JSONObject result = new JSONObject();
             JSONArray classes = new JSONArray();
             classes.put(createClass("tv_series", "电视剧"));
@@ -243,7 +259,7 @@ public class Wooyun extends Spider {
             }
             return result.toString();
         } catch (Exception e) {
-            log("homeContent: " + e.getMessage());
+            log("homeContent 异常: " + e.getMessage());
             return "{\"class\":[],\"filters\":{}}";
         }
     }
@@ -251,13 +267,14 @@ public class Wooyun extends Spider {
     @Override
     public String homeVideoContent() {
         try {
+            log("homeVideoContent");
             int[] total = new int[1];
             JSONArray list = searchApi("tv_series", "", "", null, 1, 24, total);
             JSONObject result = new JSONObject();
             result.put("list", list);
             return result.toString();
         } catch (Exception e) {
-            log("homeVideoContent: " + e.getMessage());
+            log("homeVideoContent 异常: " + e.getMessage());
             return "{\"list\":[]}";
         }
     }
@@ -283,7 +300,7 @@ public class Wooyun extends Spider {
                 }
             }
 
-            log("category tid=[" + tid + "] page=" + page + " sort=" + sortCode);
+            log("category tid=[" + tid + "] page=" + page + " sort=" + sortCode + " menus=" + menuCodes);
 
             int[] totalArr = new int[1];
             JSONArray list = searchApi(tid, "", sortCode, menuCodes, page, 24, totalArr);
@@ -299,7 +316,7 @@ public class Wooyun extends Spider {
             result.put("total", total > 0 ? total : 9999);
             return result.toString();
         } catch (Exception e) {
-            log("categoryContent: " + e.getMessage());
+            log("categoryContent 异常: " + e.getMessage());
             e.printStackTrace();
             return "{\"list\":[],\"page\":1,\"pagecount\":1,\"limit\":24,\"total\":0}";
         }
@@ -310,10 +327,14 @@ public class Wooyun extends Spider {
         try {
             if (ids == null || ids.isEmpty()) return "{\"list\":[]}";
             String mediaId = ids.get(0);
+            log("detail mediaId=" + mediaId);
 
             String detailRes = get(HOST + "/api/proxy?url=/movie/media/base/detail?mediaId=" + mediaId);
             JSONObject info = new JSONObject(detailRes).optJSONObject("data");
-            if (info == null) return "{\"list\":[]}";
+            if (info == null) {
+                log("detail data 为空");
+                return "{\"list\":[]}";
+            }
 
             String pic = info.optString("posterUrlS3", "");
             if (pic.isEmpty()) pic = info.optString("posterUrl", "");
@@ -367,6 +388,7 @@ public class Wooyun extends Spider {
                     }
                 }
             }
+            log("detail 线路数=" + fromList.size());
 
             JSONObject vod = new JSONObject();
             vod.put("vod_id", mediaId);
@@ -403,7 +425,7 @@ public class Wooyun extends Spider {
             result.put("list", list);
             return result.toString();
         } catch (Exception e) {
-            log("detail: " + e.getMessage());
+            log("detail 异常: " + e.getMessage());
             e.printStackTrace();
             return "{\"list\":[]}";
         }
@@ -412,6 +434,7 @@ public class Wooyun extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         try {
+            log("search key=" + key + " quick=" + quick);
             int[] totalArr = new int[1];
             JSONArray list = searchApi("", key, "", null, 1, 24, totalArr);
             int total = totalArr[0];
@@ -423,7 +446,7 @@ public class Wooyun extends Spider {
             result.put("total", total);
             return result.toString();
         } catch (Exception e) {
-            log("search: " + e.getMessage());
+            log("search 异常: " + e.getMessage());
             return "{\"list\":[]}";
         }
     }
@@ -431,6 +454,7 @@ public class Wooyun extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
+            log("player flag=" + flag + " id=" + id);
             JSONObject header = new JSONObject();
             header.put("User-Agent", UA);
             header.put("Referer", HOST + "/");
@@ -441,7 +465,49 @@ public class Wooyun extends Spider {
             result.put("header", header);
             return result.toString();
         } catch (Exception e) {
+            log("player 异常: " + e.getMessage());
             return "{\"parse\":1,\"url\":\"" + id + "\"}";
+        }
+    }
+
+    /**
+     * 本地代理日志
+     * 查看: http://设备IP:9978/proxy?do=log
+     * 清空: http://设备IP:9978/proxy?do=log&clear=1
+     */
+    @Override
+    public Object[] proxy(Map<String, String> params) {
+        try {
+            String doAction = params != null ? params.get("do") : null;
+            if (!"log".equals(doAction)) {
+                return null;
+            }
+
+            if (params != null && "1".equals(params.get("clear"))) {
+                LOGS.clear();
+                log("日志已清空");
+                byte[] ok = "cleared\n".getBytes("UTF-8");
+                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(ok)};
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("=== Wooyun Log (").append(LOGS.size()).append(") ===\n");
+            for (String line : LOGS) {
+                sb.append(line).append("\n");
+            }
+            if (LOGS.isEmpty()) {
+                sb.append("(empty - 请先在 App 打开 Wooyun 并点分类/搜索)\n");
+            }
+            byte[] bytes = sb.toString().getBytes("UTF-8");
+            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
+        } catch (Exception e) {
+            try {
+                String err = "proxy log error: " + e.getMessage() + "\n";
+                return new Object[]{500, "text/plain; charset=utf-8",
+                        new ByteArrayInputStream(err.getBytes("UTF-8"))};
+            } catch (Exception ignored) {
+                return null;
+            }
         }
     }
 }
