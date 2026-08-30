@@ -2,7 +2,9 @@ name: Spider Jar Gen CI (Simplified)
 
 on:
   push:
-    branches: [ "multiThread" ]
+    branches: 
+      - "multiThread"
+      - "Catvod"          # 新增 Catvod 分支触发
   workflow_dispatch:
 
 jobs:
@@ -33,33 +35,49 @@ jobs:
           message: 'update spider jar and json'
           add: "['./jar/custom_spider.jar', './jar/custom_spider.jar.md5','./json/index.json']"
 
-      # --- 新增：推送到目标仓库 https://github.com/yilishawk/js.git ---
+      # --- 推送到目标仓库，带分支标识 ---
       - name: Push Jar to yilishawk/js Repository
         env:
-          TARGET_PAT: ${{ secrets.TARGET_PAT }}   # 推荐使用 Secrets 方式
+          TARGET_PAT: ${{ secrets.TARGET_PAT }}
         run: |
           echo "Preparing to push to target repository..."
+
+          # 获取当前分支名，用于区分不同分支的构建产物
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "Current branch: $BRANCH_NAME"
 
           # 创建临时目录并克隆目标仓库
           mkdir -p target_repo
           cd target_repo
           git clone https://x-access-token:${TARGET_PAT}@github.com/yilishawk/js.git .
-          
-          # 复制需要推送的文件
-          cp ../jar/custom_spider.jar ./ 2>/dev/null || echo "Warning: custom_spider.jar not found"
-          cp ../jar/custom_spider.jar.md5 ./ 2>/dev/null || echo "Warning: md5 file not found"
-          cp ../json/index.json ./ 2>/dev/null || echo "Warning: index.json not found"
-          
+
+          # 根据分支名创建或切换到对应子目录
+          # multiThread 分支的文件放到 spider/multiThread/ 下
+          # Catvod 分支的文件放到 spider/Catvod/ 下
+          TARGET_DIR="spider/${BRANCH_NAME}"
+          mkdir -p "$TARGET_DIR"
+
+          # 复制需要推送的文件到对应分支目录
+          cp ../jar/custom_spider.jar "$TARGET_DIR/" 2>/dev/null || echo "Warning: custom_spider.jar not found"
+          cp ../jar/custom_spider.jar.md5 "$TARGET_DIR/" 2>/dev/null || echo "Warning: md5 file not found"
+          cp ../json/index.json "$TARGET_DIR/" 2>/dev/null || echo "Warning: index.json not found"
+
+          # 也可以额外在根目录放一份最新版本（带分支后缀）
+          # 取消注释下面几行可以启用
+          # cp ../jar/custom_spider.jar "./custom_spider_${BRANCH_NAME}.jar" 2>/dev/null || true
+          # cp ../jar/custom_spider.jar.md5 "./custom_spider_${BRANCH_NAME}.jar.md5" 2>/dev/null || true
+          # cp ../json/index.json "./index_${BRANCH_NAME}.json" 2>/dev/null || true
+
           # 提交并推送
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          
-          git add -A
-          git commit -m "Update spider jar and json from build" || echo "No changes to commit"
-          git push origin main || git push origin master
-        continue-on-error: true   # 如果没有变化也不失败
 
-      # --- 保留原来的 Artifact 下载 ---
+          git add -A
+          git commit -m "Update spider jar and json from ${BRANCH_NAME} branch" || echo "No changes to commit"
+          git push origin main || git push origin master
+        continue-on-error: true
+
+      # --- 保留原来的 Artifact 下载，加上分支标识便于区分 ---
       - name: Find Jar path
         id: find_jar
         run: |
@@ -80,6 +98,6 @@ jobs:
       - name: Upload Jar Artifact for Download
         uses: actions/upload-artifact@v4
         with:
-          name: Custom-Spider-Jar
+          name: Custom-Spider-Jar-${{ github.ref_name }}   # 添加分支名到 artifact 名称
           path: ${{ steps.find_jar.outputs.JAR_PATH }}
           retention-days: 7
