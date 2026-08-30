@@ -475,7 +475,6 @@ public class Wooyun extends Spider {
      * 查看: http://设备IP:9978/proxy?do=log
      * 清空: http://设备IP:9978/proxy?do=log&clear=1
      */
-    @Override
     public Object[] proxy(Map<String, String> params) {
         try {
             String doAction = params != null ? params.get("do") : null;
