@@ -18,6 +18,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.net.URL;
 import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -48,6 +49,8 @@ public class Tvbyun extends Spider {
         jiexiUrlMap.put("ffm3u8", "http://111.229.219.148:808/xun3.php?url=");
         jiexiUrlMap.put("1080zyk", "http://111.229.219.148:808/xun3.php?url=");
         jiexiUrlMap.put("mytv", "http://111.229.219.148:808/index.php?url=");
+        jiexiUrlMap.put("vwnet", "http://111.229.219.148:866/index2.php?url=");
+        jiexiUrlMap.put("co", "http://111.229.219.148:866/index2.php?url=");
     }
 
     private void log(String msg) {
@@ -130,7 +133,6 @@ public class Tvbyun extends Spider {
         return null;
     }
 
-    /** 有列表/详情/播放特征则不算滑块 */
     private boolean isSliderPage(String html) {
         if (html == null || html.isEmpty()) return false;
         if (html.contains("myui-vodlist") || html.contains("stui-vodlist")
@@ -140,7 +142,61 @@ public class Tvbyun extends Spider {
             return false;
         }
         return html.contains("滑动验证") || html.contains("人机身份验证")
-                || (html.contains("<title>滑动验证</title>"));
+                || html.contains("<title>滑动验证</title>");
+    }
+
+    private String extractPlayUrl(String text) {
+        if (TextUtils.isEmpty(text)) return "";
+        Matcher m = Pattern.compile("const\\s+playUrl\\s*=\\s*[\"']([^\"']+)[\"']").matcher(text);
+        if (m.find()) return m.group(1);
+        m = Pattern.compile("playUrl\\s*=\\s*[\"']([^\"']+)[\"']").matcher(text);
+        if (m.find()) return m.group(1);
+        m = Pattern.compile("\"url\"\\s*:\\s*\"(https?:[^\"]+)\"").matcher(text);
+        if (m.find()) return m.group(1).replace("\\/", "/");
+        try {
+            JsonObject o = JsonParser.parseString(text.trim()).getAsJsonObject();
+            if (o.has("url")) return o.get("url").getAsString();
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
+    private String followRedirect(String url, Map<String, String> headers) {
+        if (TextUtils.isEmpty(url) || !url.startsWith("http")) return url;
+        try {
+            HashMap<String, String> h = new HashMap<>();
+            if (headers != null) h.putAll(headers);
+            if (!h.containsKey("User-Agent")) h.put("User-Agent", UA);
+            try {
+                String loc = OkHttp.getLocation(url, h);
+                if (!TextUtils.isEmpty(loc)) {
+                    if (loc.startsWith("/")) {
+                        URL u = new URL(url);
+                        loc = u.getProtocol() + "://" + u.getHost() + loc;
+                    }
+                    log("302 getLocation=" + clip(loc, 120));
+                    return loc;
+                }
+            } catch (Throwable ignored) {
+            }
+            okhttp3.Response resp = OkHttp.newCall(url, h);
+            if (resp != null) {
+                int code = resp.code();
+                String loc = resp.header("Location");
+                resp.close();
+                if (code >= 300 && code < 400 && !TextUtils.isEmpty(loc)) {
+                    if (loc.startsWith("/")) {
+                        URL u = new URL(url);
+                        loc = u.getProtocol() + "://" + u.getHost() + loc;
+                    }
+                    log("302 code=" + code + " loc=" + clip(loc, 120));
+                    return loc;
+                }
+            }
+        } catch (Exception e) {
+            log("followRedirect 异常 " + e.getMessage());
+        }
+        return url;
     }
 
     private HashMap<String, String> baseBrowserHeaders() {
@@ -194,7 +250,7 @@ public class Tvbyun extends Spider {
             resp.close();
             return new FetchResult(code, body);
         } catch (Exception e) {
-            log("fetch 异常 " + e.getMessage() + " url=" + url);
+            log("fetch 异常 " + e.getMessage());
             return new FetchResult(-1, "");
         }
     }
@@ -216,7 +272,6 @@ public class Tvbyun extends Spider {
                 log("第1步 首页 try=" + (i + 1));
                 FetchResult fr = fetch(host + "/", headers);
                 log("首页 code=" + fr.code + " len=" + fr.body.length() + " head=" + clip(fr.body, 80));
-                // 从响应头取 session：再发一次 newCall 只为 Set-Cookie（上面 fetch 已消费 body）
                 okhttp3.Response resp1 = OkHttp.newCall(host + "/", headers);
                 if (resp1 != null) {
                     sessionCookie = extractCookie(resp1, "server_name_session");
@@ -243,7 +298,6 @@ public class Tvbyun extends Spider {
             }
             log("sessionCookie=" + sessionCookie);
 
-            // 若首页不是滑块页，也可能没有 js；用一次滑块页保底
             if (extractJsUrlFromHtml(html) == null) {
                 log("首页无 huadong JS，请求分类页诱导滑块");
                 FetchResult fr2 = fetch(host + "/vod/show/id/13/page/1.html", headers);
@@ -340,7 +394,6 @@ public class Tvbyun extends Spider {
             currentCookie.set(fullCookie);
             log("验证写入 Cookie=" + fullCookie);
 
-            // 探测分类页是否真的通过
             String testUrl = host + "/vod/show/id/13/page/1.html";
             String testRef = host + "/vod/show/id/13.html";
             HashMap<String, String> testH = baseBrowserHeaders();
@@ -366,7 +419,6 @@ public class Tvbyun extends Spider {
         }
     }
 
-    /** 拉 HTML：403/滑块则清 Cookie 重验一次 */
     private FetchResult fetchHtml(String url, String referer, String tag) {
         HashMap<String, String> headers = getHeaders(referer);
         FetchResult fr = fetch(url, headers);
@@ -539,7 +591,6 @@ public class Tvbyun extends Spider {
             }
             sb.append("/id/").append(id).append("/page/").append(pg).append(".html");
             String url = sb.toString();
-            // 与浏览器抓包一致
             String referer = host + "/vod/show/id/" + id + ".html";
             log("category tid=" + tid + " pg=" + pg + " id=" + id + " url=" + url);
 
@@ -653,20 +704,20 @@ public class Tvbyun extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String playUrl = id.startsWith("http") ? id : host + id;
-        log("player flag=" + flag + " url=" + playUrl);
+        String playPage = id.startsWith("http") ? id : host + id;
+        log("player flag=" + flag + " url=" + playPage);
         HashMap<String, String> headers = getHeaders(host + "/");
         try {
-            FetchResult fr = fetchHtml(playUrl, host + "/", "player");
+            FetchResult fr = fetchHtml(playPage, host + "/", "player");
             if (TextUtils.isEmpty(fr.body) || isSliderPage(fr.body) || fr.code == 403) {
-                return Result.get().url(playUrl).parse(1).header(headers).string();
+                return Result.get().url(playPage).parse(1).header(headers).string();
             }
             String html = fr.body;
             String marker = "var player_data=";
             int start = html.indexOf(marker);
             if (start < 0) {
                 log("无 player_data");
-                return Result.get().url(playUrl).parse(1).header(headers).string();
+                return Result.get().url(playPage).parse(1).header(headers).string();
             }
             start += marker.length();
             int end = html.indexOf("</script>", start);
@@ -681,35 +732,38 @@ public class Tvbyun extends Spider {
 
             Map<String, String> pure = new HashMap<>();
             pure.put("User-Agent", UA);
+            pure.put("Referer", host + "/");
 
             if (jiexiUrlMap.containsKey(from)) {
                 try {
                     String api = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
-                    log("jiexi " + api);
+                    log("jiexi from=" + from + " api=" + api);
                     String apiResponse = OkHttp.string(api, headers);
-                    log("jiexi resp " + clip(apiResponse, 120));
-                    if (!TextUtils.isEmpty(apiResponse)) {
-                        JsonObject res = JsonParser.parseString(apiResponse).getAsJsonObject();
-                        if (res.has("code") && res.get("code").getAsInt() == 200) {
-                            String real = res.get("url").getAsString();
-                            if (!TextUtils.isEmpty(real) && real.startsWith("http")) {
-                                log("jiexi ok");
-                                return Result.get().url(real).parse(0).header(pure).string();
-                            }
+                    log("jiexi resp " + clip(apiResponse, 180));
+
+                    String real = extractPlayUrl(apiResponse);
+                    if (!TextUtils.isEmpty(real) && real.startsWith("http")) {
+                        if ("co".equals(from) || "vwnet".equals(from)
+                                || real.contains("1ljx.com") || real.contains("jiexicn")) {
+                            real = followRedirect(real, pure);
                         }
+                        log("jiexi 最终 " + clip(real, 120));
+                        return Result.get().url(real).parse(0).header(pure).string();
                     }
+                    log("jiexi 未解析出 playUrl");
                 } catch (Exception e) {
                     log("jiexi 异常 " + e.getMessage());
                 }
-                return Result.get().url(playUrl).parse(1).header(headers).string();
+                return Result.get().url(playPage).parse(1).header(headers).string();
             }
+
             if (rawUrl.startsWith("http")) {
                 return Result.get().url(rawUrl).parse(0).header(pure).string();
             }
-            return Result.get().url(playUrl).parse(1).header(headers).string();
+            return Result.get().url(playPage).parse(1).header(headers).string();
         } catch (Exception e) {
             log("player 异常 " + e.getMessage());
-            return Result.get().url(playUrl).parse(1).header(headers).string();
+            return Result.get().url(playPage).parse(1).header(headers).string();
         }
     }
 
