@@ -30,10 +30,7 @@ import java.util.regex.Pattern;
 
 public class Tvbyun extends Spider {
 
-    private String host = "http://www.tvyun03.com";
-
-    private static final String VERIFY_TYPE = "ad82060c2e67cc7e2cc47552a4fc1242";
-    private static final String VERIFY_PATH = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
+    private String host = "http://www.tvyun05.com";
 
     private final AtomicReference<String> currentCookie = new AtomicReference<>("");
 
@@ -69,7 +66,7 @@ public class Tvbyun extends Spider {
         }
     }
 
-    /** JS 里的 stringtoHex */
+    /** JS 里的 stringtoHex：每个字符的 Unicode + 1 拼接 */
     private String stringToHex(String str) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < str.length(); i++) {
@@ -78,62 +75,149 @@ public class Tvbyun extends Spider {
         return sb.toString();
     }
 
+    // ===================== 动态提取方法 =====================
+
     /**
-     * 自动过滑块验证（动态提取 key / value）
+     * 从 HTML 中提取 huadong JS 地址
+     * 匹配: src="/huadong_xxx.js?id=xxx"
+     */
+    private String extractJsUrlFromHtml(String html) {
+        if (TextUtils.isEmpty(html)) return null;
+        Pattern pattern = Pattern.compile("src=[\"'](/huadong_[^\"']+\\.js[^\"']*)[\"']");
+        Matcher matcher = pattern.matcher(html);
+        if (matcher.find()) {
+            return host + matcher.group(1);
+        }
+        return null;
+    }
+
+    /**
+     * 从 JS 内容中提取 key 和 value
+     * 匹配: key="bcd5d1090dba7ae0db26232c8e11abbc"
+     *       value="6967ec7261b3cbe6a91d798c6b951c60"
+     */
+    private Map<String, String> extractKeyValueFromJs(String jsContent) {
+        Map<String, String> result = new HashMap<>();
+        if (TextUtils.isEmpty(jsContent)) return result;
+
+        Pattern keyPat = Pattern.compile("key\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
+        Matcher keyMatcher = keyPat.matcher(jsContent);
+        if (keyMatcher.find()) {
+            result.put("key", keyMatcher.group(1));
+        }
+
+        Pattern valPat = Pattern.compile("value\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
+        Matcher valMatcher = valPat.matcher(jsContent);
+        if (valMatcher.find()) {
+            result.put("value", valMatcher.group(1));
+        }
+
+        return result;
+    }
+
+    /**
+     * 从 HTML 或 JS 中提取验证路径和 type
+     * 匹配: c.get("/xxx_yanzheng_huadong.php?type=xxx&key="
+     */
+    private Map<String, String> extractVerifyParams(String content) {
+        Map<String, String> result = new HashMap<>();
+        if (TextUtils.isEmpty(content)) return result;
+
+        Pattern pattern = Pattern.compile("c\\.get\\(\"([^\"]+\\?type=([0-9a-f]+))&key=");
+        Matcher matcher = pattern.matcher(content);
+        if (matcher.find()) {
+            result.put("verify_path", matcher.group(1));  // 包含 ?type=xxx
+            result.put("type", matcher.group(2));
+        }
+        return result;
+    }
+
+    /**
+     * 从响应中提取指定名称的 Cookie
+     */
+    private String extractCookie(okhttp3.Response resp, String cookieName) {
+        if (resp == null) return null;
+        List<String> setCookies = resp.headers("Set-Cookie");
+        if (setCookies == null) return null;
+        for (String sc : setCookies) {
+            if (sc.startsWith(cookieName + "=")) {
+                return sc.split(";")[0];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从响应中提取非 server_name_session 的 Cookie（验证后的 Cookie）
+     */
+    private String extractOtherCookie(okhttp3.Response resp) {
+        if (resp == null) return null;
+        List<String> setCookies = resp.headers("Set-Cookie");
+        if (setCookies == null) return null;
+        for (String sc : setCookies) {
+            if (sc.contains("=") && !sc.startsWith("server_name_session=")) {
+                return sc.split(";")[0];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 判断是否为滑块验证页面
+     */
+    private boolean isSliderPage(String html) {
+        return html != null && (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_") || html.contains("slider"));
+    }
+
+    // ===================== 自动验证 =====================
+
+    /**
+     * 完整的滑块验证流程（全部动态提取）
      */
     private synchronized boolean ensureCookie() {
         if (!TextUtils.isEmpty(currentCookie.get())) {
+            log("✅ 已有 Cookie: " + currentCookie.get().substring(0, Math.min(50, currentCookie.get().length())) + "...");
             return true;
         }
 
         try {
-            log("开始自动过滑块验证...");
+            log("🔄 开始自动滑块验证（动态提取）...");
 
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
+            HashMap<String, String> headers = new HashMap<>();
+            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
             headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-            headers.put("Referer", "http://hktvyb.cc/");
 
-            // 1. 访问首页，拿 server_name_session + 滑块页 HTML
-            okhttp3.Response resp = OkHttp.newCall(host + "/", headers);
-            if (resp == null) {
+            // ====== 第1步：访问首页 ======
+            log("📡 第1步：访问首页...");
+            okhttp3.Response resp1 = OkHttp.newCall(host + "/", headers);
+            if (resp1 == null) {
                 log("❌ 首页请求失败");
                 return false;
             }
 
-            String sessionCookie = null;
-            List<String> setCookies = resp.headers("Set-Cookie");
-            if (setCookies != null) {
-                for (String sc : setCookies) {
-                    if (sc.startsWith("server_name_session=")) {
-                        sessionCookie = sc.split(";")[0];
-                        break;
-                    }
-                }
-            }
-
-            String html = resp.body() != null ? resp.body().string() : "";
-            resp.close();
+            String sessionCookie = extractCookie(resp1, "server_name_session");
+            String html = resp1.body() != null ? resp1.body().string() : "";
+            resp1.close();
 
             if (sessionCookie == null) {
                 log("❌ 未获取到 server_name_session");
                 return false;
             }
-            log("获取到 session: " + sessionCookie);
+            log("✅ sessionCookie: " + sessionCookie);
 
-            // 2. 从 HTML 提取 huadong JS 地址
-            Pattern jsPattern = Pattern.compile("src=[\"'](/huadong_[^\"']+\\.js[^\"']*)[\"']");
-            Matcher jsMatcher = jsPattern.matcher(html);
-            if (!jsMatcher.find()) {
-                log("❌ 未在滑块页找到 huadong JS");
+            // ====== 第2步：从 HTML 动态提取 JS 地址 ======
+            log("📡 第2步：提取 huadong JS 地址...");
+            String jsUrl = extractJsUrlFromHtml(html);
+            if (jsUrl == null) {
+                log("❌ 未从 HTML 提取到 JS 地址");
                 return false;
             }
-            String jsUrl = host + jsMatcher.group(1);
-            log("提取到 JS 地址: " + jsUrl);
+            log("✅ JS 地址: " + jsUrl);
 
-            // 3. 下载 JS，提取 key 和 value
-            Map<String, String> jsHeaders = new HashMap<>(headers);
+            // ====== 第3步：下载 JS 提取 key/value ======
+            log("📡 第3步：下载 JS 提取 key/value...");
+            HashMap<String, String> jsHeaders = new HashMap<>(headers);
             jsHeaders.put("Referer", host + "/");
             jsHeaders.put("Cookie", sessionCookie);
 
@@ -143,75 +227,93 @@ public class Tvbyun extends Spider {
                 return false;
             }
 
-            Pattern keyPat = Pattern.compile("key\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
-            Pattern valPat = Pattern.compile("value\\s*=\\s*[\"']([0-9a-f]{32})[\"']");
+            Map<String, String> kv = extractKeyValueFromJs(jsContent);
+            String key = kv.get("key");
+            String value = kv.get("value");
 
-            Matcher keyMatcher = keyPat.matcher(jsContent);
-            Matcher valMatcher = valPat.matcher(jsContent);
-
-            if (!keyMatcher.find() || !valMatcher.find()) {
+            if (TextUtils.isEmpty(key) || TextUtils.isEmpty(value)) {
                 log("❌ JS 中未提取到 key 或 value");
                 return false;
             }
+            log("✅ key=" + key + ", value=" + value);
 
-            String key = keyMatcher.group(1);
-            String value = valMatcher.group(1);
-            log("提取到 key=" + key + "  value=" + value);
+            // ====== 第4步：动态提取验证路径和 type ======
+            log("📡 第4步：提取验证路径和 type...");
+            Map<String, String> verifyParams = extractVerifyParams(jsContent);
+            if (verifyParams.isEmpty()) {
+                verifyParams = extractVerifyParams(html);
+            }
 
-            // 4. 计算验证参数
-            String verifyValue = md5(stringToHex(value));
-            String verifyUrl = host + VERIFY_PATH
-                    + "?type=" + VERIFY_TYPE
-                    + "&key=" + key
-                    + "&value=" + verifyValue;
+            String verifyPath = verifyParams.get("verify_path");
+            String type = verifyParams.get("type");
 
-            log("请求验证接口: " + verifyUrl);
+            if (TextUtils.isEmpty(verifyPath) || TextUtils.isEmpty(type)) {
+                log("⚠️ 未从页面提取到验证参数，尝试固定降级...");
+                // 降级：尝试常见的固定路径
+                verifyPath = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
+                type = "ad82060c2e67cc7e2cc47552a4fc1242";
+                // 尝试从 HTML 中搜索更多线索
+                Pattern p2 = Pattern.compile("/[a-f0-9_]+_yanzheng_huadong\\.php");
+                Matcher m2 = p2.matcher(html);
+                if (m2.find()) {
+                    verifyPath = m2.group();
+                    log("  从HTML降级提取到路径: " + verifyPath);
+                }
+            }
+            log("✅ verifyPath=" + verifyPath + ", type=" + type);
 
-            Map<String, String> verifyHeaders = new HashMap<>();
-            verifyHeaders.put("User-Agent", headers.get("User-Agent"));
-            verifyHeaders.put("Accept", "*/*");
+            // ====== 第5步：计算并发送验证请求 ======
+            log("📡 第5步：发送验证请求...");
+            String md5Value = md5(stringToHex(value));
+            log("   stringToHex(value): " + stringToHex(value).substring(0, Math.min(80, stringToHex(value).length())) + "...");
+            log("   MD5 结果: " + md5Value);
+
+            String verifyUrl;
+            if (verifyPath.contains("?")) {
+                verifyUrl = host + verifyPath + "&key=" + key + "&value=" + md5Value;
+            } else {
+                verifyUrl = host + verifyPath + "?type=" + type + "&key=" + key + "&value=" + md5Value;
+            }
+            log("   验证 URL: " + verifyUrl);
+
+            HashMap<String, String> verifyHeaders = new HashMap<>(headers);
             verifyHeaders.put("Referer", host + "/");
             verifyHeaders.put("Cookie", sessionCookie);
 
             okhttp3.Response verifyResp = OkHttp.newCall(verifyUrl, verifyHeaders);
             if (verifyResp == null) {
-                log("❌ 验证接口请求失败");
+                log("❌ 验证请求失败");
                 return false;
             }
 
-            String secondCookie = null;
-            List<String> verifySetCookies = verifyResp.headers("Set-Cookie");
-            if (verifySetCookies != null) {
-                for (String sc : verifySetCookies) {
-                    // 排除 server_name_session，取另一个
-                    if (sc.contains("=") && !sc.startsWith("server_name_session=")) {
-                        secondCookie = sc.split(";")[0];
-                        break;
-                    }
-                }
-            }
-
-            String body = verifyResp.body() != null ? verifyResp.body().string() : "";
+            String secondCookie = extractOtherCookie(verifyResp);
+            String verifyBody = verifyResp.body() != null ? verifyResp.body().string() : "";
             verifyResp.close();
 
             if (secondCookie == null) {
-                log("❌ 未从验证接口获取到第二个 Cookie，body=" + body);
+                log("❌ 验证接口未返回 Cookie，响应: " + (verifyBody.length() > 200 ? verifyBody.substring(0, 200) + "..." : verifyBody));
                 return false;
             }
 
+            // ====== 第6步：合并 Cookie ======
             String fullCookie = sessionCookie + "; " + secondCookie;
             currentCookie.set(fullCookie);
-            log("✅ 自动验证成功 → " + fullCookie);
+            log("✅ 验证成功！Cookie: " + fullCookie);
             return true;
 
         } catch (Exception e) {
-            log("自动验证异常: " + e.getMessage());
+            log("❌ 验证异常: " + e.getMessage());
+            e.printStackTrace();
             return false;
         }
     }
 
+    // ===================== 请求头 =====================
+
     private HashMap<String, String> getHeaders() {
-        ensureCookie();
+        if (TextUtils.isEmpty(currentCookie.get())) {
+            ensureCookie();
+        }
 
         HashMap<String, String> headers = new HashMap<>();
         headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
@@ -227,20 +329,18 @@ public class Tvbyun extends Spider {
         String cookie = currentCookie.get();
         if (!TextUtils.isEmpty(cookie)) {
             headers.put("Cookie", cookie);
-            log("请求携带 Cookie: " + cookie.substring(0, Math.min(50, cookie.length())) + "...");
-        } else {
-            log("⚠️ 当前没有可用 Cookie");
         }
         return headers;
     }
 
-    private boolean isSliderPage(String html) {
-        return html != null && (html.contains("滑动验证") || html.contains("人机身份验证") || html.contains("huadong_"));
-    }
+    // ===================== 以下为 Spider 接口实现 =====================
 
     @Override
     public void init(android.content.Context context, String extend) {
         log("🚀 Tvbyun 初始化，域名: " + host);
+        if (!TextUtils.isEmpty(extend) && extend.startsWith("http")) {
+            host = extend;
+        }
         ensureCookie();
     }
 
