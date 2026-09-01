@@ -35,6 +35,9 @@ public class Tvbyun extends Spider {
     private String host = "http://www.tvyun05.com";
     private final AtomicReference<String> currentCookie = new AtomicReference<>("");
 
+    private static final String UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
+
     private static final Map<String, String> jiexiUrlMap = new HashMap<>();
 
     static {
@@ -72,7 +75,6 @@ public class Tvbyun extends Spider {
         }
     }
 
-    /** JS stringtoHex：每个字符 Unicode + 1 拼接 */
     private String stringToHex(String str) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < str.length(); i++) sb.append((int) str.charAt(i) + 1);
@@ -128,70 +130,148 @@ public class Tvbyun extends Spider {
         return null;
     }
 
-    /**
-     * 仅在明确验证页时返回 true，避免 huadong_/slider 误判正常页
-     */
+    /** 有列表/详情/播放特征则不算滑块 */
     private boolean isSliderPage(String html) {
         if (html == null || html.isEmpty()) return false;
         if (html.contains("myui-vodlist") || html.contains("stui-vodlist")
                 || html.contains("myui-content__detail") || html.contains("stui-content__detail")
-                || html.contains("myui-panel") || html.contains("player_data")) {
+                || html.contains("myui-panel") || html.contains("player_data")
+                || html.contains("myui-vodlist__thumb")) {
             return false;
         }
-        return html.contains("滑动验证") || html.contains("人机身份验证");
+        return html.contains("滑动验证") || html.contains("人机身份验证")
+                || (html.contains("<title>滑动验证</title>"));
+    }
+
+    private HashMap<String, String> baseBrowserHeaders() {
+        HashMap<String, String> h = new HashMap<>();
+        h.put("User-Agent", UA);
+        h.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        h.put("Accept-Language", "zh-CN,zh;q=0.9");
+        h.put("Upgrade-Insecure-Requests", "1");
+        h.put("Cache-Control", "max-age=0");
+        h.put("sec-ch-ua", "\"Chromium\";v=\"151\", \"Not A(Brand\";v=\"24\", \"Google Chrome\";v=\"151\"");
+        h.put("sec-ch-ua-mobile", "?0");
+        h.put("sec-ch-ua-platform", "\"Windows\"");
+        return h;
+    }
+
+    private HashMap<String, String> getHeaders(String referer) {
+        if (TextUtils.isEmpty(currentCookie.get())) {
+            ensureCookie();
+        }
+        HashMap<String, String> h = baseBrowserHeaders();
+        h.put("Referer", TextUtils.isEmpty(referer) ? host + "/" : referer);
+        String cookie = currentCookie.get();
+        if (!TextUtils.isEmpty(cookie)) {
+            h.put("Cookie", cookie);
+            log("headers Cookie=" + clip(cookie, 70) + " Referer=" + h.get("Referer"));
+        } else {
+            log("headers 无 Cookie Referer=" + h.get("Referer"));
+        }
+        return h;
+    }
+
+    private static class FetchResult {
+        int code;
+        String body;
+
+        FetchResult(int code, String body) {
+            this.code = code;
+            this.body = body == null ? "" : body;
+        }
+    }
+
+    private FetchResult fetch(String url, HashMap<String, String> headers) {
+        try {
+            okhttp3.Response resp = OkHttp.newCall(url, headers);
+            if (resp == null) {
+                log("fetch null url=" + url);
+                return new FetchResult(-1, "");
+            }
+            int code = resp.code();
+            String body = resp.body() != null ? resp.body().string() : "";
+            resp.close();
+            return new FetchResult(code, body);
+        } catch (Exception e) {
+            log("fetch 异常 " + e.getMessage() + " url=" + url);
+            return new FetchResult(-1, "");
+        }
     }
 
     private synchronized boolean ensureCookie() {
         String exist = currentCookie.get();
         if (!TextUtils.isEmpty(exist)) {
-            log("复用已有 Cookie: " + clip(exist, 60));
+            log("复用 Cookie " + clip(exist, 60));
             return true;
         }
         try {
-            log("开始滑块验证...");
-            HashMap<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
-            headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+            log("开始滑块验证 host=" + host);
+            HashMap<String, String> headers = baseBrowserHeaders();
+            headers.put("Referer", host + "/");
 
             String sessionCookie = null;
             String html = "";
             for (int i = 0; i < 3 && sessionCookie == null; i++) {
-                log("第1步 访问首页 try=" + (i + 1));
+                log("第1步 首页 try=" + (i + 1));
+                FetchResult fr = fetch(host + "/", headers);
+                log("首页 code=" + fr.code + " len=" + fr.body.length() + " head=" + clip(fr.body, 80));
+                // 从响应头取 session：再发一次 newCall 只为 Set-Cookie（上面 fetch 已消费 body）
                 okhttp3.Response resp1 = OkHttp.newCall(host + "/", headers);
-                if (resp1 == null) {
-                    log("首页响应 null");
-                    continue;
+                if (resp1 != null) {
+                    sessionCookie = extractCookie(resp1, "server_name_session");
+                    List<String> all = resp1.headers("Set-Cookie");
+                    log("Set-Cookie=" + clip(String.valueOf(all), 160));
+                    if (TextUtils.isEmpty(html)) {
+                        html = resp1.body() != null ? resp1.body().string() : "";
+                    } else if (resp1.body() != null) {
+                        resp1.body().close();
+                    }
+                    resp1.close();
                 }
-                sessionCookie = extractCookie(resp1, "server_name_session");
-                List<String> allSc = resp1.headers("Set-Cookie");
-                log("Set-Cookie 数量=" + (allSc == null ? 0 : allSc.size()) + " raw=" + clip(String.valueOf(allSc), 120));
-                html = resp1.body() != null ? resp1.body().string() : "";
-                resp1.close();
-                log("首页 htmlLen=" + html.length() + " slider=" + isSliderPage(html) + " head=" + clip(html, 80));
+                if (sessionCookie == null && !TextUtils.isEmpty(fr.body)) html = fr.body;
                 if (sessionCookie == null) {
                     try {
-                        Thread.sleep(300);
+                        Thread.sleep(400);
                     } catch (InterruptedException ignored) {
                     }
                 }
             }
             if (sessionCookie == null) {
-                log("未获取到 server_name_session");
+                log("未拿到 server_name_session");
                 return false;
             }
             log("sessionCookie=" + sessionCookie);
 
+            // 若首页不是滑块页，也可能没有 js；用一次滑块页保底
+            if (extractJsUrlFromHtml(html) == null) {
+                log("首页无 huadong JS，请求分类页诱导滑块");
+                FetchResult fr2 = fetch(host + "/vod/show/id/13/page/1.html", headers);
+                log("诱导页 code=" + fr2.code + " slider=" + isSliderPage(fr2.body));
+                if (!TextUtils.isEmpty(fr2.body)) html = fr2.body;
+                okhttp3.Response r2 = OkHttp.newCall(host + "/vod/show/id/13/page/1.html", headers);
+                if (r2 != null) {
+                    String s2 = extractCookie(r2, "server_name_session");
+                    if (s2 != null) sessionCookie = s2;
+                    if (r2.body() != null) {
+                        String b = r2.body().string();
+                        if (extractJsUrlFromHtml(b) != null) html = b;
+                    }
+                    r2.close();
+                }
+            }
+
             String jsUrl = extractJsUrlFromHtml(html);
             if (jsUrl == null) {
-                log("未提取到 huadong JS，html 中 huadong 位置相关=" + clip(html, 200));
+                log("仍无 huadong JS head=" + clip(html, 200));
                 return false;
             }
-            log("JS地址=" + jsUrl);
+            log("JS=" + jsUrl);
 
-            HashMap<String, String> jsHeaders = new HashMap<>(headers);
+            HashMap<String, String> jsHeaders = baseBrowserHeaders();
             jsHeaders.put("Referer", host + "/");
             jsHeaders.put("Cookie", sessionCookie);
+            jsHeaders.put("Accept", "*/*");
             String jsContent = OkHttp.string(jsUrl, jsHeaders);
             log("JS len=" + (jsContent == null ? 0 : jsContent.length()));
             if (TextUtils.isEmpty(jsContent)) {
@@ -203,7 +283,7 @@ public class Tvbyun extends Spider {
             String key = kv.get("key");
             String value = kv.get("value");
             if (TextUtils.isEmpty(key) || TextUtils.isEmpty(value)) {
-                log("JS 无 key/value head=" + clip(jsContent, 150));
+                log("JS 无 key/value " + clip(jsContent, 120));
                 return false;
             }
             log("key=" + key + " value=" + value);
@@ -213,13 +293,13 @@ public class Tvbyun extends Spider {
             String verifyPath = verifyParams.get("verify_path");
             String type = verifyParams.get("type");
             if (TextUtils.isEmpty(verifyPath) || TextUtils.isEmpty(type)) {
-                log("未提取验证路径，降级固定路径");
+                log("验证路径降级");
                 verifyPath = "/a20be899_96a6_40b2_88ba_32f1f75f1552_yanzheng_huadong.php";
                 type = "ad82060c2e67cc7e2cc47552a4fc1242";
-                Matcher m2 = Pattern.compile("/[a-f0-9_]+_yanzheng_huadong\\.php").matcher(html);
+                Matcher m2 = Pattern.compile("/[a-f0-9_]+_yanzheng_huadong\\.php").matcher(html + jsContent);
                 if (m2.find()) {
                     verifyPath = m2.group();
-                    log("从 HTML 降级路径=" + verifyPath);
+                    log("路径=" + verifyPath);
                 }
             }
             log("verifyPath=" + verifyPath + " type=" + type);
@@ -233,92 +313,93 @@ public class Tvbyun extends Spider {
             }
             log("验证URL=" + verifyUrl);
 
-            HashMap<String, String> verifyHeaders = new HashMap<>(headers);
+            HashMap<String, String> verifyHeaders = baseBrowserHeaders();
             verifyHeaders.put("Referer", host + "/");
             verifyHeaders.put("Cookie", sessionCookie);
+            verifyHeaders.put("Accept", "*/*");
+            verifyHeaders.put("X-Requested-With", "XMLHttpRequest");
+
             okhttp3.Response verifyResp = OkHttp.newCall(verifyUrl, verifyHeaders);
             if (verifyResp == null) {
-                log("验证请求 null");
+                log("验证响应 null");
                 return false;
             }
+            int vcode = verifyResp.code();
             String secondCookie = extractOtherCookie(verifyResp);
             String verifyBody = verifyResp.body() != null ? verifyResp.body().string() : "";
             List<String> vsc = verifyResp.headers("Set-Cookie");
-            log("验证 status 相关 Set-Cookie=" + clip(String.valueOf(vsc), 150) + " body=" + clip(verifyBody, 100));
+            log("验证 code=" + vcode + " Set-Cookie=" + clip(String.valueOf(vsc), 160) + " body=" + clip(verifyBody, 80));
             verifyResp.close();
 
             if (secondCookie == null) {
-                log("验证未返回第二 Cookie");
+                log("未拿到第二段 Cookie");
                 return false;
             }
 
             String fullCookie = sessionCookie + "; " + secondCookie;
             currentCookie.set(fullCookie);
-            log("验证成功 fullCookie=" + fullCookie);
+            log("验证写入 Cookie=" + fullCookie);
+
+            // 探测分类页是否真的通过
+            String testUrl = host + "/vod/show/id/13/page/1.html";
+            String testRef = host + "/vod/show/id/13.html";
+            HashMap<String, String> testH = baseBrowserHeaders();
+            testH.put("Referer", testRef);
+            testH.put("Cookie", fullCookie);
+            FetchResult probe = fetch(testUrl, testH);
+            boolean hasList = probe.body.contains("myui-vodlist") || probe.body.contains("stui-vodlist");
+            boolean slider = isSliderPage(probe.body);
+            log("验证后探测 code=" + probe.code + " slider=" + slider + " hasList=" + hasList + " head=" + clip(probe.body, 80));
+
+            if (probe.code == 403 || slider || !hasList) {
+                log("探测失败，Cookie 无效，清空");
+                currentCookie.set("");
+                return false;
+            }
+            log("探测通过，Cookie 可用");
             return true;
         } catch (Exception e) {
-            log("验证异常: " + e.getClass().getSimpleName() + " " + e.getMessage());
+            log("验证异常 " + e.getClass().getSimpleName() + " " + e.getMessage());
             e.printStackTrace();
+            currentCookie.set("");
             return false;
         }
     }
 
-    private HashMap<String, String> getHeaders() {
-        if (TextUtils.isEmpty(currentCookie.get())) {
-            ensureCookie();
-        }
-        HashMap<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36");
-        headers.put("Referer", host + "/");
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
-        headers.put("Cache-Control", "max-age=0");
-        headers.put("Upgrade-Insecure-Requests", "1");
-        headers.put("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"");
-        headers.put("sec-ch-ua-mobile", "?0");
-        headers.put("sec-ch-ua-platform", "\"Windows\"");
-        String cookie = currentCookie.get();
-        if (!TextUtils.isEmpty(cookie)) headers.put("Cookie", cookie);
-        log("请求头 Cookie=" + (TextUtils.isEmpty(cookie) ? "(空)" : clip(cookie, 50)));
-        return headers;
-    }
+    /** 拉 HTML：403/滑块则清 Cookie 重验一次 */
+    private FetchResult fetchHtml(String url, String referer, String tag) {
+        HashMap<String, String> headers = getHeaders(referer);
+        FetchResult fr = fetch(url, headers);
+        boolean slider = isSliderPage(fr.body);
+        boolean hasList = fr.body.contains("myui-vodlist") || fr.body.contains("stui-vodlist")
+                || fr.body.contains("myui-content__detail") || fr.body.contains("player_data");
+        log(tag + " code=" + fr.code + " len=" + fr.body.length()
+                + " slider=" + slider + " hasList=" + hasList + " head=" + clip(fr.body, 90));
 
-    /** 拉页面：若真滑块则清 Cookie 再验一次 */
-    private String fetchHtml(String url, String tag) {
-        HashMap<String, String> headers = getHeaders();
-        log(tag + " GET " + url);
-        String html = OkHttp.string(url, headers);
-        log(tag + " htmlLen=" + (html == null ? 0 : html.length())
-                + " slider=" + isSliderPage(html)
-                + " hasList=" + (html != null && (html.contains("myui-vodlist") || html.contains("stui-vodlist")))
-                + " head=" + clip(html, 100));
-
-        if (TextUtils.isEmpty(html)) return html;
-
-        if (isSliderPage(html)) {
-            log(tag + " 判定为滑块页，清空 Cookie 重验");
+        if (fr.code == 403 || slider) {
+            log(tag + " 需重新验证");
             currentCookie.set("");
             if (!ensureCookie()) {
                 log(tag + " 重验失败");
-                return html;
+                return fr;
             }
-            headers = getHeaders();
-            html = OkHttp.string(url, headers);
-            log(tag + " 重试后 htmlLen=" + (html == null ? 0 : html.length())
-                    + " slider=" + isSliderPage(html)
-                    + " hasList=" + (html != null && (html.contains("myui-vodlist") || html.contains("stui-vodlist")))
-                    + " head=" + clip(html, 100));
+            headers = getHeaders(referer);
+            fr = fetch(url, headers);
+            slider = isSliderPage(fr.body);
+            hasList = fr.body.contains("myui-vodlist") || fr.body.contains("stui-vodlist")
+                    || fr.body.contains("myui-content__detail") || fr.body.contains("player_data");
+            log(tag + " 重试 code=" + fr.code + " slider=" + slider + " hasList=" + hasList + " head=" + clip(fr.body, 90));
         }
-        return html;
+        return fr;
     }
 
     @Override
     public void init(android.content.Context context, String extend) {
-        log("init host=" + host + " extend=" + extend);
+        log("init extend=" + extend);
         if (!TextUtils.isEmpty(extend) && extend.startsWith("http")) {
             host = extend.replaceAll("/$", "");
-            log("host 改为 " + host);
         }
+        log("host=" + host);
         ensureCookie();
     }
 
@@ -458,23 +539,21 @@ public class Tvbyun extends Spider {
             }
             sb.append("/id/").append(id).append("/page/").append(pg).append(".html");
             String url = sb.toString();
-            log("category tid=" + tid + " pg=" + pg + " id=" + id);
+            // 与浏览器抓包一致
+            String referer = host + "/vod/show/id/" + id + ".html";
+            log("category tid=" + tid + " pg=" + pg + " id=" + id + " url=" + url);
 
-            String html = fetchHtml(url, "category");
-            if (TextUtils.isEmpty(html)) {
-                log("category 空响应");
-                return Result.string(new ArrayList<>());
-            }
-            if (isSliderPage(html)) {
-                log("category 仍是滑块，放弃");
+            FetchResult fr = fetchHtml(url, referer, "category");
+            if (TextUtils.isEmpty(fr.body) || isSliderPage(fr.body) || fr.code == 403) {
+                log("category 失败 code=" + fr.code);
                 return Result.string(new ArrayList<>());
             }
 
-            Document doc = Jsoup.parse(html);
+            Document doc = Jsoup.parse(fr.body);
             List<Vod> list = new ArrayList<>();
             Elements items = doc.select(".myui-vodlist li");
             if (items.isEmpty()) items = doc.select(".stui-vodlist li");
-            log("category 条目选择器命中=" + items.size());
+            log("category 节点数=" + items.size());
             for (Element item : items) {
                 Element a = item.selectFirst("a.myui-vodlist__thumb, a.stui-vodlist__thumb, a[href*=/vod/detail]");
                 if (a == null) continue;
@@ -490,28 +569,26 @@ public class Tvbyun extends Spider {
             log("category 返回 " + list.size() + " 条");
             return Result.string(list);
         } catch (Exception e) {
-            log("category 异常: " + e.getMessage());
+            log("category 异常 " + e.getMessage());
             return Result.string(new ArrayList<>());
         }
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String detailUrl = ids.get(0).startsWith("http") ? ids.get(0) : host + ids.get(0);
-        log("detail id=" + ids.get(0));
-
-        String html = fetchHtml(detailUrl, "detail");
-        if (TextUtils.isEmpty(html) || isSliderPage(html)) {
-            log("detail 失败 html空或滑块");
+        String path = ids.get(0);
+        String detailUrl = path.startsWith("http") ? path : host + path;
+        log("detail " + detailUrl);
+        FetchResult fr = fetchHtml(detailUrl, host + "/", "detail");
+        if (TextUtils.isEmpty(fr.body) || isSliderPage(fr.body) || fr.code == 403) {
             return Result.get().vod(new Vod()).string();
         }
 
-        Document doc = Jsoup.parse(html);
+        Document doc = Jsoup.parse(fr.body);
         Vod vod = new Vod();
-        vod.setVodId(ids.get(0));
+        vod.setVodId(path);
         String vodName = "未知标题";
-        Element detailBox = doc.selectFirst(".myui-content__detail");
-        if (detailBox == null) detailBox = doc.selectFirst(".stui-content__detail");
+        Element detailBox = doc.selectFirst(".myui-content__detail, .stui-content__detail");
         if (detailBox != null) {
             Element titleElem = detailBox.selectFirst(".title");
             if (titleElem != null) vodName = titleElem.text().trim();
@@ -527,134 +604,127 @@ public class Tvbyun extends Spider {
                 } else if (text.startsWith("更新：")) {
                     vod.setVodRemarks(text.replace("更新：", "").trim());
                 } else if (text.startsWith("主演：")) {
-                    List<String> actorList = new ArrayList<>();
+                    List<String> actors = new ArrayList<>();
                     for (Element a : p.select("a")) {
                         String n = a.text().trim();
-                        if (!n.isEmpty()) actorList.add(n);
+                        if (!n.isEmpty()) actors.add(n);
                     }
-                    vod.setVodActor(TextUtils.join(", ", actorList));
+                    vod.setVodActor(TextUtils.join(", ", actors));
                 } else if (text.startsWith("导演：")) {
                     vod.setVodDirector(text.replace("导演：", "").trim());
                 }
             }
         } else {
             vod.setVodName(vodName);
-            log("detail 未找到 detail 区块");
         }
 
         Element thumbImg = doc.selectFirst(".myui-content__thumb img, .stui-content__thumb img");
         if (thumbImg != null) {
             vod.setVodPic(thumbImg.hasAttr("data-original") ? thumbImg.attr("data-original") : thumbImg.attr("src"));
         }
-        Element desc = doc.selectFirst("#desc .col-pd .data p");
-        if (desc == null) desc = doc.selectFirst("#desc .sketch.content");
+        Element desc = doc.selectFirst("#desc .col-pd .data p, #desc .sketch.content");
         vod.setVodContent(desc != null ? desc.text().trim() : "");
 
         List<String> fromList = new ArrayList<>();
         List<String> urlList = new ArrayList<>();
-        Elements playlistPanels = doc.select(".myui-panel");
-        for (Element panel : playlistPanels) {
+        for (Element panel : doc.select(".myui-panel")) {
             Element headTitle = panel.selectFirst(".myui-panel__head h3.title");
             if (headTitle == null) continue;
             String fromName = headTitle.text().trim();
             if (fromName.contains("剧情") || fromName.contains("猜你") || fromName.isEmpty()) continue;
             Elements links = panel.select("ul.myui-content__list a");
             if (links.isEmpty()) continue;
-            List<String> episodeList = new ArrayList<>();
+            List<String> eps = new ArrayList<>();
             int max = Math.min(links.size(), 150);
             for (int j = 0; j < max; j++) {
                 Element a = links.get(j);
                 String epUrl = a.attr("href");
                 if (!epUrl.startsWith("http")) epUrl = host + epUrl;
-                episodeList.add(a.text().trim() + "$" + epUrl);
+                eps.add(a.text().trim() + "$" + epUrl);
             }
             fromList.add(fromName);
-            urlList.add(TextUtils.join("#", episodeList));
+            urlList.add(TextUtils.join("#", eps));
         }
         vod.setVodPlayFrom(TextUtils.join("$$$", fromList));
         vod.setVodPlayUrl(TextUtils.join("$$$", urlList));
-        log("detail 完成 name=" + vodName + " 线路=" + fromList.size());
+        log("detail 完成 " + vodName + " 线路=" + fromList.size());
         return Result.get().vod(vod).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String playUrl = id.startsWith("http") ? id : host + id;
-        log("player flag=" + flag + " id=" + id);
-        HashMap<String, String> currentHeaders = getHeaders();
+        log("player flag=" + flag + " url=" + playUrl);
+        HashMap<String, String> headers = getHeaders(host + "/");
         try {
-            String html = fetchHtml(playUrl, "player");
-            if (TextUtils.isEmpty(html) || isSliderPage(html)) {
-                log("player 页失败，降级嗅探");
-                return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+            FetchResult fr = fetchHtml(playUrl, host + "/", "player");
+            if (TextUtils.isEmpty(fr.body) || isSliderPage(fr.body) || fr.code == 403) {
+                return Result.get().url(playUrl).parse(1).header(headers).string();
             }
-
+            String html = fr.body;
             String marker = "var player_data=";
             int start = html.indexOf(marker);
             if (start < 0) {
-                log("无 player_data，降级嗅探");
-                return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+                log("无 player_data");
+                return Result.get().url(playUrl).parse(1).header(headers).string();
             }
             start += marker.length();
             int end = html.indexOf("</script>", start);
             if (end < 0) end = Math.min(start + 2000, html.length());
             String jsonStr = html.substring(start, end).trim();
-            log("player_data 片段=" + clip(jsonStr, 120));
+            log("player_data " + clip(jsonStr, 120));
 
             JsonObject playerData = JsonParser.parseString(jsonStr).getAsJsonObject();
             String rawUrl = playerData.has("url") ? playerData.get("url").getAsString() : "";
             String from = playerData.has("from") ? playerData.get("from").getAsString() : "";
             log("from=" + from + " rawUrl=" + clip(rawUrl, 80));
 
-            Map<String, String> pureHeaders = new HashMap<>();
-            pureHeaders.put("User-Agent", currentHeaders.get("User-Agent"));
+            Map<String, String> pure = new HashMap<>();
+            pure.put("User-Agent", UA);
 
             if (jiexiUrlMap.containsKey(from)) {
                 try {
-                    String fullApiUrl = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
-                    log("解析接口 " + fullApiUrl);
-                    String apiResponse = OkHttp.string(fullApiUrl, currentHeaders);
-                    log("解析响应 " + clip(apiResponse, 150));
+                    String api = jiexiUrlMap.get(from) + URLEncoder.encode(rawUrl, "UTF-8");
+                    log("jiexi " + api);
+                    String apiResponse = OkHttp.string(api, headers);
+                    log("jiexi resp " + clip(apiResponse, 120));
                     if (!TextUtils.isEmpty(apiResponse)) {
-                        JsonObject resJson = JsonParser.parseString(apiResponse).getAsJsonObject();
-                        if (resJson.has("code") && resJson.get("code").getAsInt() == 200) {
-                            String realUrl = resJson.get("url").getAsString();
-                            if (!TextUtils.isEmpty(realUrl) && realUrl.startsWith("http")) {
-                                log("解析成功 " + clip(realUrl, 100));
-                                return Result.get().url(realUrl).parse(0).header(pureHeaders).string();
+                        JsonObject res = JsonParser.parseString(apiResponse).getAsJsonObject();
+                        if (res.has("code") && res.get("code").getAsInt() == 200) {
+                            String real = res.get("url").getAsString();
+                            if (!TextUtils.isEmpty(real) && real.startsWith("http")) {
+                                log("jiexi ok");
+                                return Result.get().url(real).parse(0).header(pure).string();
                             }
                         }
                     }
                 } catch (Exception e) {
-                    log("解析异常 " + e.getMessage());
+                    log("jiexi 异常 " + e.getMessage());
                 }
-                return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+                return Result.get().url(playUrl).parse(1).header(headers).string();
             }
-
             if (rawUrl.startsWith("http")) {
-                log("直链返回");
-                return Result.get().url(rawUrl).parse(0).header(pureHeaders).string();
+                return Result.get().url(rawUrl).parse(0).header(pure).string();
             }
-            return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+            return Result.get().url(playUrl).parse(1).header(headers).string();
         } catch (Exception e) {
             log("player 异常 " + e.getMessage());
-            return Result.get().url(playUrl).parse(1).header(currentHeaders).string();
+            return Result.get().url(playUrl).parse(1).header(headers).string();
         }
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        log("search key=" + key);
+        log("search " + key);
         String searchUrl = host + "/index.php/ajax/suggest.html?mid=1&wd=" + URLEncoder.encode(key, "UTF-8");
-        String jsonResult = OkHttp.string(searchUrl, getHeaders());
-        log("search 响应 " + clip(jsonResult, 150));
+        String jsonResult = OkHttp.string(searchUrl, getHeaders(host + "/"));
+        log("search resp " + clip(jsonResult, 120));
         List<Vod> list = new ArrayList<>();
         try {
             JsonObject response = JsonParser.parseString(jsonResult).getAsJsonObject();
             if (response.has("code") && response.get("code").getAsInt() == 1) {
-                JsonArray jsonArray = response.getAsJsonArray("list");
-                for (JsonElement element : jsonArray) {
-                    JsonObject item = element.getAsJsonObject();
+                for (JsonElement el : response.getAsJsonArray("list")) {
+                    JsonObject item = el.getAsJsonObject();
                     Vod vod = new Vod();
                     vod.setVodId("/vod/detail/id/" + item.get("id").getAsInt() + ".html");
                     vod.setVodName(item.get("name").getAsString());
@@ -662,7 +732,7 @@ public class Tvbyun extends Spider {
                     list.add(vod);
                 }
             }
-            log("search 结果数=" + list.size());
+            log("search 条数=" + list.size());
         } catch (Exception e) {
             log("search 异常 " + e.getMessage());
         }
