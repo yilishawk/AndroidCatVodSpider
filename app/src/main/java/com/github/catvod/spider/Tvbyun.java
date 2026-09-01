@@ -732,7 +732,6 @@ public class Tvbyun extends Spider {
 
             Map<String, String> pure = new HashMap<>();
             pure.put("User-Agent", UA);
-            pure.put("Referer", host + "/");
 
             if (jiexiUrlMap.containsKey(from)) {
                 try {
