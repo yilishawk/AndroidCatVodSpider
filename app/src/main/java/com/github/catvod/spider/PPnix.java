@@ -24,6 +24,7 @@ import org.jsoup.select.Elements;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -35,20 +36,19 @@ import java.util.regex.Pattern;
 
 /**
  * PPnix
- * WebView 打开域名过 CF 取 Cookie → OkHttp 带 Cookie 访问分类/详情
- * 播放：直链 m3u8，header 带 Cookie + 原逻辑 Referer
+ * WebView 过盾取 Cookie → OkHttp 合并 Set-Cookie → 分类/详情
+ * 播放：直链 m3u8（无本地代理），Referer 保持 /cn/tv/{id}.html
  */
 public class PPnix extends Spider {
 
-    private String host = "https://www.ppnix.com";
-    private String commonUa =
+    private static final String HOST = "https://www.ppnix.com";
+    private static final String UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
 
-    private static final long CF_TIMEOUT_SEC = 30L;
+    private static final long CF_TIMEOUT_SEC = 45L;
     private static final long COOKIE_TTL_MS = 20 * 60 * 1000L;
 
     private Context appContext;
-    private boolean unlocked = false;
 
     private static volatile String cachedCookie = "";
     private static volatile long cachedCookieAt = 0L;
@@ -68,26 +68,104 @@ public class PPnix extends Spider {
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
-    // ==================== Cookie / 请求 ====================
+    // ==================== Cookie 工具 ====================
 
     private boolean hasFreshCookie() {
         return !TextUtils.isEmpty(cachedCookie)
                 && (System.currentTimeMillis() - cachedCookieAt) < COOKIE_TTL_MS;
     }
 
+    private boolean cookieReadyForPlay() {
+        return !TextUtils.isEmpty(cachedCookie)
+                && (cachedCookie.contains("SITE_TOTAL_ID")
+                || cachedCookie.contains("cf_clearance"));
+    }
+
+    private String dedupeCookie(String raw) {
+        if (TextUtils.isEmpty(raw)) return "";
+        Map<String, String> map = new LinkedHashMap<>();
+        for (String part : raw.split(";")) {
+            String p = part.trim();
+            if (p.isEmpty() || !p.contains("=")) continue;
+            int i = p.indexOf('=');
+            String k = p.substring(0, i).trim();
+            String v = p.substring(i + 1).trim();
+            if (!k.isEmpty()) map.put(k, v);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> e : map.entrySet()) {
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(e.getKey()).append("=").append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    private String readCookieManager(String pageUrl) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            CookieManager cm = CookieManager.getInstance();
+            String[] urls = new String[]{
+                    HOST,
+                    HOST + "/",
+                    pageUrl,
+                    HOST + "/cn/tv/",
+                    HOST + "/cn/movie/",
+                    HOST + "/cn/tv/---0-.html"
+            };
+            for (String u : urls) {
+                if (TextUtils.isEmpty(u)) continue;
+                String c = cm.getCookie(u);
+                if (!TextUtils.isEmpty(c)) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(c);
+                }
+            }
+        } catch (Exception e) {
+            log("readCookieManager 异常 " + e.getMessage());
+        }
+        return dedupeCookie(sb.toString());
+    }
+
+    private void saveCookie(String cookie, String from) {
+        String merged = dedupeCookie(cachedCookie + "; " + cookie);
+        if (TextUtils.isEmpty(merged)) return;
+        cachedCookie = merged;
+        cachedCookieAt = System.currentTimeMillis();
+        log("保存 Cookie from=" + from
+                + " len=" + merged.length()
+                + " SITE=" + merged.contains("SITE_TOTAL_ID")
+                + " cf=" + merged.contains("cf_clearance")
+                + " preview=" + clip(merged, 100));
+    }
+
+    private void mergeSetCookie(okhttp3.Response resp) {
+        if (resp == null) return;
+        List<String> list = resp.headers("Set-Cookie");
+        if (list == null || list.isEmpty()) return;
+        StringBuilder extra = new StringBuilder();
+        for (String sc : list) {
+            if (TextUtils.isEmpty(sc)) continue;
+            String one = sc.split(";")[0].trim();
+            if (one.isEmpty()) continue;
+            if (extra.length() > 0) extra.append("; ");
+            extra.append(one);
+            log("Set-Cookie ← " + one);
+        }
+        if (extra.length() > 0) saveCookie(extra.toString(), "Set-Cookie");
+    }
+
     private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", commonUa);
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-        headers.put("Referer", host + "/");
+        headers.put("User-Agent", UA);
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headers.put("Referer", HOST + "/");
         headers.put("Upgrade-Insecure-Requests", "1");
+        headers.put("sec-ch-ua", "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"");
+        headers.put("sec-ch-ua-mobile", "?0");
+        headers.put("sec-ch-ua-platform", "\"Windows\"");
         if (!TextUtils.isEmpty(cachedCookie)) {
             headers.put("Cookie", cachedCookie);
-            log("OkHttp Cookie len=" + cachedCookie.length()
-                    + " clearance=" + cachedCookie.contains("cf_clearance"));
-        } else {
-            log("OkHttp 无 Cookie");
         }
         return headers;
     }
@@ -95,7 +173,7 @@ public class PPnix extends Spider {
     private boolean isChallenge(String html) {
         if (TextUtils.isEmpty(html)) return true;
         String h = html.toLowerCase();
-        if (h.contains("lists-content") || h.contains("product-title") || h.contains("/info/m3u8/")) {
+        if (h.contains("lists-content") || h.contains("product-title") || h.contains("infoid")) {
             return false;
         }
         if (h.contains("<title>just a moment</title>")) return true;
@@ -105,54 +183,60 @@ public class PPnix extends Spider {
         return false;
     }
 
-    private String get(String targetUrl) {
-        log("请求: " + targetUrl);
+    private String httpGet(String url) {
+        log("GET " + url);
         try {
             if (!hasFreshCookie()) {
-                log("Cookie 无效/过期，WebView 取 Cookie…");
-                boolean ok = ensureCookieByWebView();
-                log("取 Cookie 结果=" + ok + " len=" + (cachedCookie == null ? 0 : cachedCookie.length()));
-                if (!ok && TextUtils.isEmpty(cachedCookie)) {
-                    log("无可用 Cookie");
-                    return "";
-                }
+                ensureCookieByWebView();
             }
-            String html = OkHttp.string(targetUrl, getHeaders());
-            log("OkHttp len=" + (html == null ? 0 : html.length()));
+            okhttp3.Response resp = OkHttp.newCall(url, getHeaders());
+            if (resp == null) {
+                log("响应 null");
+                return "";
+            }
+            mergeSetCookie(resp);
+            String html = resp.body() != null ? resp.body().string() : "";
+            resp.close();
+            log("GET len=" + html.length()
+                    + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
+                    + " cf=" + cachedCookie.contains("cf_clearance"));
+
             if (isChallenge(html)) {
-                log("仍像挑战页，强制刷新 Cookie 再试");
+                log("挑战页，刷新 WebView Cookie");
                 cachedCookie = "";
                 cachedCookieAt = 0;
-                if (!ensureCookieByWebView()) {
-                    log("刷新 Cookie 失败");
-                    return "";
-                }
-                html = OkHttp.string(targetUrl, getHeaders());
-                log("重试 OkHttp len=" + (html == null ? 0 : html.length()));
+                if (!ensureCookieByWebView()) return "";
+                resp = OkHttp.newCall(url, getHeaders());
+                if (resp == null) return "";
+                mergeSetCookie(resp);
+                html = resp.body() != null ? resp.body().string() : "";
+                resp.close();
                 if (isChallenge(html)) {
                     log("重试后仍是挑战页");
                     return "";
                 }
             }
-            return html == null ? "" : html;
+            return html;
         } catch (Exception e) {
-            log("get 异常: " + e.getMessage());
+            log("httpGet 异常 " + e.getMessage());
             return "";
         }
     }
 
+    // ==================== WebView ====================
+
     @SuppressLint("SetJavaScriptEnabled")
     private boolean ensureCookieByWebView() {
         synchronized (CF_LOCK) {
-            if (hasFreshCookie()) {
-                log("使用缓存 Cookie");
+            if (hasFreshCookie() && cookieReadyForPlay()) {
+                log("复用可用 Cookie");
                 return true;
             }
             if (appContext == null) {
                 try {
                     appContext = Init.context();
                 } catch (Throwable t) {
-                    log("Init.context 失败: " + t.getMessage());
+                    log("Init.context 失败 " + t.getMessage());
                 }
             }
             if (appContext == null) {
@@ -169,6 +253,10 @@ public class PPnix extends Spider {
                 try {
                     CookieManager cm = CookieManager.getInstance();
                     cm.setAcceptCookie(true);
+                    try {
+                        cm.flush();
+                    } catch (Throwable ignored) {
+                    }
 
                     WebView webView = new WebView(appContext);
                     webRef.set(webView);
@@ -176,7 +264,7 @@ public class PPnix extends Spider {
                     s.setJavaScriptEnabled(true);
                     s.setDomStorageEnabled(true);
                     s.setDatabaseEnabled(true);
-                    s.setUserAgentString(commonUa);
+                    s.setUserAgentString(UA);
                     s.setCacheMode(WebSettings.LOAD_DEFAULT);
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         cm.setAcceptThirdPartyCookies(webView, true);
@@ -184,49 +272,63 @@ public class PPnix extends Spider {
                     }
 
                     webView.setWebViewClient(new WebViewClient() {
-                        private boolean done = false;
+                        private int stage = 0; // 0 首页 → 1 业务页
 
-                        private void tryCollect(String from) {
-                            if (done) return;
+                        private void collectAndMaybeFinish(WebView view, String from) {
                             main.postDelayed(() -> {
-                                if (done) return;
                                 try {
-                                    String cookie = CookieManager.getInstance().getCookie(host);
-                                    log("collect from=" + from
-                                            + " null=" + (cookie == null)
-                                            + " len=" + (cookie == null ? 0 : cookie.length())
-                                            + " clearance=" + (cookie != null && cookie.contains("cf_clearance")));
-                                    if (!TextUtils.isEmpty(cookie)
-                                            && (cookie.contains("cf_clearance")
-                                            || cookie.contains("SITE_TOTAL_ID")
-                                            || cookie.length() > 20)) {
-                                        done = true;
-                                        cachedCookie = cookie;
-                                        cachedCookieAt = System.currentTimeMillis();
-                                        success.set(true);
-                                        log("域名 Cookie 已缓存: " + clip(cookie, 90));
-                                        latch.countDown();
-                                        destroyWeb(webRef);
-                                    }
+                                    String cmCookie = readCookieManager(HOST + "/");
+                                    view.evaluateJavascript(
+                                            "(function(){return document.cookie||'';})();",
+                                            raw -> {
+                                                String jsCookie = decodeJs(raw);
+                                                String merged = dedupeCookie(cmCookie + "; " + jsCookie);
+                                                log("collect " + from
+                                                        + " len=" + merged.length()
+                                                        + " SITE=" + merged.contains("SITE_TOTAL_ID")
+                                                        + " cf=" + merged.contains("cf_clearance")
+                                                        + " " + clip(merged, 100));
+                                                if (!TextUtils.isEmpty(merged)) {
+                                                    saveCookie(merged, from);
+                                                    if (cookieReadyForPlay() || stage >= 1) {
+                                                        success.set(!TextUtils.isEmpty(cachedCookie));
+                                                        latch.countDown();
+                                                        destroyWeb(webRef);
+                                                    }
+                                                }
+                                            }
+                                    );
                                 } catch (Exception e) {
-                                    log("collect 异常: " + e.getMessage());
+                                    log("collect 异常 " + e.getMessage());
                                 }
-                            }, 1200);
+                            }, 1500);
                         }
 
                         @Override
                         public void onPageFinished(WebView view, String url) {
-                            log("WebView onPageFinished: " + url);
+                            log("WebView finished stage=" + stage + " url=" + url);
                             view.evaluateJavascript(
                                     "(function(){return document.title||'';})();",
                                     raw -> {
                                         String title = decodeJs(raw);
-                                        log("域名页 title=" + title);
+                                        log("title=" + title);
                                         if (title != null && title.toLowerCase().contains("just a moment")) {
-                                            log("仍在 CF 挑战，继续等…");
+                                            log("CF 挑战中，继续等待…");
+                                            // 挑战中稍后再次采集，不立刻跳转
+                                            main.postDelayed(() -> {
+                                                if (stage == 0) {
+                                                    collectAndMaybeFinish(view, "cf-wait");
+                                                }
+                                            }, 5000);
                                             return;
                                         }
-                                        tryCollect("onPageFinished");
+                                        if (stage == 0) {
+                                            stage = 1;
+                                            log("打开业务页补 Cookie");
+                                            view.loadUrl(HOST + "/cn/tv/---0-.html");
+                                            return;
+                                        }
+                                        collectAndMaybeFinish(view, "biz");
                                     }
                             );
                         }
@@ -237,10 +339,10 @@ public class PPnix extends Spider {
                         }
                     });
 
-                    log("WebView 打开域名: " + host + "/");
-                    webView.loadUrl(host + "/");
+                    log("WebView 打开 " + HOST + "/");
+                    webView.loadUrl(HOST + "/");
                 } catch (Exception e) {
-                    log("创建 WebView 失败: " + e.getMessage());
+                    log("WebView 创建失败 " + e.getMessage());
                     latch.countDown();
                     destroyWeb(webRef);
                 }
@@ -249,18 +351,14 @@ public class PPnix extends Spider {
             try {
                 boolean finished = latch.await(CF_TIMEOUT_SEC, TimeUnit.SECONDS);
                 if (!finished) {
-                    log("WebView 等 Cookie 超时，最后读一次 CookieManager");
+                    log("WebView 超时，最后读 CookieManager");
                     final CountDownLatch last = new CountDownLatch(1);
                     main.post(() -> {
                         try {
-                            String c = CookieManager.getInstance().getCookie(host);
-                            log("超时后 Cookie: " + clip(c, 90));
+                            String c = readCookieManager(HOST + "/");
                             if (!TextUtils.isEmpty(c)) {
-                                cachedCookie = c;
-                                cachedCookieAt = System.currentTimeMillis();
-                                success.set(c.contains("cf_clearance")
-                                        || c.contains("SITE_TOTAL_ID")
-                                        || c.length() > 20);
+                                saveCookie(c, "timeout");
+                                success.set(true);
                             }
                         } catch (Exception ignored) {
                         }
@@ -278,8 +376,79 @@ public class PPnix extends Spider {
             }
 
             boolean ok = success.get() || hasFreshCookie();
-            log("ensureCookieByWebView 结束 ok=" + ok);
+            log("ensureCookieByWebView 结束 ok=" + ok
+                    + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
+                    + " cf=" + cachedCookie.contains("cf_clearance"));
             return ok;
+        }
+    }
+
+    /** 播放前打开 Referer 页，尽量补 SITE_TOTAL_ID */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void ensureCookieOnPage(String pageUrl) {
+        if (appContext == null) return;
+        synchronized (CF_LOCK) {
+            final CountDownLatch latch = new CountDownLatch(1);
+            final AtomicReference<WebView> webRef = new AtomicReference<>();
+            final Handler main = new Handler(Looper.getMainLooper());
+            main.post(() -> {
+                try {
+                    CookieManager.getInstance().setAcceptCookie(true);
+                    WebView webView = new WebView(appContext);
+                    webRef.set(webView);
+                    WebSettings s = webView.getSettings();
+                    s.setJavaScriptEnabled(true);
+                    s.setDomStorageEnabled(true);
+                    s.setUserAgentString(UA);
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+                    }
+                    webView.setWebViewClient(new WebViewClient() {
+                        @Override
+                        public void onPageFinished(WebView view, String url) {
+                            main.postDelayed(() -> {
+                                try {
+                                    String cm = readCookieManager(pageUrl);
+                                    view.evaluateJavascript(
+                                            "(function(){return document.cookie||'';})();",
+                                            raw -> {
+                                                String js = decodeJs(raw);
+                                                saveCookie(dedupeCookie(cm + "; " + js), "play-ref");
+                                                latch.countDown();
+                                                destroyWeb(webRef);
+                                            }
+                                    );
+                                } catch (Exception e) {
+                                    latch.countDown();
+                                    destroyWeb(webRef);
+                                }
+                            }, 1200);
+                        }
+                    });
+                    log("播放前 WebView " + pageUrl);
+                    webView.loadUrl(pageUrl);
+                } catch (Exception e) {
+                    log("播放前 WebView 失败 " + e.getMessage());
+                    latch.countDown();
+                    destroyWeb(webRef);
+                }
+            });
+            try {
+                latch.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            // 再用 OkHttp 打一次 Referer，合并 Set-Cookie
+            try {
+                okhttp3.Response resp = OkHttp.newCall(pageUrl, getHeaders());
+                if (resp != null) {
+                    mergeSetCookie(resp);
+                    if (resp.body() != null) resp.body().close();
+                    resp.close();
+                }
+            } catch (Exception e) {
+                log("播放前 OkHttp Referer 失败 " + e.getMessage());
+            }
         }
     }
 
@@ -310,7 +479,11 @@ public class PPnix extends Spider {
     // ==================== Spider ====================
 
     @Override
-    public void init(Context context, String extend) throws Exception {
+    public void init(Context context, String extend) {
+        try {
+            super.init(context, extend);
+        } catch (Exception ignored) {
+        }
         if (context != null) {
             appContext = context.getApplicationContext();
         }
@@ -320,18 +493,12 @@ public class PPnix extends Spider {
             } catch (Throwable ignored) {
             }
         }
-        log("初始化 host=" + host + " context=" + (appContext != null));
-
-        unlocked = PasswordGate.ensureUnlocked(context);
-        if (!unlocked) {
-            throw new Exception("密码验证未通过，拒绝加载该源");
-        }
+        log("init context=" + (appContext != null));
         ensureCookieByWebView();
     }
 
     @Override
-    public String homeContent(boolean filter) throws Exception {
-        if (!unlocked) return Result.get().classes(new ArrayList<>()).string();
+    public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("movie", "电影"));
         classes.add(new Class("tv", "电视剧"));
@@ -341,14 +508,10 @@ public class PPnix extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter,
                                   HashMap<String, String> extend) throws Exception {
-        if (!unlocked) {
-            int page = Integer.parseInt(pg);
-            return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
-        }
         int page = Integer.parseInt(pg);
         int pageIndex = page - 1;
-        String url = host + "/cn/" + tid + "/---" + pageIndex + "-.html";
-        String html = get(url);
+        String url = HOST + "/cn/" + tid + "/---" + pageIndex + "-.html";
+        String html = httpGet(url);
         if (TextUtils.isEmpty(html)) {
             return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
         }
@@ -368,7 +531,7 @@ public class PPnix extends Spider {
             if (img != null) {
                 pic = img.attr("src");
                 if (TextUtils.isEmpty(pic)) pic = img.attr("data-src");
-                if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = host + pic;
+                if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = HOST + pic;
             }
 
             Element yearSpan = li.selectFirst(".countrie .orange");
@@ -386,24 +549,17 @@ public class PPnix extends Spider {
             videos.add(vod);
         }
 
-        int count = videos.size() > 0 ? page + 1 : page;
-        return Result.get()
-                .vod(videos)
-                .page(page, count, videos.size(), 0)
-                .string();
+        int count = videos.isEmpty() ? page : page + 1;
+        return Result.get().vod(videos).page(page, count, videos.size(), 0).string();
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        if (!unlocked) return Result.error("密码验证未通过");
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
-
         String id = ids.get(0);
-        String url = id.startsWith("http") ? id : host + id;
-        String html = get(url);
-        if (TextUtils.isEmpty(html)) {
-            return Result.error("请求详情失败");
-        }
+        String url = id.startsWith("http") ? id : HOST + id;
+        String html = httpGet(url);
+        if (TextUtils.isEmpty(html)) return Result.error("请求详情失败");
 
         Document doc = Jsoup.parse(html);
 
@@ -425,32 +581,28 @@ public class PPnix extends Spider {
         String pic = "";
         if (picElem != null) {
             pic = picElem.attr("src");
-            if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = host + pic;
+            if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = HOST + pic;
         }
 
         String director = "";
         String actor = "";
         String area = "";
         String content = "";
-        Elements excerpts = doc.select(".product-excerpt");
-        for (Element ex : excerpts) {
+        for (Element ex : doc.select(".product-excerpt")) {
             String exText = ex.text();
             Element span = ex.selectFirst("span");
             if (span == null) continue;
             if (exText.contains("导演")) {
-                Elements links = span.select("a");
                 List<String> names = new ArrayList<>();
-                for (Element a : links) names.add(a.text());
+                for (Element a : span.select("a")) names.add(a.text());
                 director = TextUtils.join(", ", names);
             } else if (exText.contains("主演")) {
-                Elements links = span.select("a");
                 List<String> names = new ArrayList<>();
-                for (Element a : links) names.add(a.text());
+                for (Element a : span.select("a")) names.add(a.text());
                 actor = TextUtils.join(", ", names);
             } else if (exText.contains("国家")) {
-                Elements links = span.select("a");
                 List<String> names = new ArrayList<>();
-                for (Element a : links) names.add(a.text());
+                for (Element a : span.select("a")) names.add(a.text());
                 area = TextUtils.join(", ", names);
             } else if (exText.contains("简介")) {
                 content = span.text().trim();
@@ -463,16 +615,11 @@ public class PPnix extends Spider {
             String js = script.html();
             if (js.contains("infoid") && js.contains("m3u8")) {
                 Matcher infoidMatcher = Pattern.compile("infoid\\s*=\\s*(\\d+)").matcher(js);
-                if (infoidMatcher.find()) {
-                    infoid = infoidMatcher.group(1);
-                }
+                if (infoidMatcher.find()) infoid = infoidMatcher.group(1);
                 Matcher m3u8Matcher = Pattern.compile("m3u8\\s*=\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(js);
                 if (m3u8Matcher.find()) {
-                    String arrayContent = m3u8Matcher.group(1);
-                    Matcher epMatcher = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(arrayContent);
-                    while (epMatcher.find()) {
-                        episodeNumbers.add(epMatcher.group(1));
-                    }
+                    Matcher epMatcher = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(m3u8Matcher.group(1));
+                    while (epMatcher.find()) episodeNumbers.add(epMatcher.group(1));
                 }
                 break;
             }
@@ -483,7 +630,6 @@ public class PPnix extends Spider {
         if (infoid != null && !episodeNumbers.isEmpty()) {
             List<String> urls = new ArrayList<>();
             for (String ep : episodeNumbers) {
-                // 相对路径，播放时拼 host；集名用集数
                 urls.add(ep + "$/info/m3u8/" + infoid + "/" + ep + ".m3u8");
             }
             vodPlayFrom = "PPnix";
@@ -506,41 +652,40 @@ public class PPnix extends Spider {
     }
 
     @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        if (!unlocked) {
-            return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
-        }
-        // 原逻辑未实现搜索
+    public String searchContent(String key, boolean quick) {
         return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 直链，不走本地 proxyM3u8
-        String m3u8Url = id.startsWith("http") ? id : host + id;
+    public String playerContent(String flag, String id, List<String> vipFlags) {
+        String m3u8Url = id.startsWith("http") ? id : HOST + id;
 
-        // Referer 保持原 Java 样式
-        String referer = host + "/";
+        // Referer 保持原逻辑
+        String referer = HOST + "/";
         Matcher m = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
         if (m.find()) {
-            referer = host + "/cn/tv/" + m.group(1) + ".html";
+            referer = HOST + "/cn/tv/" + m.group(1) + ".html";
         }
 
+        if (!cookieReadyForPlay()) {
+            log("播放前 Cookie 不足，WebView 补全");
+            ensureCookieByWebView();
+        }
+        ensureCookieOnPage(referer);
+
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", commonUa);
+        headers.put("User-Agent", UA);
         headers.put("Referer", referer);
-        headers.put("Origin", host);
+        headers.put("Origin", HOST);
         headers.put("Accept", "*/*");
         if (!TextUtils.isEmpty(cachedCookie)) {
             headers.put("Cookie", cachedCookie);
         }
 
-        log("播放直链 " + m3u8Url + " Referer=" + referer
-                + " cookie=" + (!TextUtils.isEmpty(cachedCookie)));
+        log("播放直链 " + m3u8Url
+                + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
+                + " cf=" + cachedCookie.contains("cf_clearance"));
 
-        return Result.get()
-                .url(m3u8Url)
-                .header(headers)
-                .string();
+        return Result.get().url(m3u8Url).header(headers).string();
     }
 }
