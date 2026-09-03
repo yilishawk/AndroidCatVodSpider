@@ -54,13 +54,18 @@ public class SiniTV extends Spider {
 
     /**
      * 纯数字 id：8 个 - → /vodshow/1--------1---.html
-     * 已带地区段：7 个 - → /vodshow/1-Tiongkok-------1---.html
+     * 已带地区：7 个 - → /vodshow/1-Tiongkok-------1---.html
      */
     private String buildCategoryUrl(String tid, int page) {
         if (tid != null && tid.contains("-")) {
             return String.format(SITE_URL + "/vodshow/%s-------%d---.html", tid, page);
         }
         return String.format(SITE_URL + "/vodshow/%s--------%d---.html", tid, page);
+    }
+
+    /** 搜索页：/vodsearch/-------------.html?wd=关键词 */
+    private String buildSearchUrl(String key) throws Exception {
+        return SITE_URL + "/vodsearch/-------------.html?wd=" + URLEncoder.encode(key, "UTF-8");
     }
 
     @Override
@@ -80,9 +85,17 @@ public class SiniTV extends Spider {
         if (TextUtils.isEmpty(html)) {
             return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
         }
+        List<Vod> list = parseList(html);
+        int count = list.isEmpty() ? page : page + 1;
+        return Result.get().vod(list).page(page, count, list.size(), 0).string();
+    }
 
-        Document doc = Jsoup.parse(html);
+    /**
+     * 分类 / 搜索共用列表解析（public-list-box）
+     */
+    private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
+        Document doc = Jsoup.parse(html);
         Elements items = doc.select("div.public-list-box");
         for (Element item : items) {
             Element link = item.selectFirst("a.public-list-exp");
@@ -90,10 +103,13 @@ public class SiniTV extends Spider {
 
             String href = link.attr("href");
             String vodId = extractIdFromUrl(href);
+            if (TextUtils.isEmpty(vodId)) continue;
+
             String title = link.attr("title");
             if (TextUtils.isEmpty(title)) {
-                Element titleEl = item.selectFirst(".public-list-div a");
-                if (titleEl != null) title = titleEl.text().trim();
+                Element titleEl = item.selectFirst("a.time-title, .public-list-button a");
+                if (titleEl != null) title = titleEl.attr("title");
+                if (TextUtils.isEmpty(title) && titleEl != null) title = titleEl.text().trim();
             }
             if (TextUtils.isEmpty(title)) continue;
 
@@ -101,11 +117,15 @@ public class SiniTV extends Spider {
             String pic = "";
             if (img != null) {
                 pic = img.attr("data-src");
-                if (TextUtils.isEmpty(pic)) pic = img.attr("src");
-                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) {
-                    pic = "https:" + pic;
+                if (TextUtils.isEmpty(pic) || pic.startsWith("data:")) {
+                    String src = img.attr("src");
+                    if (!TextUtils.isEmpty(src) && !src.startsWith("data:")) pic = src;
                 }
+                if (!TextUtils.isEmpty(pic) && pic.startsWith("//")) pic = "https:" + pic;
             }
+
+            Element remarkEl = item.selectFirst(".public-list-prb");
+            String remarks = remarkEl != null ? remarkEl.text().trim() : "";
 
             String searchTitle = removeSeason(title);
             String zhTitle = Proxy.getTitleSync(searchTitle);
@@ -117,14 +137,10 @@ public class SiniTV extends Spider {
             vod.setVodId(vodId);
             vod.setVodName(finalName);
             vod.setVodPic(poster);
+            vod.setVodRemarks(remarks);
             list.add(vod);
         }
-
-        int count = list.isEmpty() ? page : page + 1;
-        return Result.get()
-                .vod(list)
-                .page(page, count, list.size(), 0)
-                .string();
+        return list;
     }
 
     @Override
@@ -139,6 +155,8 @@ public class SiniTV extends Spider {
         Vod vod = new Vod();
         vod.setVodId(vodId);
 
+        String pic = "";
+
         Element titleEl = doc.selectFirst("div.this-desc-title");
         if (titleEl != null) {
             String title = titleEl.text().trim();
@@ -147,19 +165,26 @@ public class SiniTV extends Spider {
             vod.setVodName(TextUtils.isEmpty(zhTitle) ? title : zhTitle);
             String poster = Proxy.getPosterSync(searchTitle);
             if (!TextUtils.isEmpty(poster)) {
-                vod.setVodPic(poster);
+                pic = poster;
             }
         }
 
         Element posterEl = doc.selectFirst("div.this-pic-bj img");
         if (posterEl != null) {
-            String poster = posterEl.attr("src");
-            if (!TextUtils.isEmpty(poster)) {
-                if (!poster.startsWith("http")) poster = "https:" + poster;
-                if (TextUtils.isEmpty(vod.getVodPic())) {
-                    vod.setVodPic(poster);
+            String poster = posterEl.attr("data-src");
+            if (TextUtils.isEmpty(poster) || poster.startsWith("data:")) {
+                poster = posterEl.attr("src");
+            }
+            if (!TextUtils.isEmpty(poster) && !poster.startsWith("data:")) {
+                if (poster.startsWith("//")) poster = "https:" + poster;
+                else if (!poster.startsWith("http")) poster = "https:" + poster;
+                if (TextUtils.isEmpty(pic)) {
+                    pic = poster;
                 }
             }
+        }
+        if (!TextUtils.isEmpty(pic)) {
+            vod.setVodPic(pic);
         }
 
         Element infoEl = doc.selectFirst("div.this-desc-info");
@@ -231,9 +256,6 @@ public class SiniTV extends Spider {
         return result.string();
     }
 
-    /**
-     * 从 var player_aaaa={...} 用括号匹配取出 JSON，再读 url 字段
-     */
     private String extractPlayerAaaaUrl(String html) {
         if (TextUtils.isEmpty(html)) return null;
 
@@ -277,45 +299,20 @@ public class SiniTV extends Spider {
         if (TextUtils.isEmpty(key)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
-        String searchUrl = SITE_URL + "/index.php/ajax/suggest.html?mid=1&wd="
-                + URLEncoder.encode(key, "UTF-8");
-        String json = OkHttp.string(searchUrl, baseHeaders);
-        if (TextUtils.isEmpty(json)) {
+        String searchUrl = buildSearchUrl(key);
+        String html = OkHttp.string(searchUrl, baseHeaders);
+        if (TextUtils.isEmpty(html)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
-        try {
-            org.json.JSONObject obj = new org.json.JSONObject(json);
-            org.json.JSONArray arr = obj.optJSONArray("list");
-            List<Vod> list = new ArrayList<>();
-            if (arr != null) {
-                for (int i = 0; i < arr.length(); i++) {
-                    org.json.JSONObject item = arr.getJSONObject(i);
-                    String vodId = item.optString("vod_id");
-                    String vodName = item.optString("vod_name");
-                    String pic = item.optString("pic");
-
-                    String searchTitle = removeSeason(vodName);
-                    String zhTitle = Proxy.getTitleSync(searchTitle);
-                    String finalName = TextUtils.isEmpty(zhTitle) ? vodName : zhTitle;
-                    String poster = Proxy.getPosterSync(searchTitle);
-                    if (TextUtils.isEmpty(poster)) poster = pic;
-
-                    Vod vod = new Vod();
-                    vod.setVodId(vodId);
-                    vod.setVodName(finalName);
-                    vod.setVodPic(poster);
-                    list.add(vod);
-                }
-            }
-            return Result.get().vod(list).string();
-        } catch (Exception e) {
-            return Result.get().vod(new ArrayList<>()).string();
-        }
+        List<Vod> list = parseList(html);
+        return Result.get().vod(list).string();
     }
 
     private String extractIdFromUrl(String url) {
         if (TextUtils.isEmpty(url)) return "";
         Matcher m = Pattern.compile("/voddetail/(\\d+)\\.html").matcher(url);
+        if (m.find()) return m.group(1);
+        m = Pattern.compile("/vodplay/([\\w-]+)\\.html").matcher(url);
         if (m.find()) return m.group(1);
         return url.replaceAll("\\D", "");
     }
