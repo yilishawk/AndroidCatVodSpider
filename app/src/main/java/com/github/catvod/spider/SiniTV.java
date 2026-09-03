@@ -40,9 +40,6 @@ public class SiniTV extends Spider {
         CATEGORIES.put("2-Tiongkok", "国产电影");
     }
 
-    private static final Pattern SEASON_PATTERN =
-            Pattern.compile("(Season|Musim|Saison|Temporada)\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
-
     private Map<String, String> baseHeaders;
 
     @Override
@@ -63,7 +60,6 @@ public class SiniTV extends Spider {
         return String.format(SITE_URL + "/vodshow/%s--------%d---.html", tid, page);
     }
 
-    /** 搜索页：/vodsearch/-------------.html?wd=关键词 */
     private String buildSearchUrl(String key) throws Exception {
         return SITE_URL + "/vodsearch/-------------.html?wd=" + URLEncoder.encode(key, "UTF-8");
     }
@@ -90,9 +86,6 @@ public class SiniTV extends Spider {
         return Result.get().vod(list).page(page, count, list.size(), 0).string();
     }
 
-    /**
-     * 分类 / 搜索共用列表解析（public-list-box）
-     */
     private List<Vod> parseList(String html) {
         List<Vod> list = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -108,8 +101,10 @@ public class SiniTV extends Spider {
             String title = link.attr("title");
             if (TextUtils.isEmpty(title)) {
                 Element titleEl = item.selectFirst("a.time-title, .public-list-button a");
-                if (titleEl != null) title = titleEl.attr("title");
-                if (TextUtils.isEmpty(title) && titleEl != null) title = titleEl.text().trim();
+                if (titleEl != null) {
+                    title = titleEl.attr("title");
+                    if (TextUtils.isEmpty(title)) title = titleEl.text().trim();
+                }
             }
             if (TextUtils.isEmpty(title)) continue;
 
@@ -127,16 +122,10 @@ public class SiniTV extends Spider {
             Element remarkEl = item.selectFirst(".public-list-prb");
             String remarks = remarkEl != null ? remarkEl.text().trim() : "";
 
-            String searchTitle = removeSeason(title);
-            String zhTitle = Proxy.getTitleSync(searchTitle);
-            String finalName = TextUtils.isEmpty(zhTitle) ? title : zhTitle;
-            String poster = Proxy.getPosterSync(searchTitle);
-            if (TextUtils.isEmpty(poster)) poster = pic;
-
             Vod vod = new Vod();
             vod.setVodId(vodId);
-            vod.setVodName(finalName);
-            vod.setVodPic(poster);
+            vod.setVodName(title);
+            vod.setVodPic(pic);
             vod.setVodRemarks(remarks);
             list.add(vod);
         }
@@ -159,14 +148,7 @@ public class SiniTV extends Spider {
 
         Element titleEl = doc.selectFirst("div.this-desc-title");
         if (titleEl != null) {
-            String title = titleEl.text().trim();
-            String searchTitle = removeSeason(title);
-            String zhTitle = Proxy.getTitleSync(searchTitle);
-            vod.setVodName(TextUtils.isEmpty(zhTitle) ? title : zhTitle);
-            String poster = Proxy.getPosterSync(searchTitle);
-            if (!TextUtils.isEmpty(poster)) {
-                pic = poster;
-            }
+            vod.setVodName(titleEl.text().trim());
         }
 
         Element posterEl = doc.selectFirst("div.this-pic-bj img");
@@ -178,9 +160,7 @@ public class SiniTV extends Spider {
             if (!TextUtils.isEmpty(poster) && !poster.startsWith("data:")) {
                 if (poster.startsWith("//")) poster = "https:" + poster;
                 else if (!poster.startsWith("http")) poster = "https:" + poster;
-                if (TextUtils.isEmpty(pic)) {
-                    pic = poster;
-                }
+                pic = poster;
             }
         }
         if (!TextUtils.isEmpty(pic)) {
@@ -199,23 +179,19 @@ public class SiniTV extends Spider {
 
         Element actorEl = doc.selectFirst("div.this-info");
         if (actorEl != null) {
-            String actorText = actorEl.text().replace("Pemeran:", "").trim();
-            vod.setVodActor(actorText);
+            vod.setVodActor(actorEl.text().replace("Pemeran:", "").trim());
         }
 
         Element descEl = doc.selectFirst("div#height_limit.text");
         if (descEl != null) {
-            String desc = descEl.text().replace("Deskripsi:", "").trim();
-            vod.setVodContent(desc);
+            vod.setVodContent(descEl.text().replace("Deskripsi:", "").trim());
         }
 
         Elements episodes = doc.select("ul.anthology-list-play li a");
         if (!episodes.isEmpty()) {
             List<String> playUrls = new ArrayList<>();
             for (Element ep : episodes) {
-                String epHref = ep.attr("href");
-                String epTitle = ep.text().trim();
-                playUrls.add(epTitle + "$" + epHref);
+                playUrls.add(ep.text().trim() + "$" + ep.attr("href"));
             }
             vod.setVodPlayFrom("XP");
             vod.setVodPlayUrl(TextUtils.join("#", playUrls));
@@ -299,13 +275,11 @@ public class SiniTV extends Spider {
         if (TextUtils.isEmpty(key)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
-        String searchUrl = buildSearchUrl(key);
-        String html = OkHttp.string(searchUrl, baseHeaders);
+        String html = OkHttp.string(buildSearchUrl(key), baseHeaders);
         if (TextUtils.isEmpty(html)) {
             return Result.get().vod(new ArrayList<>()).string();
         }
-        List<Vod> list = parseList(html);
-        return Result.get().vod(list).string();
+        return Result.get().vod(parseList(html)).string();
     }
 
     private String extractIdFromUrl(String url) {
@@ -315,14 +289,5 @@ public class SiniTV extends Spider {
         m = Pattern.compile("/vodplay/([\\w-]+)\\.html").matcher(url);
         if (m.find()) return m.group(1);
         return url.replaceAll("\\D", "");
-    }
-
-    private String removeSeason(String title) {
-        if (TextUtils.isEmpty(title)) return "";
-        Matcher m = SEASON_PATTERN.matcher(title);
-        if (m.find()) {
-            return title.substring(0, m.start()).trim();
-        }
-        return title;
     }
 }
