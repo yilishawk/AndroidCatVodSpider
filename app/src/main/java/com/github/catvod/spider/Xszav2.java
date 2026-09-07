@@ -427,20 +427,30 @@ public class Xszav2 extends Spider {
             Vod vod = new Vod();
             vod.setVodId(id);
 
-            String title = "Video " + id;
-            Matcher mTitle = Pattern.compile("(?:alt|title)=\"([^\"]{5,})\"", Pattern.CASE_INSENSITIVE)
-                    .matcher(html == null ? "" : html);
-            if (mTitle.find()) {
-                title = mTitle.group(1);
-            }
-            vod.setVodName(title);
+            if (!TextUtils.isEmpty(html)) {
+                // 1. 优先提取图片 alt 中的完整标题
+                Matcher mAlt = Pattern.compile("<img[^>]+alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(html);
+                if (mAlt.find()) {
+                    vod.setVodName(mAlt.group(1).trim());
+                } else {
+                    Matcher mTitle = Pattern.compile("(?:alt|title)=\"([^\"]{5,})\"", Pattern.CASE_INSENSITIVE).matcher(html);
+                    if (mTitle.find()) {
+                        vod.setVodName(mTitle.group(1).trim());
+                    } else {
+                        vod.setVodName("Video " + id);
+                    }
+                }
 
-            Matcher mPic = Pattern.compile(
-                    "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
-                    Pattern.CASE_INSENSITIVE
-            ).matcher(html == null ? "" : html);
-            if (mPic.find()) {
-                vod.setVodPic(mPic.group(1));
+                // 2. 提取封面图片地址
+                Matcher mPic = Pattern.compile(
+                        "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(html);
+                if (mPic.find()) {
+                    vod.setVodPic(mPic.group(1));
+                }
+            } else {
+                vod.setVodName("Video " + id);
             }
 
             vod.setVodPlayFrom("Xszav2");
@@ -484,29 +494,36 @@ public class Xszav2 extends Spider {
             String html = get(detailUrl);
 
             String playUrl = "";
-            Matcher m1 = Pattern.compile(
-                    "<video[^>]+src=[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
-                    Pattern.CASE_INSENSITIVE
-            ).matcher(html == null ? "" : html);
-            if (m1.find()) {
-                playUrl = absUrl(m1.group(1).trim());
-            }
-            if (TextUtils.isEmpty(playUrl)) {
-                Matcher m2 = Pattern.compile(
-                        "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)",
+            if (!TextUtils.isEmpty(html)) {
+                // 1. 优先匹配 <video src="/media/videos/v_xxx.m3u8">
+                Matcher m1 = Pattern.compile(
+                        "<video[^>]+src=[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
                         Pattern.CASE_INSENSITIVE
-                ).matcher(html == null ? "" : html);
-                if (m2.find()) {
-                    playUrl = m2.group(1);
+                ).matcher(html);
+                if (m1.find()) {
+                    playUrl = absUrl(m1.group(1).trim());
                 }
-            }
-            if (TextUtils.isEmpty(playUrl)) {
-                Matcher m3 = Pattern.compile(
-                        "source\\s*:\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
-                        Pattern.CASE_INSENSITIVE
-                ).matcher(html == null ? "" : html);
-                if (m3.find()) {
-                    playUrl = absUrl(m3.group(1).trim());
+
+                // 2. 兜底匹配网页源码中的任意 m3u8 地址
+                if (TextUtils.isEmpty(playUrl)) {
+                    Matcher m2 = Pattern.compile(
+                            "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*|/[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)",
+                            Pattern.CASE_INSENSITIVE
+                    ).matcher(html);
+                    if (m2.find()) {
+                        playUrl = absUrl(m2.group(1).trim());
+                    }
+                }
+
+                // 3. JS 变量配置兜底
+                if (TextUtils.isEmpty(playUrl)) {
+                    Matcher m3 = Pattern.compile(
+                            "source\\s*:\\s*[\"']([^\"']+\\.m3u8[^\"']*)[\"']",
+                            Pattern.CASE_INSENSITIVE
+                    ).matcher(html);
+                    if (m3.find()) {
+                        playUrl = absUrl(m3.group(1).trim());
+                    }
                 }
             }
 
