@@ -428,20 +428,33 @@ public class Xszav2 extends Spider {
             vod.setVodId(id);
 
             if (!TextUtils.isEmpty(html)) {
-                // 1. 优先提取图片 alt 中的完整标题
-                Matcher mAlt = Pattern.compile("<img[^>]+alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(html);
-                if (mAlt.find()) {
-                    vod.setVodName(mAlt.group(1).trim());
+                // 1. 优先从 <div class="space-y-5 mt-4"> 容器内的 <h1> 节点抓取完整标题
+                Matcher mH1 = Pattern.compile(
+                        "<div[^>]*class=\"[^\"]*space-y-5[^\"]*mt-4[^\"]*\"[^>]*>\\s*<h1[^>]*>([\\s\\S]*?)</h1>",
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(html);
+
+                if (mH1.find()) {
+                    String title = mH1.group(1).replaceAll("<[^>]+>", "").trim();
+                    vod.setVodName(title);
                 } else {
-                    Matcher mTitle = Pattern.compile("(?:alt|title)=\"([^\"]{5,})\"", Pattern.CASE_INSENSITIVE).matcher(html);
-                    if (mTitle.find()) {
-                        vod.setVodName(mTitle.group(1).trim());
+                    // 2. 备用逻辑：直接匹配页面中的第一个 <h1> 标签
+                    Matcher mH1Backup = Pattern.compile("<h1[^>]*>([\\s\\S]*?)</h1>", Pattern.CASE_INSENSITIVE).matcher(html);
+                    if (mH1Backup.find()) {
+                        String title = mH1Backup.group(1).replaceAll("<[^>]+>", "").trim();
+                        vod.setVodName(title);
                     } else {
-                        vod.setVodName("Video " + id);
+                        // 3. 兜底逻辑：尝试提取 img 的 alt 文本
+                        Matcher mAlt = Pattern.compile("<img[^>]+alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(html);
+                        if (mAlt.find()) {
+                            vod.setVodName(mAlt.group(1).trim());
+                        } else {
+                            vod.setVodName("Video " + id);
+                        }
                     }
                 }
 
-                // 2. 提取封面图片地址
+                // 提取封面图片地址
                 Matcher mPic = Pattern.compile(
                         "(?:data-src|src)=\"(https://img\\.xszav2\\.com[^\"]+)\"",
                         Pattern.CASE_INSENSITIVE
