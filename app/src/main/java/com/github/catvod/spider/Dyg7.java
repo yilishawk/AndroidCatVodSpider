@@ -14,10 +14,8 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -237,8 +235,8 @@ public class Dyg7 extends Spider {
             headers.put("Content-Type", "application/x-www-form-urlencoded");
 
             logger("搜索提交关键词: " + key);
-            // 发送 POST 请求并跟随重定向
-            String html = OkHttp.post(searchUrl, params, headers);
+            // 修复点：调用 .getBody() 获取返回结果字符串
+            String html = OkHttp.post(searchUrl, params, headers).getBody();
             List<Vod> list = parseList(html);
 
             return vodPageResult(list, page);
