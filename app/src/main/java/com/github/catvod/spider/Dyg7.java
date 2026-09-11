@@ -29,8 +29,6 @@ public class Dyg7 extends Spider {
     private static final String HOST = "https://www.dyg7.com";
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-    private boolean unlocked = false;
-
     private void logger(String msg) {
         try {
             com.github.catvod.spider.Proxy.log("[Dyg7] " + msg);
@@ -71,13 +69,10 @@ public class Dyg7 extends Spider {
             super.init(context, extend);
         } catch (Exception ignored) {
         }
-        this.unlocked = PasswordGate.ensureUnlocked(context);
     }
 
     @Override
     public String homeContent(boolean filter) {
-        if (!unlocked) return Result.get().classes(new ArrayList<Class>()).string();
-
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("dy", "电影"));
         classes.add(new Class("dsj", "电视剧"));
@@ -88,10 +83,6 @@ public class Dyg7 extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        if (!unlocked) {
-            int page = parsePage(pg);
-            return Result.get().vod(new ArrayList<Vod>()).page(page, page, 0, 0).string();
-        }
         try {
             int page = parsePage(pg);
             String url;
@@ -113,8 +104,6 @@ public class Dyg7 extends Spider {
 
     @Override
     public String detailContent(List<String> ids) {
-        if (!unlocked) return Result.get().string();
-
         try {
             String id = ids.get(0);
             String detailUrl = absUrl(id);
@@ -149,8 +138,23 @@ public class Dyg7 extends Spider {
                 vod.setVodPic(absUrl(imgEl.attr("src")));
             }
 
-            // 3. 提取简介
-            Matcher mDesc = Pattern.compile("◎简 {1,2}介[\\s\\S]*?<div>&nbsp;</div>\\s*<div>([\\s\\S]*?)</div>").matcher(html);
+            // 3. 提取导演、演员、集数、简介
+            Matcher mDirector = Pattern.compile("◎导  演[:：]?\\s*([^<\\n]+)").matcher(html);
+            if (mDirector.find()) {
+                vod.setVodDirector(mDirector.group(1).trim());
+            }
+
+            Matcher mActor = Pattern.compile("◎主 {1,2}演[:：]?\\s*([^<\\n]+)").matcher(html);
+            if (mActor.find()) {
+                vod.setVodActor(mActor.group(1).trim());
+            }
+
+            Matcher mRemarks = Pattern.compile("◎集  数[:：]?\\s*([^<\\n]+)").matcher(html);
+            if (mRemarks.find()) {
+                vod.setVodRemarks("共" + mRemarks.group(1).trim() + "集");
+            }
+
+            Matcher mDesc = Pattern.compile("◎简{1,2}介[\\s\\S]*?<div>&nbsp;</div>\\s*<div>([\\s\\S]*?)</div>").matcher(html);
             if (mDesc.find()) {
                 vod.setVodContent(mDesc.group(1).replaceAll("<[^>]+>", "").trim());
             }
@@ -159,7 +163,7 @@ public class Dyg7 extends Spider {
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
 
-            // A. 解析网页在线视频播放列表 (stab1 / playlist)
+            // A. 解析网页在线视频播放列表
             Elements playBlocks = doc.select("div.tab-down");
             int videoListIdx = 1;
             for (Element block : playBlocks) {
@@ -218,8 +222,6 @@ public class Dyg7 extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick, String pg) {
-        if (!unlocked) return Result.get().vod(new ArrayList<Vod>()).string();
-
         try {
             int page = parsePage(pg);
             String searchUrl = HOST + "/e/search/index.php";
@@ -235,7 +237,6 @@ public class Dyg7 extends Spider {
             headers.put("Content-Type", "application/x-www-form-urlencoded");
 
             logger("搜索提交关键词: " + key);
-            // 修复点：调用 .getBody() 获取返回结果字符串
             String html = OkHttp.post(searchUrl, params, headers).getBody();
             List<Vod> list = parseList(html);
 
@@ -249,12 +250,11 @@ public class Dyg7 extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
-            // 如果是磁力链接，直接返回
+            // 如果是磁力链接，直接原样推给壳子
             if (id.startsWith("magnet:")) {
                 return Result.get().url(id).string();
             }
 
-            // 如果是视频播列表，请求中转页并提取 iframe 中的真实 src
             String playPageUrl = absUrl(id);
             logger("播放页请求: " + playPageUrl);
             String html = get(playPageUrl);
@@ -273,19 +273,23 @@ public class Dyg7 extends Spider {
                 }
             }
 
-            if (TextUtils.isEmpty(realUrl)) {
-                return Result.get().url("").string();
+            // 1. 如果成功匹配到 iframe src 真实播放链接，直接作为直链返回 (parse = 0)
+            if (!TextUtils.isEmpty(realUrl)) {
+                logger("提取到真实播放地址: " + realUrl);
+                Map<String, String> headers = new HashMap<>();
+                headers.put("User-Agent", UA);
+                headers.put("Referer", playPageUrl);
+                return Result.get().url(realUrl).header(headers).string();
             }
 
-            logger("提取到真实播放地址: " + realUrl);
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", UA);
-            headers.put("Referer", playPageUrl);
-            return Result.get().url(realUrl).header(headers).string();
+            // 2. 提取失败时降级容错：以 parse = 1 将原始播放页面地址交给壳子二次解析
+            logger("未提取到真实播放地址，推给壳子二次解析: " + playPageUrl);
+            return Result.get().parse(1).url(playPageUrl).string();
 
         } catch (Exception e) {
             logger("playerContent 异常: " + e.getMessage());
-            return Result.get().url("").string();
+            // 异常兜底：推原始播放地址，启用二次解析模式
+            return Result.get().parse(1).url(absUrl(id)).string();
         }
     }
 
