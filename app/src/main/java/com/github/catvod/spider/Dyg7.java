@@ -4,6 +4,7 @@ import android.content.Context;
 import android.text.TextUtils;
 
 import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -16,6 +17,7 @@ import org.jsoup.select.Elements;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -75,21 +77,71 @@ public class Dyg7 extends Spider {
     public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("dy", "电影"));
+        classes.add(new Class("dy/bangumi", "动作片"));
+        classes.add(new Class("dy/tvplay", "喜剧片"));
+        classes.add(new Class("dy/aqp", "爱情片"));
+        classes.add(new Class("dy/khp", "科幻片"));
+        classes.add(new Class("dy/jqp", "剧情片"));
+        classes.add(new Class("dy/kbp", "恐怖片"));
+        classes.add(new Class("dy/zzp", "战争片"));
+        classes.add(new Class("dy/jlp", "纪录片"));
+        classes.add(new Class("dy/donghuapian", "动画片"));
         classes.add(new Class("dsj", "电视剧"));
-        classes.add(new Class("zy", "综艺"));
+        classes.add(new Class("dsj/dlj", "国剧"));
+        classes.add(new Class("dsj/rhj", "日韩剧"));
+        classes.add(new Class("dsj/omj", "欧美剧"));
+        classes.add(new Class("duanju", "短剧"));
+        classes.add(new Class("dongman", "动漫"));
+        classes.add(new Class("zyjm", "综艺"));
 
-        return Result.get().classes(classes).string();
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+
+        // 电影大类筛选
+        List<Filter.Value> dyValues = new ArrayList<>();
+        dyValues.add(new Filter.Value("全部", "dy"));
+        dyValues.add(new Filter.Value("动作片", "dy/bangumi"));
+        dyValues.add(new Filter.Value("喜剧片", "dy/tvplay"));
+        dyValues.add(new Filter.Value("爱情片", "dy/aqp"));
+        dyValues.add(new Filter.Value("科幻片", "dy/khp"));
+        dyValues.add(new Filter.Value("剧情片", "dy/jqp"));
+        dyValues.add(new Filter.Value("恐怖片", "dy/kbp"));
+        dyValues.add(new Filter.Value("战争片", "dy/zzp"));
+        dyValues.add(new Filter.Value("纪录片", "dy/jlp"));
+        dyValues.add(new Filter.Value("动画片", "dy/donghuapian"));
+
+        List<Filter> dyFilters = new ArrayList<>();
+        dyFilters.add(new Filter("cate", "类型", dyValues));
+        filters.put("dy", dyFilters);
+
+        // 电视剧大类筛选
+        List<Filter.Value> dsjValues = new ArrayList<>();
+        dsjValues.add(new Filter.Value("全部", "dsj"));
+        dsjValues.add(new Filter.Value("国剧", "dsj/dlj"));
+        dsjValues.add(new Filter.Value("日韩剧", "dsj/rhj"));
+        dsjValues.add(new Filter.Value("欧美剧", "dsj/omj"));
+
+        List<Filter> dsjFilters = new ArrayList<>();
+        dsjFilters.add(new Filter("cate", "类型", dsjValues));
+        filters.put("dsj", dsjFilters);
+
+        return Result.get().classes(classes).filters(filters).string();
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
+            // 优先获取筛选传入的子分类 key
+            String realTid = tid;
+            if (extend != null && extend.containsKey("cate") && !TextUtils.isEmpty(extend.get("cate"))) {
+                realTid = extend.get("cate");
+            }
+
             int page = parsePage(pg);
             String url;
             if (page <= 1) {
-                url = HOST + "/" + tid + "/index.html";
+                url = HOST + "/" + realTid + "/index.html";
             } else {
-                url = HOST + "/" + tid + "/index_" + page + ".html";
+                url = HOST + "/" + realTid + "/index_" + page + ".html";
             }
 
             logger("分类页请求: " + url);
@@ -138,28 +190,47 @@ public class Dyg7 extends Spider {
                 vod.setVodPic(absUrl(imgEl.attr("src")));
             }
 
-            // 3. 提取导演、演员、集数、简介
+            // 3. 提取导演
             Matcher mDirector = Pattern.compile("◎导  演[:：]?\\s*([^<\\n]+)").matcher(html);
             if (mDirector.find()) {
-                vod.setVodDirector(mDirector.group(1).trim());
+                vod.setVodDirector(mDirector.group(1).replaceAll("&nbsp;", " ").trim());
             }
 
-            Matcher mActor = Pattern.compile("◎主 {1,2}演[:：]?\\s*([^<\\n]+)").matcher(html);
+            // 4. 提取主演（处理多行与长名单，自动清理多余空格与英文名）
+            Matcher mActor = Pattern.compile("◎主 {1,2}演[:：]?(.*?)(?=◎|&nbsp;|<hr|<div>&nbsp;</div>)", Pattern.DOTALL).matcher(html);
             if (mActor.find()) {
-                vod.setVodActor(mActor.group(1).trim());
+                String rawActors = mActor.group(1).replaceAll("<[^>]+>", "\n");
+                String[] actorLines = rawActors.split("\n");
+                List<String> cleanActors = new ArrayList<>();
+                for (String line : actorLines) {
+                    String clean = line.replace("&nbsp;", "").replaceAll("^[\\s\u3000]+|[\\s\u3000]+$", "").trim();
+                    if (!TextUtils.isEmpty(clean)) {
+                        clean = clean.replaceAll("\\s+[A-Za-z].*", "");
+                        cleanActors.add(clean);
+                    }
+                }
+                vod.setVodActor(TextUtils.join(" / ", cleanActors));
             }
 
-            Matcher mRemarks = Pattern.compile("◎集  数[:：]?\\s*([^<\\n]+)").matcher(html);
+            // 5. 提取集数/备注
+            Matcher mRemarks = Pattern.compile("◎集 {1,2}数[:：]?\\s*([^<\\n]+)").matcher(html);
             if (mRemarks.find()) {
                 vod.setVodRemarks("共" + mRemarks.group(1).trim() + "集");
+            } else {
+                Matcher mYear = Pattern.compile("◎年  代[:：]?\\s*([^<\\n]+)").matcher(html);
+                if (mYear.find()) {
+                    vod.setVodRemarks(mYear.group(1).trim());
+                }
             }
 
-            Matcher mDesc = Pattern.compile("◎简{1,2}介[\\s\\S]*?<div>&nbsp;</div>\\s*<div>([\\s\\S]*?)</div>").matcher(html);
+            // 6. 提取简介
+            Matcher mDesc = Pattern.compile("◎简 {1,2}介[\\s\\S]*?</div>([\\s\\S]*?)(?=<hr|<strong>|<p>|<table)", Pattern.CASE_INSENSITIVE).matcher(html);
             if (mDesc.find()) {
-                vod.setVodContent(mDesc.group(1).replaceAll("<[^>]+>", "").trim());
+                String descText = mDesc.group(1).replaceAll("<[^>]+>", "").replace("&nbsp;", "").trim();
+                vod.setVodContent(descText);
             }
 
-            // 4. 解析播放列表（视频播列表优先，磁力最后，舍去云盘）
+            // 7. 解析播放列表（视频播列表优先，磁力最后，舍去云盘）
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
 
@@ -287,7 +358,6 @@ public class Dyg7 extends Spider {
 
         } catch (Exception e) {
             logger("playerContent 异常: " + e.getMessage());
-            // 异常兜底：推原始播放地址，启用二次解析模式
             return Result.get().parse(1).url(absUrl(id)).string();
         }
     }
