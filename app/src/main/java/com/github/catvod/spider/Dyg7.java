@@ -278,7 +278,6 @@ public class Dyg7 extends Spider {
                 logger("提取到真实播放地址: " + realUrl);
                 Map<String, String> headers = new HashMap<>();
                 headers.put("User-Agent", UA);
-                headers.put("Referer", playPageUrl);
                 return Result.get().url(realUrl).header(headers).string();
             }
 
