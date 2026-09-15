@@ -27,7 +27,8 @@ import java.util.regex.Pattern;
 /**
  * @author wwgz
  * 农民影视 (Python 版逻辑，对齐 TVBox Spider 规格)
- * 修改：移除 parse=0 时的 Referer 请求头
+ * 修改1：移除 parse=0 时的 Referer 请求头
+ * 修改2：对返回给壳子的 URL 中的汉字做 percent-encode
  */
 public class NM extends Spider {
 
@@ -292,7 +293,7 @@ public class NM extends Spider {
         }
     }
 
-    // ==================== 修改点：详细内容（支持多线路） ====================
+    // ==================== 详细内容（支持多线路） ====================
     @Override
     public String detailContent(List<String> ids) {
         try {
@@ -602,13 +603,12 @@ public class NM extends Spider {
         return fallbackToParse(id);
     }
 
-    // ==================== 修改点：移除 Referer ====================
+    // ==================== 修改点：移除 Referer + URL 汉字转码 ====================
     private String successPlayerResult(String realUrl) {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 0);
-            result.put("url", realUrl);
-            // 仅保留 User-Agent，移除 Referer
+            result.put("url", encodeUrl(realUrl));   // ← 汉字转码后交给壳子
             JSONObject header = new JSONObject();
             header.put("User-Agent", getHeaders().get("User-Agent"));
             result.put("header", header);
@@ -621,13 +621,94 @@ public class NM extends Spider {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 1);
-            result.put("url", url != null ? url : "");
-            // 仅保留 User-Agent，移除 Referer
+            result.put("url", url != null ? encodeUrl(url) : "");   // ← 汉字转码后交给壳子
             JSONObject header = new JSONObject();
             header.put("User-Agent", getHeaders().get("User-Agent"));
             result.put("header", header);
             return result.toString();
         } catch (Exception ignored) {}
         return "{\"parse\":1,\"url\":\"\"}";
+    }
+
+    // ==================== URL 汉字转码工具 ====================
+
+    /**
+     * 对 URL 中的汉字（及其他非 ASCII 字符）做 percent-encode。
+     * 只处理 path / query / fragment 部分，不动 scheme、host、已编码的 %XX、以及 / ? & = # 等结构字符。
+     */
+    private String encodeUrl(String url) {
+        if (url == null || url.isEmpty()) return url;
+        try {
+            int schemeIdx = url.indexOf("://");
+            if (schemeIdx < 0) {
+                // 不是标准 URL（可能是相对路径），整体做一次编码
+                return percentEncode(url);
+            }
+            String prefix = url.substring(0, schemeIdx + 3); // "https://"
+            String rest = url.substring(schemeIdx + 3);
+
+            // host 到第一个 / 或 ? 或 # 为止
+            int pathStart = rest.length();
+            for (int i = 0; i < rest.length(); i++) {
+                char c = rest.charAt(i);
+                if (c == '/' || c == '?' || c == '#') {
+                    pathStart = i;
+                    break;
+                }
+            }
+            String host = rest.substring(0, pathStart);
+            String tail = rest.substring(pathStart);
+
+            return prefix + host + percentEncode(tail);
+        } catch (Exception e) {
+            SpiderDebug.log(e);
+            return url;
+        }
+    }
+
+    /**
+     * 逐字符 percent-encode：
+     *  - 保留 ASCII 可见字符（含 / ? & = # : @ ! $ ' ( ) * + , ; 等 URL 结构字符）
+     *  - 非 ASCII（汉字等）→ UTF-8 字节 → %XX
+     *  - 已存在的 %XX 原样保留（避免二次编码）
+     */
+    private String percentEncode(String s) {
+        if (s == null || s.isEmpty()) return s;
+        StringBuilder sb = new StringBuilder(s.length() * 2);
+        try {
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+
+                // 已经是 %XX 形式的，原样保留
+                if (c == '%' && i + 2 < s.length()
+                        && isHex(s.charAt(i + 1)) && isHex(s.charAt(i + 2))) {
+                    sb.append(c).append(s.charAt(i + 1)).append(s.charAt(i + 2));
+                    i += 2;
+                    continue;
+                }
+
+                // ASCII 可见字符原样保留（含所有 URL 结构字符）
+                if (c < 0x80) {
+                    sb.append(c);
+                    continue;
+                }
+
+                // 非 ASCII：按 UTF-8 编码
+                byte[] bytes = String.valueOf(c).getBytes("UTF-8");
+                for (byte b : bytes) {
+                    sb.append('%')
+                      .append(Character.toUpperCase(Character.forDigit((b >> 4) & 0xF, 16)))
+                      .append(Character.toUpperCase(Character.forDigit(b & 0xF, 16)));
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log(e);
+            return s;
+        }
+        return sb.toString();
+    }
+
+    private boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 }
