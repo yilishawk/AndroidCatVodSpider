@@ -22,8 +22,11 @@ import java.util.regex.Pattern;
 
 public class QiYou extends Spider {
 
-    private final String siteUrl = "https://www.qiyou03.com";
+    private static final String DEFAULT_SITE = "https://www.qiyou03.com";
+    private static final String PUBLISH_URL = "http://qiyoudy.info/";
     private final String UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+
+    private String siteUrl = DEFAULT_SITE;
 
     private Map<String, String> getHeader() {
         Map<String, String> headers = new HashMap<>();
@@ -33,13 +36,53 @@ public class QiYou extends Spider {
         return headers;
     }
 
+    // 从发布页获取最新观影网址
+    private String getSiteUrl() {
+        try {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("User-Agent", UA);
+            String html = OkHttp.string(PUBLISH_URL, headers);
+            Document doc = Jsoup.parse(html);
+
+            // 优先匹配包含"最新观影网址"的 li 中的链接
+            Elements lis = doc.select("ul li");
+            for (Element li : lis) {
+                String text = li.text();
+                if (text.contains("最新观影网址")) {
+                    Element a = li.selectFirst("a[href]");
+                    if (a != null) {
+                        String href = a.attr("href").trim();
+                        if (!href.isEmpty() && !href.equals("#")) {
+                            if (!href.startsWith("http")) href = "http://" + href;
+                            // 去掉末尾斜杠
+                            if (href.endsWith("/")) href = href.substring(0, href.length() - 1);
+                            return href;
+                        }
+                    }
+                }
+            }
+
+            // 兜底：找所有 http 链接中含 qiyou 的
+            for (Element a : doc.select("a[href]")) {
+                String href = a.attr("href").trim();
+                if (href.startsWith("http") && href.contains("qiyou") && !href.contains("viayoo")) {
+                    if (href.endsWith("/")) href = href.substring(0, href.length() - 1);
+                    return href;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return DEFAULT_SITE;
+    }
+
     // 防反爬重试方法
     private String fetchWithRetry(String url, int maxRetry) {
         for (int i = 0; i < maxRetry; i++) {
             try {
                 String html = OkHttp.string(url, getHeader());
-                if (html.contains("Loading......1S") || 
-                    html.contains("sx1420w415i.065846.xyz") || 
+                if (html.contains("Loading......1S") ||
+                    html.contains("sx1420w415i.065846.xyz") ||
                     html.length() < 800) {
                     Thread.sleep(800);
                     continue;
@@ -54,6 +97,8 @@ public class QiYou extends Spider {
 
     @Override
     public void init(Context context, String extend) throws Exception {
+        // 初始化时动态获取最新域名
+        siteUrl = getSiteUrl();
     }
 
     // 首页
@@ -77,7 +122,7 @@ public class QiYou extends Spider {
         String html = fetchWithRetry(url, 3);
         List<Vod> list = parseVodList(html);
 
-        return Result.string(list);   // 简单写法，FongMi会自动处理分页
+        return Result.string(list);
     }
 
     // 通用列表解析
