@@ -29,11 +29,13 @@ import java.util.regex.Pattern;
  * 农民影视 (Python 版逻辑，对齐 TVBox Spider 规格)
  * 修改1：移除 parse=0 时的 Referer 请求头
  * 修改2：对返回给壳子的 URL 中的汉字做 percent-encode
+ * 修改3：增加 Origin 请求头 https://api.wwgz.cn:520
  */
 public class NM extends Spider {
 
     private static final String siteUrl = "https://vip.wwgz.cn:5200";
     private static final String apiHost = "https://api.wwgz.cn:520";
+    private static final String ORIGIN = "https://api.wwgz.cn:520";
 
     private final OkHttpClient client = new OkHttpClient();
 
@@ -603,14 +605,15 @@ public class NM extends Spider {
         return fallbackToParse(id);
     }
 
-    // ==================== 修改点：移除 Referer + URL 汉字转码 ====================
+    // ==================== 修改点：移除 Referer + 增加 Origin + URL 汉字转码 ====================
     private String successPlayerResult(String realUrl) {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 0);
-            result.put("url", encodeUrl(realUrl));   // ← 汉字转码后交给壳子
+            result.put("url", encodeUrl(realUrl));   // 汉字转码后交给壳子
             JSONObject header = new JSONObject();
             header.put("User-Agent", getHeaders().get("User-Agent"));
+            header.put("Origin", ORIGIN);   // ← 新增 Origin
             result.put("header", header);
             return result.toString();
         } catch (Exception ignored) {}
@@ -621,9 +624,10 @@ public class NM extends Spider {
         try {
             JSONObject result = new JSONObject();
             result.put("parse", 1);
-            result.put("url", url != null ? encodeUrl(url) : "");   // ← 汉字转码后交给壳子
+            result.put("url", url != null ? encodeUrl(url) : "");
             JSONObject header = new JSONObject();
             header.put("User-Agent", getHeaders().get("User-Agent"));
+            header.put("Origin", ORIGIN);   // ← 新增 Origin
             result.put("header", header);
             return result.toString();
         } catch (Exception ignored) {}
