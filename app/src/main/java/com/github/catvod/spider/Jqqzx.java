@@ -102,7 +102,6 @@ public class Jqqzx extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String type = TextUtils.isEmpty(tid) ? "juji" : tid;
         Map<String, String> f = (extend != null) ? extend : new HashMap<>();
-        // 类型筛选实际是切换 /vodshow/id/{subtype}.html
         if (!isEmpty(f.get("type"))) type = f.get("type");
 
         String url = buildVodshowUrl(type, f, pg);
@@ -140,12 +139,14 @@ public class Jqqzx extends Spider {
         Element note = doc.selectFirst(".module-item-note");
         if (note != null) vod.setVodRemarks(note.text().trim());
 
+        // 按网站 tab 顺序收集线路名
         List<String> sourceNames = new ArrayList<>();
         for (Element tab : doc.select(".module-tab-item[data-dropdown-value]")) {
             String n = tab.attr("data-dropdown-value");
             if (!TextUtils.isEmpty(n) && !sourceNames.contains(n)) sourceNames.add(n);
         }
 
+        // 按 sid 归集剧集
         Map<String, List<String>> sourceEps = new LinkedHashMap<>();
         for (Element a : doc.select("a.module-play-list-link[href]")) {
             String href = a.attr("href");
@@ -154,16 +155,31 @@ public class Jqqzx extends Spider {
             String tail = href.substring(idx + ("/play/" + id + "-").length());
             int dash = tail.indexOf('-');
             String sid = (dash < 0) ? tail : tail.substring(0, dash);
+            int dot = sid.indexOf('.');
+            if (dot > 0) sid = sid.substring(0, dot);
             String epName = a.text().trim();
             sourceEps.computeIfAbsent(sid, k -> new ArrayList<>()).add(epName + "$" + abs(href));
         }
 
+        // 按 tab 顺序输出（sid 1 对应第一个 tab）
         List<String> froms = new ArrayList<>();
         List<String> urls = new ArrayList<>();
+        Set<String> usedSid = new LinkedHashSet<>();
+        for (int i = 0; i < sourceNames.size(); i++) {
+            String sid = String.valueOf(i + 1);
+            List<String> eps = sourceEps.get(sid);
+            if (eps == null || eps.isEmpty()) continue;
+            froms.add(sourceNames.get(i));
+            urls.add(TextUtils.join("#", eps));
+            usedSid.add(sid);
+        }
         for (Map.Entry<String, List<String>> e : sourceEps.entrySet()) {
-            froms.add(sourceNameForSid(sourceNames, e.getKey()));
+            if (usedSid.contains(e.getKey())) continue;
+            if (e.getValue() == null || e.getValue().isEmpty()) continue;
+            froms.add("源" + e.getKey());
             urls.add(TextUtils.join("#", e.getValue()));
         }
+
         if (!froms.isEmpty()) {
             vod.setVodPlayFrom(TextUtils.join("$$$", froms));
             vod.setVodPlayUrl(TextUtils.join("$$$", urls));
@@ -386,11 +402,6 @@ public class Jqqzx extends Spider {
         return host + sb;
     }
 
-    /**
-     * 类型: /vodshow/id/guochanju.html （切换 id）
-     * 剧情/标签: /vodshow/class/xxx/id/{type}.html
-     * 地区: /vodshow/area/xxx/id/{type}.html
-     */
     private List<Filter> buildFilters(String html, String currentType) {
         List<Filter> filters = new ArrayList<>();
         Document doc = Jsoup.parse(html);
@@ -405,13 +416,11 @@ public class Jqqzx extends Spider {
         return filters;
     }
 
-    /** 解析「类型」：/vodshow/id/guochanju.html、/vodshow/id/gangtaiju.html 等 */
     private Filter buildTypeFilter(Document doc, String currentType) {
         List<Filter.Value> items = new ArrayList<>();
         items.add(new Filter.Value("全部", ""));
         Set<String> seen = new LinkedHashSet<>();
 
-        // 优先从「类型」模块取
         for (Element box : doc.select(".module-class-item")) {
             Element title = box.selectFirst(".module-item-title");
             if (title == null || !title.text().contains("类型")) continue;
@@ -423,7 +432,6 @@ public class Jqqzx extends Spider {
                 String name = a.attr("title");
                 if (TextUtils.isEmpty(name)) name = a.text().trim();
                 if (TextUtils.isEmpty(name) || "全部".equals(name)) continue;
-                // 跳过纯数字 id（如 id/2.html）
                 if (val.matches("\\d+")) continue;
                 if (val.equals(currentType)) continue;
                 if (!seen.add(val)) continue;
@@ -431,7 +439,6 @@ public class Jqqzx extends Spider {
             }
         }
 
-        // 兜底：全页扫描子分类 id
         if (items.size() <= 1) {
             for (Element a : doc.select("a[href*=/vodshow/id/]")) {
                 Matcher m = Pattern.compile("/vodshow/id/([^/]+)\\.html").matcher(a.attr("href"));
@@ -475,7 +482,6 @@ public class Jqqzx extends Spider {
                 labels.put(v, v);
             }
         }
-        // 尝试用 title 作为显示名
         Document doc = Jsoup.parse(html);
         for (Element a : doc.select("a[href*=/vodshow/" + dim + "/]")) {
             Matcher hm = Pattern.compile("/vodshow/" + dim + "/([^/]+)/id/").matcher(a.attr("href"));
@@ -594,17 +600,6 @@ public class Jqqzx extends Spider {
             }
         }
         return list;
-    }
-
-    private String sourceNameForSid(List<String> sourceNames, String sid) {
-        int idx;
-        try {
-            idx = Integer.parseInt(sid) - 1;
-        } catch (Exception e) {
-            return "源" + sid;
-        }
-        if (idx >= 0 && idx < sourceNames.size()) return sourceNames.get(idx);
-        return "源" + sid;
     }
 
     private String abs(String url) {
