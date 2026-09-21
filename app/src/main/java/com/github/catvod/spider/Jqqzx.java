@@ -51,7 +51,7 @@ public class Jqqzx extends Spider {
             + "(KHTML, like Gecko) Version/4.0 Chrome/89.0.4388.90 Mobile Safari/537.36";
 
     private static final String[][] TYPES = {
-            {"juji", "剧集"}, {"dianying", "电影"}, {"dongman", "动漫"},
+            {"guochanhu", "国产剧"},{"juji", "剧集"}, {"dianying", "电影"}, {"dongman", "动漫"},
             {"zongyi", "综艺"}, {"duanju", "短剧"}
     };
 
