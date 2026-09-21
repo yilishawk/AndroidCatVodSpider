@@ -22,6 +22,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -37,7 +38,7 @@ import java.util.regex.Pattern;
 /**
  * PPnix
  * WebView 过盾取 Cookie → OkHttp 合并 Set-Cookie → 分类/详情
- * 播放：直链 m3u8（无本地代理），Referer 保持 /cn/tv/{id}.html
+ * 播放：走本地代理 do=proxyM3u8（代理负责改写 KEY 为二进制 + 段 302/301 跟跳转）
  */
 public class PPnix extends Spider {
 
@@ -314,7 +315,6 @@ public class PPnix extends Spider {
                                         log("title=" + title);
                                         if (title != null && title.toLowerCase().contains("just a moment")) {
                                             log("CF 挑战中，继续等待…");
-                                            // 挑战中稍后再次采集，不立刻跳转
                                             main.postDelayed(() -> {
                                                 if (stage == 0) {
                                                     collectAndMaybeFinish(view, "cf-wait");
@@ -618,8 +618,17 @@ public class PPnix extends Spider {
                 if (infoidMatcher.find()) infoid = infoidMatcher.group(1);
                 Matcher m3u8Matcher = Pattern.compile("m3u8\\s*=\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(js);
                 if (m3u8Matcher.find()) {
-                    Matcher epMatcher = Pattern.compile("['\"]?(\\d+)['\"]?").matcher(m3u8Matcher.group(1));
-                    while (epMatcher.find()) episodeNumbers.add(epMatcher.group(1));
+                    String arrayContent = m3u8Matcher.group(1);
+                    // 集数/清晰度是带引号的字符串 token，如 '1080P' / '1' / "1080P"。
+                    // 旧写法 ['\"]?(\\d+) 会把 '1080P' 抠成 '1080'(丢 P)，导致播放链接错。
+                    // 改为抓取整 token：优先取引号内内容，无引号则取连续字母数字。
+                    Matcher epMatcher = Pattern.compile("(?:['\"]([A-Za-z0-9]+)['\"]|([A-Za-z0-9]+))").matcher(arrayContent);
+                    while (epMatcher.find()) {
+                        String ep = !TextUtils.isEmpty(epMatcher.group(1)) ? epMatcher.group(1) : epMatcher.group(2);
+                        if (!TextUtils.isEmpty(ep) && !episodeNumbers.contains(ep)) {
+                            episodeNumbers.add(ep);
+                        }
+                    }
                 }
                 break;
             }
@@ -657,35 +666,24 @@ public class PPnix extends Spider {
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) {
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // m3u8 段 URL：形如 /info/m3u8/{infoid}/{清晰度}.m3u8（来自 detailContent 的 vodPlayUrl）
         String m3u8Url = id.startsWith("http") ? id : HOST + id;
 
-        // Referer 保持原逻辑
-        String referer = HOST + "/";
-        Matcher m = Pattern.compile("/info/m3u8/(\\d+)/").matcher(id);
-        if (m.find()) {
-            referer = HOST + "/cn/tv/" + m.group(1) + ".html";
-        }
-
-        if (!cookieReadyForPlay()) {
-            log("播放前 Cookie 不足，WebView 补全");
-            ensureCookieByWebView();
-        }
-        ensureCookieOnPage(referer);
+        // 本地代理：改写 KEY 为二进制接口 + 段 302/301 跟跳转
+        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + URLEncoder.encode(m3u8Url, "UTF-8");
 
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
-        headers.put("Referer", referer);
+        headers.put("Referer", HOST + "/");
         headers.put("Origin", HOST);
         headers.put("Accept", "*/*");
-        if (!TextUtils.isEmpty(cachedCookie)) {
-            headers.put("Cookie", cachedCookie);
-        }
 
-        log("播放直链 " + m3u8Url
-                + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
-                + " cf=" + cachedCookie.contains("cf_clearance"));
+        log("播放代理直连 " + m3u8Url);
 
-        return Result.get().url(m3u8Url).header(headers).string();
+        return Result.get()
+                .url(proxyUrl)
+                .header(headers)
+                .string();
     }
 }
