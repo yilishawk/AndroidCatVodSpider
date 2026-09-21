@@ -17,7 +17,6 @@ import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
 import java.security.MessageDigest;
@@ -51,7 +50,7 @@ public class Jqqzx extends Spider {
             + "(KHTML, like Gecko) Version/4.0 Chrome/89.0.4388.90 Mobile Safari/537.36";
 
     private static final String[][] TYPES = {
-            {"guochanhu", "国产剧"},{"juji", "剧集"}, {"dianying", "电影"}, {"dongman", "动漫"},
+            {"juji", "剧集"}, {"dianying", "电影"}, {"dongman", "动漫"},
             {"zongyi", "综艺"}, {"duanju", "短剧"}
     };
 
@@ -83,7 +82,7 @@ public class Jqqzx extends Spider {
         List<Class> classes = new ArrayList<>();
         for (String[] t : TYPES) classes.add(new Class(t[0], t[1]));
 
-        List<Vod> list = parsePosterItems(get(host + "/"), "juji");
+        List<Vod> list = parsePosterItems(get(host + "/"));
 
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         if (filter) {
@@ -104,7 +103,7 @@ public class Jqqzx extends Spider {
         Map<String, String> f = (extend != null) ? extend : new HashMap<>();
         String url = buildVodshowUrl(type, f, pg);
         String html = get(url);
-        List<Vod> list = TextUtils.isEmpty(html) ? new ArrayList<Vod>() : parsePosterItems(html, type);
+        List<Vod> list = TextUtils.isEmpty(html) ? new ArrayList<Vod>() : parsePosterItems(html);
 
         int page = parsePage(pg);
         int pagecount = page + 2;
@@ -134,6 +133,8 @@ public class Jqqzx extends Spider {
             if (TextUtils.isEmpty(p)) p = pic.attr("src");
             vod.setVodPic(abs(p));
         }
+        Element note = doc.selectFirst(".module-info-tag-link, .module-item-note, .video-info-item");
+        if (note != null) vod.setVodRemarks(note.text().trim());
 
         List<String> sourceNames = new ArrayList<>();
         for (Element tab : doc.select(".module-tab-item[data-dropdown-value]")) {
@@ -169,31 +170,39 @@ public class Jqqzx extends Spider {
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         String html = get(host + "/vodsearch.html?wd=" + encode(key));
-        List<Vod> list = TextUtils.isEmpty(html) ? new ArrayList<Vod>() : parsePosterItems(html, "search");
+        List<Vod> list = TextUtils.isEmpty(html) ? new ArrayList<Vod>() : parsePosterItems(html);
         return Result.get().vod(list).page(1, 1, 0, 0).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        String vid = extractVid(id);
+        String playPath = extractVid(id);
+        String playPage = host + "/play/" + playPath + ".html";
+
         JSONObject fallback = new JSONObject();
         fallback.put("parse", 1);
-        fallback.put("url", host + "/play/" + vid + ".html");
-        fallback.put("header", headerObj(host + "/play/" + vid + ".html"));
+        fallback.put("url", host + "/jx/player.php?vid=" + encode(playPath));
+        fallback.put("header", headerObj(playPage));
 
-        String m3u8 = "";
+        String realUrl = "";
         try {
-            JSONObject data = postApi(vid);
-            if (data.has("url")) m3u8 = sign(data.getString("url"));
+            String html = get(playPage);
+            String realVid = extractPlayerUrl(html);
+            if (TextUtils.isEmpty(realVid)) {
+                SpiderDebug.log("[剧圈圈] 未找到 player_aaaa.url");
+                return fallback.toString();
+            }
+            JSONObject data = postApi(realVid, playPage);
+            if (data.has("url")) realUrl = sign(data.getString("url"));
         } catch (Exception e) {
-            SpiderDebug.log("[剧圈圈] playerContent 取密文失败: " + e.getMessage());
+            SpiderDebug.log("[剧圈圈] playerContent 失败: " + e.getMessage());
         }
-        if (TextUtils.isEmpty(m3u8)) return fallback.toString();
+        if (TextUtils.isEmpty(realUrl)) return fallback.toString();
 
         JSONObject out = new JSONObject();
         out.put("parse", 0);
-        out.put("url", m3u8);
-        out.put("header", headerObj(host + "/play/" + vid + ".html"));
+        out.put("url", realUrl);
+        out.put("header", headerObj(playPage));
         return out.toString();
     }
 
@@ -202,12 +211,38 @@ public class Jqqzx extends Spider {
         try {
             h.put("User-Agent", MOBILE_UA);
             h.put("Referer", referer);
+            h.put("Origin", host);
+            h.put("Accept", "*/*");
         } catch (Exception ignored) {
         }
         return h;
     }
 
-    /** 密文 -> 真实 m3u8；目标段为空时返回空串 */
+    /** 从播放页解析 player_aaaa.url，并处理 encrypt=1/2 */
+    private String extractPlayerUrl(String html) {
+        Matcher m = Pattern.compile("player_aaaa\\s*=\\s*(\\{.*?\\})\\s*;?\\s*</script>", Pattern.DOTALL).matcher(html);
+        if (!m.find()) {
+            m = Pattern.compile("player_aaaa\\s*=\\s*(\\{.*?\\})\\s*;", Pattern.DOTALL).matcher(html);
+            if (!m.find()) return "";
+        }
+        try {
+            JSONObject data = new JSONObject(m.group(1));
+            String url = data.optString("url", "");
+            int encrypt = data.optInt("encrypt", 0);
+            if (encrypt == 1) {
+                url = java.net.URLDecoder.decode(url, "UTF-8");
+            } else if (encrypt == 2) {
+                url = new String(Base64.decode(url, Base64.DEFAULT), "UTF-8");
+                url = java.net.URLDecoder.decode(url, "UTF-8");
+            }
+            return url;
+        } catch (Exception e) {
+            SpiderDebug.log("[剧圈圈] 解析 player_aaaa 失败: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /** 密文 -> 真实播放地址；目标段为空时返回空串 */
     public static String sign(String encUrl) throws Exception {
         if (TextUtils.isEmpty(encUrl)) return "";
         byte[] b = Base64.decode(encUrl, Base64.NO_WRAP);
@@ -274,8 +309,7 @@ public class Jqqzx extends Spider {
         return seg;
     }
 
-    private JSONObject postApi(String vid) throws Exception {
-        String referer = host + "/play/" + vid + ".html";
+    private JSONObject postApi(String vid, String referer) throws Exception {
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", MOBILE_UA);
         h.put("Referer", referer);
@@ -296,7 +330,7 @@ public class Jqqzx extends Spider {
         }
         String resp = res.body().string();
         int br = resp.indexOf('{');
-        if (br < 0) throw new IllegalStateException("api 无 JSON: " + resp.substring(0, Math.min(200, resp.length())));
+        if (br < 0) throw new IllegalStateException("api 无 JSON");
         JSONObject j = new JSONObject(resp.substring(br));
         if (j.optInt("code", -1) != 200) {
             throw new IllegalStateException("api code=" + j.optInt("code", -1) + " " + j.optString("msg"));
@@ -370,16 +404,57 @@ public class Jqqzx extends Spider {
         return new Filter("year", "年份", items);
     }
 
-    private List<Vod> parsePosterItems(String html, String type) {
+    /** 解析海报列表，备注取自 .module-item-note（如「16集全」） */
+    private List<Vod> parsePosterItems(String html) {
         List<Vod> list = new ArrayList<>();
         if (TextUtils.isEmpty(html)) return list;
         Set<String> seen = new LinkedHashSet<>();
         Document doc = Jsoup.parse(html);
+
+        // 优先按海报卡片解析，便于取到同卡片内的 module-item-note
+        Elements cards = doc.select(".module-item, .module-card-item, .module-poster-item");
+        if (cards != null && !cards.isEmpty()) {
+            for (Element card : cards) {
+                Element a = card.selectFirst("a[href^=/vod/]");
+                if (a == null) continue;
+                Matcher idm = Pattern.compile("/vod/(\\d+)\\.html").matcher(a.attr("href"));
+                if (!idm.find()) continue;
+                String id = idm.group(1);
+                if (!seen.add(id)) continue;
+
+                String name = a.attr("title");
+                if (TextUtils.isEmpty(name)) {
+                    Element t = card.selectFirst("h4, .module-item-title, .module-card-item-title, .title, strong");
+                    name = t != null ? t.text().trim() : "";
+                }
+
+                String pic = "";
+                Element im = card.selectFirst("img");
+                if (im != null) {
+                    pic = im.attr("data-original");
+                    if (TextUtils.isEmpty(pic)) pic = im.attr("src");
+                    pic = abs(pic);
+                }
+
+                String remark = "";
+                Element note = card.selectFirst(".module-item-note");
+                if (note != null) remark = note.text().trim();
+
+                if (!TextUtils.isEmpty(name) || !TextUtils.isEmpty(pic)) {
+                    Vod vod = new Vod(id, TextUtils.isEmpty(name) ? "" : name, pic, remark);
+                    list.add(vod);
+                }
+            }
+            if (!list.isEmpty()) return list;
+        }
+
+        // 兜底：仅按 a[href^=/vod/] 解析
         for (Element a : doc.select("a[href^=/vod/]")) {
             Matcher idm = Pattern.compile("/vod/(\\d+)\\.html").matcher(a.attr("href"));
             if (!idm.find()) continue;
             String id = idm.group(1);
             if (!seen.add(id)) continue;
+
             String name = a.attr("title");
             if (TextUtils.isEmpty(name)) {
                 Element t = a.selectFirst("h4, .module-item-title, .title, span");
@@ -392,8 +467,17 @@ public class Jqqzx extends Spider {
                 if (TextUtils.isEmpty(pic)) pic = im.attr("src");
                 pic = abs(pic);
             }
+            String remark = "";
+            Element parent = a.parent();
+            if (parent != null) {
+                Element note = parent.selectFirst(".module-item-note");
+                if (note == null && parent.parent() != null) {
+                    note = parent.parent().selectFirst(".module-item-note");
+                }
+                if (note != null) remark = note.text().trim();
+            }
             if (!TextUtils.isEmpty(name) || !TextUtils.isEmpty(pic)) {
-                list.add(new Vod(id, TextUtils.isEmpty(name) ? "" : name, pic, type));
+                list.add(new Vod(id, TextUtils.isEmpty(name) ? "" : name, pic, remark));
             }
         }
         return list;
