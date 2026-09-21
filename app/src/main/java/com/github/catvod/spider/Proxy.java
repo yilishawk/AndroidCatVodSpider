@@ -1,568 +1,689 @@
 package com.github.catvod.spider;
 
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
-import android.util.Base64;
+import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+
+import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Result;
+import com.github.catvod.bean.Vod;
+import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Json;
-import com.github.catvod.utils.ProxyVideo;
-import com.github.catvod.utils.TmdbUtil;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import org.json.JSONArray;
-import org.json.JSONObject;
 
-import java.io.ByteArrayInputStream;
-import java.net.URLDecoder;
+import org.json.JSONTokener;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class Proxy {
+/**
+ * PPnix
+ * WebView 过盾取 Cookie → OkHttp 合并 Set-Cookie → 分类/详情
+ * 播放：走本地代理 do=proxyM3u8（代理负责改写 KEY 为二进制 + 段 302/301 跟跳转）
+ */
+public class PPnix extends Spider {
 
-    private static final int PROXY_PORT = 9978;
-    public static final StringBuilder sb = new StringBuilder("<div style='color:#888;'>--- 凱哥全能矩陣引擎已啟動---</div>");
+    private static final String HOST = "https://www.ppnix.com";
+    private static final String UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
 
-    // ====================== 缓存和线程池 ======================
-    private static final ConcurrentHashMap<String, String> titleCache = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, String> posterCache = new ConcurrentHashMap<>();
-    private static final ExecutorService executor = Executors.newCachedThreadPool();
+    private static final long CF_TIMEOUT_SEC = 45L;
+    private static final long COOKIE_TTL_MS = 20 * 60 * 1000L;
 
-    public static int getPort() {
-        return PROXY_PORT;
-    }
+    private Context appContext;
 
-    public static String getUrl() {
-        return "http://127.0.0.1:" + PROXY_PORT + "/proxy";
-    }
+    private static volatile String cachedCookie = "";
+    private static volatile long cachedCookieAt = 0L;
+    private static final Object CF_LOCK = new Object();
 
-    // ====================== 兼容 FongMi 官方调用 ======================
-    /**
-     * 官方 Local 等爬虫会调用这个方法
-     */
-    public static String getUrl(String siteKey, String param) {
-        return "proxy://do=csp&siteKey=" + siteKey + param;
-    }
-
-    /**
-     * 官方会调用带 boolean 的版本
-     */
-    public static String getUrl(boolean local) {
-        return getUrl();
-    }
-
-    public static void log(String msg) {
-        if (msg == null) return;
-        if (sb.length() > 200000) sb.delete(0, 100000);
-        String time = new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-        sb.append("<div class='line'><span class='time'>[").append(time).append("]</span> ")
-                .append("<span class='msg'>").append(msg).append("</span></div>");
-    }
-
-    public static String getStackTrace(Throwable t) {
-        java.io.StringWriter sw = new java.io.StringWriter();
-        t.printStackTrace(new java.io.PrintWriter(sw));
-        return sw.toString().replace("\n", "<br>");
-    }
-
-    public static Object[] proxy(Map<String, String> params) {
-        String action = params.get("do");
-        if ("logs".equals(action) || "kaige_debug".equals(action)) return handleLogsPage();
-        if ("get_logs".equals(action)) return handleGetLogs();
-        if ("clean".equals(action)) return handleClean();
-        log("📨 [Proxy] 收到请求: " + params);
-        if ("getPoster".equals(action)) return handleGetPoster(params);
-        if ("getTitle".equals(action)) return handleGetTitle(params);
-        if ("proxyM3u8".equals(action)) return handleProxyM3u8(params);
-        if ("proxySegment".equals(action)) return handleProxySegment(params);
-        if ("ppnixKey".equals(action)) return handlePpnixKey(params);
-        if ("danmu".equals(action)) return handleDanmu(params);
-        if ("proxy".equals(action)) return handleCommonProxy(params);
-        if ("iptvzb".equals(action)) return handleIptvZb(params);
-        if ("iptv361".equals(action)) return handleIptv361(params);
-        return errorResponse(400, "Unknown action: " + action);
-    }
-
-    // ====================== 对外公开的异步方法 ======================
-    /**
-     * 异步获取中文标题（立即返回，后台线程处理）
-     */
-    public static String getTitle(String title) {
-        if (title == null || title.trim().isEmpty()) return "";
-        String cached = titleCache.get(title);
-        if (cached != null) return cached;
-        executor.submit(() -> {
-            try {
-                Map<String, String> params = new HashMap<>();
-                params.put("do", "getTitle");
-                params.put("title", title);
-                Object[] result = proxy(params);
-                if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
-                    ByteArrayInputStream bis = (ByteArrayInputStream) result[2];
-                    byte[] bytes = new byte[bis.available()];
-                    bis.read(bytes);
-                    String zhTitle = new String(bytes, "UTF-8");
-                    if (!TextUtils.isEmpty(zhTitle)) {
-                        titleCache.put(title, zhTitle);
-                        log("✅ 异步获取标题成功: " + title + " → " + zhTitle);
-                    }
-                }
-            } catch (Exception e) {
-                log("❌ 异步获取标题失败: " + title + " → " + e.getMessage());
-            }
-        });
-        return "";
-    }
-
-    /**
-     * 异步获取海报（立即返回，后台线程处理）
-     */
-    public static String getPoster(String title) {
-        if (title == null || title.trim().isEmpty()) return "";
-        String cached = posterCache.get(title);
-        if (cached != null) return cached;
-        executor.submit(() -> {
-            try {
-                Map<String, String> params = new HashMap<>();
-                params.put("do", "getPoster");
-                params.put("title", title);
-                Object[] result = proxy(params);
-                if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
-                    String posterUrl = TmdbUtil.getPosterUrl(title);
-                    if (!TextUtils.isEmpty(posterUrl)) {
-                        posterCache.put(title, posterUrl);
-                        log("✅ 异步获取海报成功: " + title + " → " + posterUrl);
-                    }
-                }
-            } catch (Exception e) {
-                log("❌ 异步获取海报失败: " + title + " → " + e.getMessage());
-            }
-        });
-        return "";
-    }
-
-    /**
-     * 同步获取中文标题
-     */
-    public static String getTitleSync(String title) {
-        if (title == null || title.trim().isEmpty()) return "";
-        String cached = titleCache.get(title);
-        if (cached != null) return cached;
+    private void log(String msg) {
         try {
-            Map<String, String> params = new HashMap<>();
-            params.put("do", "getTitle");
-            params.put("title", title);
-            Object[] result = proxy(params);
-            if (result != null && result.length >= 3 && result[2] instanceof ByteArrayInputStream) {
-                ByteArrayInputStream bis = (ByteArrayInputStream) result[2];
-                byte[] bytes = new byte[bis.available()];
-                bis.read(bytes);
-                String zhTitle = new String(bytes, "UTF-8");
-                if (!TextUtils.isEmpty(zhTitle)) {
-                    titleCache.put(title, zhTitle);
-                    log("✅ 同步获取标题成功: " + title + " → " + zhTitle);
-                }
-                return zhTitle;
-            }
+            Proxy.log("[PPnix] " + msg);
         } catch (Exception e) {
-            log("❌ getTitleSync 失败: " + e.getMessage());
+            System.out.println("[PPnix] " + msg);
         }
-        return "";
     }
 
-    /**
-     * 同步获取海报
-     */
-    public static String getPosterSync(String title) {
-        if (title == null || title.trim().isEmpty()) return "";
-        String cached = posterCache.get(title);
-        if (cached != null) return cached;
+    private String clip(String s, int max) {
+        if (s == null) return "null";
+        s = s.replace("\n", " ").replace("\r", " ");
+        return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    // ==================== Cookie 工具 ====================
+
+    private boolean hasFreshCookie() {
+        return !TextUtils.isEmpty(cachedCookie)
+                && (System.currentTimeMillis() - cachedCookieAt) < COOKIE_TTL_MS;
+    }
+
+    private boolean cookieReadyForPlay() {
+        return !TextUtils.isEmpty(cachedCookie)
+                && (cachedCookie.contains("SITE_TOTAL_ID")
+                || cachedCookie.contains("cf_clearance"));
+    }
+
+    private String dedupeCookie(String raw) {
+        if (TextUtils.isEmpty(raw)) return "";
+        Map<String, String> map = new LinkedHashMap<>();
+        for (String part : raw.split(";")) {
+            String p = part.trim();
+            if (p.isEmpty() || !p.contains("=")) continue;
+            int i = p.indexOf('=');
+            String k = p.substring(0, i).trim();
+            String v = p.substring(i + 1).trim();
+            if (!k.isEmpty()) map.put(k, v);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> e : map.entrySet()) {
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(e.getKey()).append("=").append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    private String readCookieManager(String pageUrl) {
+        StringBuilder sb = new StringBuilder();
         try {
-            String posterUrl = TmdbUtil.getPosterUrl(title);
-            if (!TextUtils.isEmpty(posterUrl)) {
-                posterCache.put(title, posterUrl);
-                log("✅ 同步获取海报成功: " + title + " → " + posterUrl);
-            }
-            return posterUrl;
-        } catch (Exception e) {
-            log("❌ getPosterSync 失败: " + e.getMessage());
-        }
-        return "";
-    }
-
-    /**
-     * 清除所有缓存
-     */
-    public static void clearCache() {
-        titleCache.clear();
-        posterCache.clear();
-        log("🧹 缓存已清除");
-    }
-
-    // ====================== 搜索词标准化 ======================
-    private static String normalizeSearchTitle(String title) {
-        if (title == null) return "";
-        String s = title.trim();
-        Pattern seasonPattern = Pattern.compile("第([0-9]+)季");
-        Matcher seasonMatcher = seasonPattern.matcher(s);
-        StringBuffer seasonBuf = new StringBuffer();
-        while (seasonMatcher.find()) {
-            int num = Integer.parseInt(seasonMatcher.group(1));
-            seasonMatcher.appendReplacement(seasonBuf, "第" + toChineseNum(num) + "季");
-        }
-        seasonMatcher.appendTail(seasonBuf);
-        s = seasonBuf.toString();
-        s = s.replaceAll("[(（]粤[)）]", "粤语版");
-        s = s.replaceAll("[(（]国[)）]", "国语版");
-        s = s.replaceAll("[(（]英[)）]", "英语版");
-        s = s.replaceAll("[(（]日[)）]", "日语版");
-        s = s.replaceAll("[(（]韩[)）]", "韩语版");
-        return s;
-    }
-
-    private static String toChineseNum(int n) {
-        String[] chinese = {
-                "零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
-                "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"
-        };
-        if (n >= 0 && n < chinese.length) return chinese[n];
-        return String.valueOf(n);
-    }
-
-    // ====================== TMDB/图片代理与标题获取 ======================
-    private static Object[] handleGetPoster(Map<String, String> params) {
-        String title = params.get("title");
-        if (title == null || title.trim().isEmpty()) return defaultImage();
-        try {
-            String posterUrl = TmdbUtil.getPosterUrl(title);
-            if (posterUrl.isEmpty()) {
-                String cleanTitle = normalizeSearchTitle(title);
-                String searchUrl = "https://hongniuzy.tv/index.php/ajax/suggest.html?mid=1&wd="
-                        + URLEncoder.encode(cleanTitle.trim(), "UTF-8");
-                String jsonStr = OkHttp.string(searchUrl);
-                JSONObject obj = new JSONObject(jsonStr);
-                JSONArray list = obj.optJSONArray("list");
-                if (list != null && list.length() > 0) {
-                    posterUrl = list.getJSONObject(0).optString("pic");
-                }
-            }
-            if (posterUrl.startsWith("http")) {
-                okhttp3.Response resp = OkHttp.newCall(posterUrl, new HashMap<>());
-                if (resp != null && resp.isSuccessful() && resp.body() != null) {
-                    String contentType = resp.header("Content-Type", "image/jpeg");
-                    return new Object[]{200, contentType, resp.body().byteStream()};
+            CookieManager cm = CookieManager.getInstance();
+            String[] urls = new String[]{
+                    HOST,
+                    HOST + "/",
+                    pageUrl,
+                    HOST + "/cn/tv/",
+                    HOST + "/cn/movie/",
+                    HOST + "/cn/tv/---0-.html"
+            };
+            for (String u : urls) {
+                if (TextUtils.isEmpty(u)) continue;
+                String c = cm.getCookie(u);
+                if (!TextUtils.isEmpty(c)) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(c);
                 }
             }
         } catch (Exception e) {
-            log("❌ getPoster 失败: " + e.getMessage());
+            log("readCookieManager 异常 " + e.getMessage());
         }
-        return defaultImage();
+        return dedupeCookie(sb.toString());
     }
 
-    private static Object[] handleGetTitle(Map<String, String> params) {
-        String title = params.get("title");
-        if (title == null || title.trim().isEmpty()) {
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes())};
-        }
-        try {
-            String zhTitle = TmdbUtil.getZhTitle(title);
-            byte[] bytes = zhTitle.getBytes("UTF-8");
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
-        } catch (Exception e) {
-            log("❌ getTitle 失败: " + e.getMessage());
-            return errorResponse(500, e.getMessage());
-        }
+    private void saveCookie(String cookie, String from) {
+        String merged = dedupeCookie(cachedCookie + "; " + cookie);
+        if (TextUtils.isEmpty(merged)) return;
+        cachedCookie = merged;
+        cachedCookieAt = System.currentTimeMillis();
+        log("保存 Cookie from=" + from
+                + " len=" + merged.length()
+                + " SITE=" + merged.contains("SITE_TOTAL_ID")
+                + " cf=" + merged.contains("cf_clearance")
+                + " preview=" + clip(merged, 100));
     }
 
-    private static Object[] defaultImage() {
-        return new Object[]{200, "image/jpeg", new ByteArrayInputStream(new byte[0])};
-    }
-
-    // ====================== M3U8 代理 ======================
-    private static Object[] handleProxyM3u8(Map<String, String> params) {
-        String url = params.get("url");
-        if (url == null) return errorResponse(400, "Missing url");
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            headers.put("Referer", "https://www.ppnix.com/");
-            headers.put("Origin", "https://www.ppnix.com");
-            headers.put("Accept", "*/*");
-            String content = OkHttp.string(url, headers);
-            if (content == null || content.isEmpty()) {
-                return errorResponse(500, "m3u8 empty");
-            }
-            content = proxifySegments(content);
-            String localKeyUrl = getUrl() + "?do=ppnixKey";
-            content = content.replace("URI=\"../key\"", "URI=\"" + localKeyUrl + "\"");
-            content = content.replace("URI='../key'", "URI=\"" + localKeyUrl + "\"");
-            content = content.replace("URI=\"https://www.ppnix.com/info/m3u8/key\"", "URI=\"" + localKeyUrl + "\"");
-            log("✅ proxyM3u8 处理完成，分片已指向本地代理，KEY 已指向本地二进制接口");
-            byte[] bytes = content.getBytes("UTF-8");
-            return new Object[]{200, "application/vnd.apple.mpegurl", new ByteArrayInputStream(bytes)};
-        } catch (Exception e) {
-            log("❌ proxyM3u8 失败: " + e.getMessage());
-            return errorResponse(500, e.getMessage());
+    private void mergeSetCookie(okhttp3.Response resp) {
+        if (resp == null) return;
+        List<String> list = resp.headers("Set-Cookie");
+        if (list == null || list.isEmpty()) return;
+        StringBuilder extra = new StringBuilder();
+        for (String sc : list) {
+            if (TextUtils.isEmpty(sc)) continue;
+            String one = sc.split(";")[0].trim();
+            if (one.isEmpty()) continue;
+            if (extra.length() > 0) extra.append("; ");
+            extra.append(one);
+            log("Set-Cookie ← " + one);
         }
+        if (extra.length() > 0) saveCookie(extra.toString(), "Set-Cookie");
     }
 
-    private static String proxifySegments(String m3u8Content) {
-        if (m3u8Content == null || !m3u8Content.contains("ipfs.ppnix.com")) return m3u8Content;
-        Pattern pattern = Pattern.compile("(https?://)ipfs\\.ppnix\\.com(/[^\\s'\"]*?\\.(ts|m4s|mp4|key)?)");
-        Matcher matcher = pattern.matcher(m3u8Content);
-        StringBuffer out = new StringBuffer();
-        try {
-            while (matcher.find()) {
-                int randomNum = (int) (Math.random() * 16) + 1;
-                String candidateUrl = matcher.group(1) + randomNum + ".ppnix.com" + matcher.group(2);
-                String proxied = getUrl() + "?do=proxySegment&url=" + URLEncoder.encode(candidateUrl, "UTF-8");
-                matcher.appendReplacement(out, Matcher.quoteReplacement(proxied));
-            }
-            matcher.appendTail(out);
-        } catch (Exception e) {
-            log("❌ proxifySegments 失败，回退为原始内容: " + e.getMessage());
-            return m3u8Content;
-        }
-        return out.toString();
-    }
-
-    // ====================== 分片代理 ======================
-    private static Object[] handleProxySegment(Map<String, String> params) {
-        String url = params.get("url");
-        if (url == null) return errorResponse(400, "Missing url");
+    private Map<String, String> getHeaders() {
         Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        headers.put("Referer", "https://www.ppnix.com/");
-        headers.put("Origin", "https://www.ppnix.com");
-        headers.put("Accept", "*/*");
-        for (String candidate : buildSegmentCandidates(url)) {
+        headers.put("User-Agent", UA);
+        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
+        headers.put("Referer", HOST + "/");
+        headers.put("Upgrade-Insecure-Requests", "1");
+        headers.put("sec-ch-ua", "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"");
+        headers.put("sec-ch-ua-mobile", "?0");
+        headers.put("sec-ch-ua-platform", "\"Windows\"");
+        if (!TextUtils.isEmpty(cachedCookie)) {
+            headers.put("Cookie", cachedCookie);
+        }
+        return headers;
+    }
+
+    private boolean isChallenge(String html) {
+        if (TextUtils.isEmpty(html)) return true;
+        String h = html.toLowerCase();
+        if (h.contains("lists-content") || h.contains("product-title") || h.contains("infoid")) {
+            return false;
+        }
+        if (h.contains("<title>just a moment</title>")) return true;
+        if (h.contains("just a moment") && h.contains("cdn-cgi")) return true;
+        if (h.contains("cf-browser-verification")) return true;
+        if (h.contains("verify you are human") && h.contains("cdn-cgi")) return true;
+        return false;
+    }
+
+    private String httpGet(String url) {
+        log("GET " + url);
+        try {
+            if (!hasFreshCookie()) {
+                ensureCookieByWebView();
+            }
+            okhttp3.Response resp = OkHttp.newCall(url, getHeaders());
+            if (resp == null) {
+                log("响应 null");
+                return "";
+            }
+            mergeSetCookie(resp);
+            String html = resp.body() != null ? resp.body().string() : "";
+            resp.close();
+            log("GET len=" + html.length()
+                    + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
+                    + " cf=" + cachedCookie.contains("cf_clearance"));
+
+            if (isChallenge(html)) {
+                log("挑战页，刷新 WebView Cookie");
+                cachedCookie = "";
+                cachedCookieAt = 0;
+                if (!ensureCookieByWebView()) return "";
+                resp = OkHttp.newCall(url, getHeaders());
+                if (resp == null) return "";
+                mergeSetCookie(resp);
+                html = resp.body() != null ? resp.body().string() : "";
+                resp.close();
+                if (isChallenge(html)) {
+                    log("重试后仍是挑战页");
+                    return "";
+                }
+            }
+            return html;
+        } catch (Exception e) {
+            log("httpGet 异常 " + e.getMessage());
+            return "";
+        }
+    }
+
+    // ==================== WebView ====================
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private boolean ensureCookieByWebView() {
+        synchronized (CF_LOCK) {
+            if (hasFreshCookie() && cookieReadyForPlay()) {
+                log("复用可用 Cookie");
+                return true;
+            }
+            if (appContext == null) {
+                try {
+                    appContext = Init.context();
+                } catch (Throwable t) {
+                    log("Init.context 失败 " + t.getMessage());
+                }
+            }
+            if (appContext == null) {
+                log("appContext 为空");
+                return false;
+            }
+
+            final CountDownLatch latch = new CountDownLatch(1);
+            final AtomicBoolean success = new AtomicBoolean(false);
+            final AtomicReference<WebView> webRef = new AtomicReference<>();
+            final Handler main = new Handler(Looper.getMainLooper());
+
+            main.post(() -> {
+                try {
+                    CookieManager cm = CookieManager.getInstance();
+                    cm.setAcceptCookie(true);
+                    try {
+                        cm.flush();
+                    } catch (Throwable ignored) {
+                    }
+
+                    WebView webView = new WebView(appContext);
+                    webRef.set(webView);
+                    WebSettings s = webView.getSettings();
+                    s.setJavaScriptEnabled(true);
+                    s.setDomStorageEnabled(true);
+                    s.setDatabaseEnabled(true);
+                    s.setUserAgentString(UA);
+                    s.setCacheMode(WebSettings.LOAD_DEFAULT);
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        cm.setAcceptThirdPartyCookies(webView, true);
+                        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                    }
+
+                    webView.setWebViewClient(new WebViewClient() {
+                        private int stage = 0; // 0 首页 → 1 业务页
+
+                        private void collectAndMaybeFinish(WebView view, String from) {
+                            main.postDelayed(() -> {
+                                try {
+                                    String cmCookie = readCookieManager(HOST + "/");
+                                    view.evaluateJavascript(
+                                            "(function(){return document.cookie||'';})();",
+                                            raw -> {
+                                                String jsCookie = decodeJs(raw);
+                                                String merged = dedupeCookie(cmCookie + "; " + jsCookie);
+                                                log("collect " + from
+                                                        + " len=" + merged.length()
+                                                        + " SITE=" + merged.contains("SITE_TOTAL_ID")
+                                                        + " cf=" + merged.contains("cf_clearance")
+                                                        + " " + clip(merged, 100));
+                                                if (!TextUtils.isEmpty(merged)) {
+                                                    saveCookie(merged, from);
+                                                    if (cookieReadyForPlay() || stage >= 1) {
+                                                        success.set(!TextUtils.isEmpty(cachedCookie));
+                                                        latch.countDown();
+                                                        destroyWeb(webRef);
+                                                    }
+                                                }
+                                            }
+                                    );
+                                } catch (Exception e) {
+                                    log("collect 异常 " + e.getMessage());
+                                }
+                            }, 1500);
+                        }
+
+                        @Override
+                        public void onPageFinished(WebView view, String url) {
+                            log("WebView finished stage=" + stage + " url=" + url);
+                            view.evaluateJavascript(
+                                    "(function(){return document.title||'';})();",
+                                    raw -> {
+                                        String title = decodeJs(raw);
+                                        log("title=" + title);
+                                        if (title != null && title.toLowerCase().contains("just a moment")) {
+                                            log("CF 挑战中，继续等待…");
+                                            main.postDelayed(() -> {
+                                                if (stage == 0) {
+                                                    collectAndMaybeFinish(view, "cf-wait");
+                                                }
+                                            }, 5000);
+                                            return;
+                                        }
+                                        if (stage == 0) {
+                                            stage = 1;
+                                            log("打开业务页补 Cookie");
+                                            view.loadUrl(HOST + "/cn/tv/---0-.html");
+                                            return;
+                                        }
+                                        collectAndMaybeFinish(view, "biz");
+                                    }
+                            );
+                        }
+
+                        @Override
+                        public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                            log("WebView error " + errorCode + " " + description);
+                        }
+                    });
+
+                    log("WebView 打开 " + HOST + "/");
+                    webView.loadUrl(HOST + "/");
+                } catch (Exception e) {
+                    log("WebView 创建失败 " + e.getMessage());
+                    latch.countDown();
+                    destroyWeb(webRef);
+                }
+            });
+
             try {
-                okhttp3.Response resp = OkHttp.newCall(candidate, headers);
-                if (resp == null || resp.body() == null) continue;
-                if (!resp.isSuccessful()) {
-                    log("⚠️ 分片候选失败 (状态码 " + resp.code() + "): " + candidate);
-                    continue;
+                boolean finished = latch.await(CF_TIMEOUT_SEC, TimeUnit.SECONDS);
+                if (!finished) {
+                    log("WebView 超时，最后读 CookieManager");
+                    final CountDownLatch last = new CountDownLatch(1);
+                    main.post(() -> {
+                        try {
+                            String c = readCookieManager(HOST + "/");
+                            if (!TextUtils.isEmpty(c)) {
+                                saveCookie(c, "timeout");
+                                success.set(true);
+                            }
+                        } catch (Exception ignored) {
+                        }
+                        destroyWeb(webRef);
+                        last.countDown();
+                    });
+                    try {
+                        last.await(2, TimeUnit.SECONDS);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
-                String contentType = resp.header("Content-Type", "video/mp2t");
-                log("✅ 分片命中: " + candidate);
-                return new Object[]{200, contentType, resp.body().byteStream()};
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            boolean ok = success.get() || hasFreshCookie();
+            log("ensureCookieByWebView 结束 ok=" + ok
+                    + " SITE=" + cachedCookie.contains("SITE_TOTAL_ID")
+                    + " cf=" + cachedCookie.contains("cf_clearance"));
+            return ok;
+        }
+    }
+
+    /** 播放前打开 Referer 页，尽量补 SITE_TOTAL_ID */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void ensureCookieOnPage(String pageUrl) {
+        if (appContext == null) return;
+        synchronized (CF_LOCK) {
+            final CountDownLatch latch = new CountDownLatch(1);
+            final AtomicReference<WebView> webRef = new AtomicReference<>();
+            final Handler main = new Handler(Looper.getMainLooper());
+            main.post(() -> {
+                try {
+                    CookieManager.getInstance().setAcceptCookie(true);
+                    WebView webView = new WebView(appContext);
+                    webRef.set(webView);
+                    WebSettings s = webView.getSettings();
+                    s.setJavaScriptEnabled(true);
+                    s.setDomStorageEnabled(true);
+                    s.setUserAgentString(UA);
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+                    }
+                    webView.setWebViewClient(new WebViewClient() {
+                        @Override
+                        public void onPageFinished(WebView view, String url) {
+                            main.postDelayed(() -> {
+                                try {
+                                    String cm = readCookieManager(pageUrl);
+                                    view.evaluateJavascript(
+                                            "(function(){return document.cookie||'';})();",
+                                            raw -> {
+                                                String js = decodeJs(raw);
+                                                saveCookie(dedupeCookie(cm + "; " + js), "play-ref");
+                                                latch.countDown();
+                                                destroyWeb(webRef);
+                                            }
+                                    );
+                                } catch (Exception e) {
+                                    latch.countDown();
+                                    destroyWeb(webRef);
+                                }
+                            }, 1200);
+                        }
+                    });
+                    log("播放前 WebView " + pageUrl);
+                    webView.loadUrl(pageUrl);
+                } catch (Exception e) {
+                    log("播放前 WebView 失败 " + e.getMessage());
+                    latch.countDown();
+                    destroyWeb(webRef);
+                }
+            });
+            try {
+                latch.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            // 再用 OkHttp 打一次 Referer，合并 Set-Cookie
+            try {
+                okhttp3.Response resp = OkHttp.newCall(pageUrl, getHeaders());
+                if (resp != null) {
+                    mergeSetCookie(resp);
+                    if (resp.body() != null) resp.body().close();
+                    resp.close();
+                }
             } catch (Exception e) {
-                log("⚠️ 分片候选异常，换下一个域名重试: " + candidate + " → " + e.getMessage());
+                log("播放前 OkHttp Referer 失败 " + e.getMessage());
             }
         }
-        log("❌ 分片所有候选域名均失败: " + url);
-        return errorResponse(502, "all segment candidates failed");
     }
 
-    private static java.util.List<String> buildSegmentCandidates(String originalUrl) {
-        java.util.List<String> candidates = new java.util.ArrayList<>();
-        candidates.add(originalUrl);
-        Pattern hostPattern = Pattern.compile("(https?://)[\\w.-]+\\.ppnix\\.com(/.*)");
-        Matcher m = hostPattern.matcher(originalUrl);
-        if (!m.matches()) {
-            return candidates;
-        }
-        String scheme = m.group(1);
-        String path = m.group(2);
-        java.util.List<Integer> nums = new java.util.ArrayList<>();
-        for (int i = 1; i <= 16; i++) nums.add(i);
-        java.util.Collections.shuffle(nums);
-        for (int n : nums) {
-            String candidate = scheme + n + ".ppnix.com" + path;
-            if (!candidate.equals(originalUrl)) candidates.add(candidate);
-        }
-        candidates.add(scheme + "ipfs.ppnix.com" + path);
-        return candidates;
-    }
-
-    // ====================== PPnix AES Key ======================
-    private static Object[] handlePpnixKey(Map<String, String> params) {
+    private static void destroyWeb(AtomicReference<WebView> ref) {
+        WebView w = ref.getAndSet(null);
+        if (w == null) return;
         try {
-            String keyUrl = "https://www.ppnix.com/info/m3u8/key";
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            headers.put("Referer", "https://www.ppnix.com/");
-            headers.put("Origin", "https://www.ppnix.com");
-            String keyHex = OkHttp.string(keyUrl, headers);
-            if (keyHex == null || keyHex.trim().isEmpty()) {
-                log("❌ ppnixKey 获取失败：返回空");
-                return errorResponse(500, "key empty");
-            }
-            keyHex = keyHex.trim();
-            if (isCloudflareChallenge(keyHex)) {
-                log("🛡️ ppnixKey 疑似被 Cloudflare 拦截（返回的是挑战页而非 key），前200字符: "
-                        + keyHex.substring(0, Math.min(200, keyHex.length())));
-                return errorResponse(403, "blocked by cloudflare challenge");
-            }
-            log("🔑 获取到 key hex: " + keyHex);
-            byte[] keyBytes = hexStringToByteArray(keyHex);
-            if (keyBytes == null || keyBytes.length != 16) {
-                log("❌ key 长度不正确: " + (keyBytes == null ? 0 : keyBytes.length)
-                        + "，原始内容长度=" + keyHex.length()
-                        + "，前200字符: " + keyHex.substring(0, Math.min(200, keyHex.length())));
-                return errorResponse(500, "invalid key length");
-            }
-            return new Object[]{200, "application/octet-stream", new ByteArrayInputStream(keyBytes)};
+            w.stopLoading();
+            w.loadUrl("about:blank");
+            w.destroy();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String decodeJs(String value) {
+        if (value == null || "null".equals(value)) return "";
+        try {
+            Object o = new JSONTokener(value).nextValue();
+            return o == null ? "" : String.valueOf(o);
         } catch (Exception e) {
-            log("❌ ppnixKey 失败: " + e.getMessage());
-            return errorResponse(500, e.getMessage());
-        }
-    }
-
-    private static boolean isCloudflareChallenge(String content) {
-        if (content == null || content.isEmpty()) return false;
-        if (content.matches("^[0-9a-fA-F]+$")) return false;
-        String lower = content.toLowerCase();
-        return lower.contains("cf-browser-verification")
-                || lower.contains("just a moment")
-                || lower.contains("checking your browser")
-                || lower.contains("challenge-platform")
-                || lower.contains("cf-chl")
-                || lower.contains("<html");
-    }
-
-    private static byte[] hexStringToByteArray(String hex) {
-        if (hex == null) return null;
-        hex = hex.trim().replace(" ", "");
-        if (hex.length() % 2 != 0) return null;
-        byte[] data = new byte[hex.length() / 2];
-        for (int i = 0; i < hex.length(); i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                    + Character.digit(hex.charAt(i + 1), 16));
-        }
-        return data;
-    }
-
-    // ====================== 通用带Header视频代理 ======================
-    private static Object[] handleCommonProxy(Map<String, String> params) {
-        try {
-            String url = new String(Base64.decode(params.get("url"), Base64.DEFAULT), "UTF-8");
-            Map<String, String> headers = new HashMap<>();
-            String headerParam = params.get("header");
-            if (headerParam != null && !headerParam.isEmpty()) {
-                String headerJson = new String(Base64.decode(headerParam, Base64.DEFAULT), "UTF-8");
-                JsonObject obj = Json.safeObject(headerJson);
-                for (Map.Entry<String, JsonElement> e : obj.entrySet()) {
-                    headers.put(e.getKey(), e.getValue().getAsString());
-                }
+            if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                return value.substring(1, value.length() - 1);
             }
-            return ProxyVideo.proxy(url, headers);
-        } catch (Exception e) {
-            log("❌ [proxy] 失败: " + e.getMessage());
-            return errorResponse(500, e.getMessage());
+            return value;
         }
     }
 
-    // ====================== IPTV 直播源代理 ======================
-    private static Object[] handleIptvZb(Map<String, String> params) {
+    // ==================== Spider ====================
+
+    @Override
+    public void init(Context context, String extend) {
         try {
-            if (TaoIPTV.isLoading()) {
-                log("⏳ IPTV[taoiptv] 爬虫运行中，暂不返回数据");
-                return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("".getBytes("UTF-8"))};
-            }
-            String keyword = params.get("kw");
-            String txt = TaoIPTV.getCache(keyword);
-            byte[] bytes = (txt == null ? "" : txt).getBytes("UTF-8");
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
-        } catch (Exception e) {
-            log("❌ iptvzb 失败: " + e.getMessage() + "<br><pre>" + getStackTrace(e) + "</pre>");
-            return errorResponse(500, e.getMessage());
+            super.init(context, extend);
+        } catch (Exception ignored) {
         }
+        if (context != null) {
+            appContext = context.getApplicationContext();
+        }
+        if (appContext == null) {
+            try {
+                appContext = Init.context();
+            } catch (Throwable ignored) {
+            }
+        }
+        log("init context=" + (appContext != null));
+        ensureCookieByWebView();
     }
 
-    // ====================== IPTV 361 Live Source Proxy ======================
-    private static Object[] handleIptv361(Map<String, String> params) {
-        try {
-            IPlay361.triggerAsyncCrawl();
-            
-            // Wait for crawl to complete (max 15 seconds)
-            long start = System.currentTimeMillis();
-            while (IPlay361.isLoading() && (System.currentTimeMillis() - start) < 15000) {
-                try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+    @Override
+    public String homeContent(boolean filter) {
+        List<Class> classes = new ArrayList<>();
+        classes.add(new Class("movie", "电影"));
+        classes.add(new Class("tv", "电视剧"));
+        return Result.get().classes(classes).string();
+    }
+
+    @Override
+    public String categoryContent(String tid, String pg, boolean filter,
+                                  HashMap<String, String> extend) throws Exception {
+        int page = Integer.parseInt(pg);
+        int pageIndex = page - 1;
+        String url = HOST + "/cn/" + tid + "/---" + pageIndex + "-.html";
+        String html = httpGet(url);
+        if (TextUtils.isEmpty(html)) {
+            return Result.get().vod(new ArrayList<>()).page(page, page, 0, 0).string();
+        }
+
+        Document doc = Jsoup.parse(html);
+        Elements items = doc.select(".lists-content ul li");
+        List<Vod> videos = new ArrayList<>();
+        for (Element li : items) {
+            Element thumbA = li.selectFirst("a.thumbnail");
+            if (thumbA == null) continue;
+            String detailHref = thumbA.attr("href");
+            if (TextUtils.isEmpty(detailHref)) continue;
+            if (!detailHref.startsWith("/")) detailHref = "/" + detailHref;
+
+            Element img = thumbA.selectFirst("img");
+            String pic = "";
+            if (img != null) {
+                pic = img.attr("src");
+                if (TextUtils.isEmpty(pic)) pic = img.attr("data-src");
+                if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = HOST + pic;
             }
-            
-            String source = params.get("source");
-            String key;
-            if ("migu".equals(source) || "pmigu".equals(source)) {
-                key = IPlay361.OUTPUT_PROXY;
+
+            Element yearSpan = li.selectFirst(".countrie .orange");
+            String remarks = yearSpan != null ? yearSpan.text().trim() : "";
+
+            Element titleA = li.selectFirst("h2 a");
+            String name = titleA != null ? titleA.text().trim() : "";
+            if (TextUtils.isEmpty(name)) continue;
+
+            Vod vod = new Vod();
+            vod.setVodId(detailHref);
+            vod.setVodName(name);
+            vod.setVodPic(pic);
+            vod.setVodRemarks(remarks);
+            videos.add(vod);
+        }
+
+        int count = videos.isEmpty() ? page : page + 1;
+        return Result.get().vod(videos).page(page, count, videos.size(), 0).string();
+    }
+
+    @Override
+    public String detailContent(List<String> ids) throws Exception {
+        if (ids == null || ids.isEmpty()) return Result.error("id 为空");
+        String id = ids.get(0);
+        String url = id.startsWith("http") ? id : HOST + id;
+        String html = httpGet(url);
+        if (TextUtils.isEmpty(html)) return Result.error("请求详情失败");
+
+        Document doc = Jsoup.parse(html);
+
+        Element titleElem = doc.selectFirst("h1.product-title");
+        String name = "";
+        String year = "";
+        if (titleElem != null) {
+            String fullText = titleElem.text().trim();
+            Matcher m = Pattern.compile("(.+?)\\s*\\((\\d{4})\\)").matcher(fullText);
+            if (m.find()) {
+                name = m.group(1).trim();
+                year = m.group(2);
             } else {
-                key = IPlay361.OUTPUT_HOTEL;
+                name = fullText;
             }
-            String txt = IPlay361.getCache(key);
-            if (txt == null) txt = "";
-            byte[] bytes = txt.getBytes("UTF-8");
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(bytes)};
-        } catch (Exception e) {
-            log("? iptv361 error: " + e.getMessage());
-            return errorResponse(500, e.getMessage());
         }
+
+        Element picElem = doc.selectFirst(".product-header img.thumb");
+        String pic = "";
+        if (picElem != null) {
+            pic = picElem.attr("src");
+            if (!TextUtils.isEmpty(pic) && pic.startsWith("/")) pic = HOST + pic;
+        }
+
+        String director = "";
+        String actor = "";
+        String area = "";
+        String content = "";
+        for (Element ex : doc.select(".product-excerpt")) {
+            String exText = ex.text();
+            Element span = ex.selectFirst("span");
+            if (span == null) continue;
+            if (exText.contains("导演")) {
+                List<String> names = new ArrayList<>();
+                for (Element a : span.select("a")) names.add(a.text());
+                director = TextUtils.join(", ", names);
+            } else if (exText.contains("主演")) {
+                List<String> names = new ArrayList<>();
+                for (Element a : span.select("a")) names.add(a.text());
+                actor = TextUtils.join(", ", names);
+            } else if (exText.contains("国家")) {
+                List<String> names = new ArrayList<>();
+                for (Element a : span.select("a")) names.add(a.text());
+                area = TextUtils.join(", ", names);
+            } else if (exText.contains("简介")) {
+                content = span.text().trim();
+            }
+        }
+
+        String infoid = null;
+        List<String> episodeNumbers = new ArrayList<>();
+        for (Element script : doc.select("script")) {
+            String js = script.html();
+            if (js.contains("infoid") && js.contains("m3u8")) {
+                Matcher infoidMatcher = Pattern.compile("infoid\\s*=\\s*(\\d+)").matcher(js);
+                if (infoidMatcher.find()) infoid = infoidMatcher.group(1);
+                Matcher m3u8Matcher = Pattern.compile("m3u8\\s*=\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(js);
+                if (m3u8Matcher.find()) {
+                    String arrayContent = m3u8Matcher.group(1);
+                    // 集数/清晰度是带引号的字符串 token，如 '1080P' / '1' / "1080P"。
+                    // 旧写法 ['\"]?(\\d+) 会把 '1080P' 抠成 '1080'(丢 P)，导致播放链接错。
+                    // 改为抓取整 token：优先取引号内内容，无引号则取连续字母数字。
+                    Matcher epMatcher = Pattern.compile("(?:['\"]([A-Za-z0-9]+)['\"]|([A-Za-z0-9]+))").matcher(arrayContent);
+                    while (epMatcher.find()) {
+                        String ep = !TextUtils.isEmpty(epMatcher.group(1)) ? epMatcher.group(1) : epMatcher.group(2);
+                        if (!TextUtils.isEmpty(ep) && !episodeNumbers.contains(ep)) {
+                            episodeNumbers.add(ep);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        String vodPlayFrom = "";
+        String vodPlayUrl = "";
+        if (infoid != null && !episodeNumbers.isEmpty()) {
+            List<String> urls = new ArrayList<>();
+            for (String ep : episodeNumbers) {
+                urls.add(ep + "$/info/m3u8/" + infoid + "/" + ep + ".m3u8");
+            }
+            vodPlayFrom = "PPnix";
+            vodPlayUrl = TextUtils.join("#", urls);
+        }
+
+        Vod vod = new Vod();
+        vod.setVodId(id);
+        vod.setVodName(name);
+        vod.setVodPic(pic);
+        vod.setVodContent(content);
+        vod.setVodPlayFrom(vodPlayFrom);
+        vod.setVodPlayUrl(vodPlayUrl);
+        vod.setVodDirector(director);
+        vod.setVodActor(actor);
+        vod.setVodArea(area);
+        vod.setVodYear(year);
+        vod.setVodRemarks(year.isEmpty() ? "" : year + "年");
+        return Result.get().vod(vod).string();
     }
 
-    // ====================== 弹幕 ======================
-    private static Object[] handleDanmu(Map<String, String> params) {
-        String title = params.get("title");
-        String episode = params.get("episode");
-        try {
-            params.put("title", URLDecoder.decode(title, "UTF-8"));
-        } catch (Exception ignored) {
-        }
-        try {
-            params.put("episode", URLDecoder.decode(episode, "UTF-8"));
-        } catch (Exception ignored) {
-        }
-        return DanmuHelper.getDanmuResponse(params);
+    @Override
+    public String searchContent(String key, boolean quick) {
+        return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
     }
 
-    // ====================== 日志面板 ======================
-    private static Object[] handleLogsPage() {
-        String html = "<html><head><meta charset='utf-8'><style>" +
-                "body{background:#fff;color:#000;font-family:monospace;font-size:12px;margin:0;padding:10px;}" +
-                ".header{position:sticky;top:0;background:#fff;padding:5px;border-bottom:1px solid #000;display:flex;justify-content:space-between;z-index:9;}" +
-                ".time{color:#888;margin-right:5px;}.line{border-bottom:1px solid #eee;padding:2px 0;}" +
-                "button{background:#000;color:#fff;border:none;padding:4px 8px;border-radius:3px;}" +
-                "</style></head><body>" +
-                "<div class='header'><b>📟 凱哥監聽</b><button onclick='clr()'>🧹 清空</button></div>" +
-                "<div id='logs'>正在對接矩陣數據...</div>" +
-                "<script>" +
-                "function clr(){fetch('?do=clean').then(()=>location.reload());}" +
-                "let last = '';" +
-                "setInterval(() => {" +
-                " fetch('?do=get_logs').then(r=>r.text()).then(data=>{" +
-                " if(data !== last) {" +
-                " document.getElementById('logs').innerHTML = data;" +
-                " last = data;" +
-                " window.scrollTo(0, document.body.scrollHeight);" +
-                " }" +
-                " });" +
-                "}, 1000);" +
-                "</script></body></html>";
-        try {
-            return new Object[]{200, "text/html; charset=utf-8", new ByteArrayInputStream(html.getBytes("UTF-8"))};
-        } catch (Exception e) {
-            return errorResponse(500, e.getMessage());
-        }
-    }
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // m3u8 段 URL：形如 /info/m3u8/{infoid}/{清晰度}.m3u8（来自 detailContent 的 vodPlayUrl）
+        String m3u8Url = id.startsWith("http") ? id : HOST + id;
 
-    private static Object[] handleGetLogs() {
-        try {
-            return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream(sb.toString().getBytes("UTF-8"))};
-        } catch (Exception e) {
-            return errorResponse(500, e.getMessage());
-        }
-    }
+        // 本地代理：改写 KEY 为二进制接口 + 段 302/301 跟跳转
+        String proxyUrl = Proxy.getUrl() + "?do=proxyM3u8&url=" + URLEncoder.encode(m3u8Url, "UTF-8");
 
-    private static Object[] handleClean() {
-        sb.setLength(0);
-        sb.append("<div style='color:red;'>--- 日誌已手動清空 ---</div>");
-        return new Object[]{200, "text/plain; charset=utf-8", new ByteArrayInputStream("OK".getBytes())};
-    }
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", UA);
+        headers.put("Referer", HOST + "/");
+        headers.put("Origin", HOST);
+        headers.put("Accept", "*/*");
 
-    private static Object[] errorResponse(int code, String message) {
-        return new Object[]{code, "text/plain; charset=utf-8", new ByteArrayInputStream(message.getBytes())};
+        log("播放代理直连 " + m3u8Url);
+
+        return Result.get()
+                .url(proxyUrl)
+                .header(headers)
+                .string();
     }
 }
