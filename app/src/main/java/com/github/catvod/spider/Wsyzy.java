@@ -29,10 +29,10 @@ public class Wsyzy extends Spider {
     // ========================================================
 
     // 主接口：负责分类 + 列表 + 详情主线路
-    private static final String MAIN_API = "https://api.wsyzy.net/api.php/provide/vod";
+    private static final String MAIN_API = "https://cj.rycjapi.com/api.php/provide/vod";
 
     // 主接口 suggest 搜索（优先使用）
-    private static final String SEARCH_API = "https://api.wsyzy.net/index.php/ajax/suggest.html?mid=1";
+    private static final String SEARCH_API = "https://cj.rycjapi.com/index.php/ajax/suggest.html?mid=1";
 
     // 副接口列表：要加新源只需在这里追加一行
     // SearchMode.PROVIDE_VOD     → ?ac=videolist&wd=  （标准苹果CMS采集接口，baseUrl需填完整接口地址，可带 /from/xxx 指定线路）
@@ -44,6 +44,7 @@ public class Wsyzy extends Spider {
             new ExtraSource("备电影天堂", "https://caiji.dyttzyapi.com", SearchMode.SUGGEST, "/from/dyttm3u8"),
             new ExtraSource("备1080资源", "https://api.yyzy-tv.vip/inc/apijson.php",                    SearchMode.PROVIDE_VOD),
             new ExtraSource("备无尽", "https://api.wujinapi.me/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
+            new ExtraSource("备巨浪", "https://api.juliang.live/api/provide/vod",                SearchMode.PROVIDE_VOD),
 
             // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                       SearchMode.PROVIDE_VOD),
             // new ExtraSource("备4", "https://yyy.com",                                           SearchMode.SUGGEST),
