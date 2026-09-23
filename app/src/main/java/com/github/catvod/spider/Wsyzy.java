@@ -45,6 +45,7 @@ public class Wsyzy extends Spider {
             new ExtraSource("备1080资源", "https://api.yyzy-tv.vip/inc/apijson.php",                    SearchMode.PROVIDE_VOD),
             new ExtraSource("备无尽", "https://api.wujinapi.me/api.php/provide/vod",                SearchMode.PROVIDE_VOD),
             new ExtraSource("备巨浪", "https://api.juliang.live/api/provide/vod",                SearchMode.PROVIDE_VOD),
+            new ExtraSource("备红牛", "https://www.hongniuzy2.com", SearchMode.PROVIDE_VOD, "/from/hnm3u8"),
 
             // new ExtraSource("备3", "https://xxx.com/api.php/provide/vod",                       SearchMode.PROVIDE_VOD),
             // new ExtraSource("备4", "https://yyy.com",                                           SearchMode.SUGGEST),
