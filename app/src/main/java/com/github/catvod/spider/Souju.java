@@ -315,28 +315,39 @@ public class Souju extends Spider {
         }
     }
 
-    /** 按"线路名(主) + provider_id(兜底)"在该集 m3u8 线路里定位第 idx 条 url, 找不到返回 "". */
+    /** 按"provider_id(主) + 线路名(兜底)"在该集 m3u8 线路里定位第 idx 条 url, 找不到返回 "". */
     private String pickM3u8Url(JSONArray allLines, int idx, String name) {
         if (allLines == null || allLines.length() == 0) return "";
-        // 1) 主匹配: 第 1 集 line_options[idx] 的线路名 == 该集 line_options[i] 的线路名
-        JSONObject want = allLines.getJSONObject(idx);
-        for (int i = 0; i < allLines.length(); i++) {
-            JSONObject l = allLines.getJSONObject(i);
-            if ("m3u8".equals(l.optString("url_kind", ""))
-                    && l.optString("provider_id", "").equals(want.optString("provider_id", ""))) {
-                return l.optString("url", "");
-            }
+        if (idx < 0 || idx >= allLines.length()) return "";
+        JSONObject want = null;
+        try {
+            want = allLines.getJSONObject(idx);
+        } catch (Exception ignored) {
+            return "";
         }
-        // 2) 兜底: 按线路名 label (线路名跨集一致, 按名比按 idx 更稳)
-        JSONObject wantByName = allLines.getJSONObject(idx);
-        String wantLabel = firstNonEmpty(wantByName, "label", "display_label", "provider_name");
-        if (wantLabel.length() > 0) {
-            for (int i = 0; i < allLines.length(); i++) {
+        String wantPid = want.optString("provider_id", "");
+        // 1) 主匹配: 按 provider_id (线路身份, 比 label 稳)
+        for (int i = 0; i < allLines.length(); i++) {
+            try {
                 JSONObject l = allLines.getJSONObject(i);
-                if (!"m3u8".equals(l.optString("url_kind", ""))) continue;
-                if (firstNonEmpty(l, "label", "display_label", "provider_name").equals(wantLabel)) {
+                if ("m3u8".equals(l.optString("url_kind", ""))
+                        && wantPid.length() > 0
+                        && wantPid.equals(l.optString("provider_id", ""))) {
                     return l.optString("url", "");
                 }
+            } catch (Exception ignored) {}
+        }
+        // 2) 兜底: 按线路名 label (线路名跨集若一致命中)
+        String wantLabel = firstNonEmpty(want, "label", "display_label", "provider_name");
+        if (wantLabel.length() > 0) {
+            for (int i = 0; i < allLines.length(); i++) {
+                try {
+                    JSONObject l = allLines.getJSONObject(i);
+                    if (!"m3u8".equals(l.optString("url_kind", ""))) continue;
+                    if (firstNonEmpty(l, "label", "display_label", "provider_name").equals(wantLabel)) {
+                        return l.optString("url", "");
+                    }
+                } catch (Exception ignored) {}
             }
         }
         return "";
@@ -379,8 +390,14 @@ public class Souju extends Spider {
     /** 核心抓取: 带签名 GET /v1/browse/catalog, 解析 cards[] -> List<Vod> */
     private List<Vod> browse(String tid, String kind, int page, int limit) {
         String path = "/v1/browse/catalog";
+        String kindEncoded;
+        try {
+            kindEncoded = URLEncoder.encode(kind, "UTF-8");
+        } catch (Exception e) {
+            kindEncoded = kind; // 兜底: 编码异常时透传原 kind (kind 实际是 series/movie/anime 英文, 无需编码)
+        }
         String query = "?sort=trending&window=day&page=" + page
-                + "&limit=" + limit + "&kind=" + URLEncoder.encode(kind, "UTF-8")
+                + "&limit=" + limit + "&kind=" + kindEncoded
                 + "&offset=" + (page - 1) * limit;
         String fullPath = path + query;
         String json = getSigned(fullPath);
