@@ -2,6 +2,10 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
+import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
@@ -18,6 +22,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 搜剧AI souju2.ai (API 爬虫, HMAC-SHA256 请求签名)
@@ -78,6 +84,7 @@ import java.util.Map;
 public class Souju extends Spider {
 
     private String host = "https://souju2.ai";
+    private Context context; // init 传入, WebView 自动拿 session 用
 
     // 签名常量 (已实测 2026-09-25)
     // 风险: 随前端发版 (build-version / protocol-version / secret) 会变, 失效后需重新扒前端 bundle
@@ -86,6 +93,14 @@ public class Souju extends Spider {
     private static final String BUILD_VERSION   = "aimovie-v2026.09.24.4-4f6353a71c35-4f6353a71c35-4f6353a71c35";
     private static final String PROTOCOL_VERSION= "2026-07-05.library-v2.playback-v1";
     // 真正的 API 签名密钥 (硬编码在前端 bundle, 不是 bootstrap 里那个第三方埋点 secret)
+    // ★ 登录 session (官方线路 resolve-line 必带, 否则 401 playback_user_session_required):
+    //   从浏览器登录 souju2.ai 后抓 cookie 里的 ai_movie_session 值 (格式 ums_xxx),
+    //   两站 (souju2/kanju2) IP 不同, session 不跨站, 必须用 souju2 域自己的.
+    //   为空时官方线路 resolve-line 会 401, 采集线路 (m3u8 直链) 不受影响.
+    private static final String SESSION_COOKIE = "";
+    // ★ 懒加载 session: 优先用上面手填的 SESSION_COOKIE; 为空时试 WebView 自动拿 (需 Context + 主线程).
+    //   只取 souju2 域 .souju2.ai 下的 ai_movie_session, 拿到后缓存到这里 (首次访问后常驻, 后续秒取).
+    private String liveSession = "";
     private static final String SIGN_SECRET     = "f39d73aa7a6426203cdee1ef17b31d3b7ea8c23f4c59c62a3a8aa0f39ee5e79d";
 
     private static final String UA =
@@ -102,8 +117,75 @@ public class Souju extends Spider {
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
+        this.context = context; // 存 Context, WebView 自动拿 session 要用 (主线程)
         if (extend != null && extend.trim().startsWith("http")) {
             host = extend.trim();
+        }
+    }
+
+    /** 取官方线路要用的登录 session: 优先手填的 SESSION_COOKIE, 否则试 WebView 自动拿. */
+    private String sessionValue() {
+        if (!TextUtils.isEmpty(SESSION_COOKIE)) return SESSION_COOKIE;
+        if (!TextUtils.isEmpty(liveSession)) return liveSession;
+        liveSession = ensureSession(); // 懒加载: 首次调到这里才真去 WebView 拿, 之后缓存
+        return liveSession;
+    }
+
+    /**
+     * 用 WebView 访问 souju2 首页, 从 .souju2.ai 域 CookieManager 里拿 ai_movie_session.
+     * 前提: 本爬虫能在 App 里跑, 且能拿到 Context (init 传入).
+     * 边界 (诚实): 若该站"匿名访问不种 session cookie"(我实测匿名 / 与 /v1/runtime/bootstrap 都不 Set-Cookie),
+     *   则 WebView 只能拿到你手动登录态残留的 session, 首登需在 WebView 里手动登一次. 能否自动种需真机验证.
+     * 返回拿到的 ai_movie_session (ums_xxx); 拿不到返回 "" (不崩, 官方线路会 401 -> 回落采集线路).
+     */
+    private String ensureSession() {
+        if (context == null) return "";
+        try {
+            final CountDownLatch latch = new CountDownLatch(1);
+            final String[] holder = new String[]{""};
+            // CookieManager 必须在主线程 (UI) 操作, 用 Handler 投递
+            android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            mainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        WebView wv = new WebView(context);
+                        WebSettings ws = wv.getSettings();
+                        ws.setJavaScriptEnabled(true);
+                        ws.setDomStorageEnabled(true);
+                        ws.setAllowFileAccess(false);
+                        wv.setWebViewClient(new WebViewClient() {
+                            @Override
+                            public void onPageFinished(WebView view, String url) {
+                                try {
+                                    CookieManager cm = CookieManager.getInstance();
+                                    // 取 souju2 域下所有 cookie, 找 ai_movie_session=ums_xxx
+                                    String all = cm.getCookie(host);
+                                    if (all != null) {
+                                        for (String kv : all.split(";\\s*")) {
+                                            int eq = kv.indexOf('=');
+                                            if (eq > 0 && kv.substring(0, eq).trim().equals("ai_movie_session")) {
+                                                holder[0] = kv.substring(eq + 1).trim();
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } catch (Exception ignored) {}
+                                latch.countDown();
+                            }
+                        });
+                        wv.loadUrl(host + "/");
+                    } catch (Exception e) {
+                        latch.countDown();
+                    }
+                }
+            });
+            // 等页面加载完 (onPageFinished), 最多 10 秒
+            latch.await(10, TimeUnit.SECONDS);
+            return TextUtils.isEmpty(holder[0]) ? "" : holder[0];
+        } catch (Exception e) {
+            // WebView/主线程不可用 -> 返空, 不崩 (官方线路 401 回落采集线路)
+            return "";
         }
     }
 
@@ -338,14 +420,15 @@ public class Souju extends Spider {
     /**
      * 把票根 (resolve_ticket) 二次解析成可播直链:
      * POST /v1/playback/resolve-line?view=compact, body={"ticket":"<剥 resolve:// 前缀的票根>"}.
-     * 返回真 url (m3u8/mp4 直链); 票根失效/资源不可用 (404 playback_line_unavailable) 返回 "".
+     * 官方线路需要登录态: 带 SESSION_COOKIE (空时不带, 会 401 playback_user_session_required).
+     * 返回 [url, url_kind]; url_kind 可能 m3u8/mp4/unknown (源质量各异, mp4 解出的可能是图片).
      * 边界: 票根有时效, 须用当时 resolve 的新鲜票根, 缓存票根大概率 404.
      */
-    private String postResolveLine(String rawTicket) {
-        if (TextUtils.isEmpty(rawTicket)) return "";
+    private String[] postResolveLine(String rawTicket) {
+        if (TextUtils.isEmpty(rawTicket)) return new String[]{"", ""};
         String ticket = rawTicket.startsWith("resolve://") ? rawTicket.substring(10) : rawTicket;
         ticket = ticket.trim();
-        if (TextUtils.isEmpty(ticket)) return "";
+        if (TextUtils.isEmpty(ticket)) return new String[]{"", ""};
         try {
             String path = "/v1/playback/resolve-line?view=compact";
             String ts    = String.valueOf(System.currentTimeMillis());
@@ -357,6 +440,11 @@ public class Souju extends Spider {
             h.put("Content-Type", "application/json");
             h.put("Referer", host + "/");
             h.put("Origin", host);
+            String sess = sessionValue(); // 优先手填 SESSION_COOKIE, 否则 WebView 自动拿 (懒加载)
+            if (!TextUtils.isEmpty(sess)) {
+                // 官方线路需登录 session: ai_movie_session=ums_xxx (两站不跨, 用 souju2 域的值)
+                h.put("Cookie", "ai_movie_session=" + sess);
+            }
             h.put("x-ai-movie-client-name", CLIENT_NAME);
             h.put("x-ai-movie-client-version", CLIENT_VERSION);
             h.put("x-ai-movie-build-version", BUILD_VERSION);
@@ -366,15 +454,39 @@ public class Souju extends Spider {
             h.put("x-ai-movie-signature", sig);
             String abs = host + path;
             String body = OkHttp.post(abs, "{\"ticket\":\"" + ticket + "\"}", h).getBody();
-            if (TextUtils.isEmpty(body)) return "";
+            if (TextUtils.isEmpty(body)) return new String[]{"", ""};
             JSONObject j = new JSONObject(body);
+            // 401/404 错误响应没有 line 字段 -> 返空
+            if (!"playback.line.resolve".equals(j.optString("object", ""))) {
+                return new String[]{"", ""};
+            }
             JSONObject line = j.optJSONObject("line");
-            if (line == null) return "";
-            return line.optString("url", "");
+            if (line == null) return new String[]{"", ""};
+            String url  = line.optString("url", "");
+            String kind = line.optString("url_kind", "");
+            return new String[]{url, kind};
         } catch (Exception e) {
-            // 404 playback_line_unavailable / 票根失效 -> 返 "", 不崩
-            return "";
+            // 401/404 / 票根失效 -> 返 "", 不崩
+            return new String[]{"", ""};
         }
+    }
+
+    /** 采集线路 (m3u8) 透传 + Referer/Origin/UA, parse=1. 按 url_kind 选格式: m3u8 走 m3u8(), mp4/unknown 走 octet(). */
+    private String passthrough(String url, String urlKind) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", UA);
+        headers.put("Accept", "*/*");
+        headers.put("Referer", host + "/");
+        headers.put("Origin", host);
+        Result r = Result.get().parse(1).url(url).header(headers);
+        if ("m3u8".equals(urlKind)) r.m3u8();
+        else r.octet(); // mp4/unknown -> 普通流, 不套 m3u8 格式 (消掉"源是 mp4 却标 m3u8"的格式错)
+        return r.string();
+    }
+
+    /** 旧版兼容: 直链透传 (无 url_kind 时默认 m3u8). */
+    private String passthroughM3u8(String m3u8Url) {
+        return passthrough(m3u8Url, "m3u8");
     }
 
     // ==================== Spider ====================
@@ -568,31 +680,37 @@ public class Souju extends Spider {
             String url = hit.optString("url", "");
             String kind = hit.optString("url_kind", "");
             if ("resolve_ticket".equals(kind)) {
-                // 官方解析线路: 二次 POST 解票根拿真直链 (票根有时效, 此时用刚 resolve 的新鲜票根)
-                url = postResolveLine(url);
-                if (TextUtils.isEmpty(url)) return Result.error("线路 " + flag + " 票根解析失败 (资源不可用/票根时效)");
-                return passthroughM3u8(url);
+                // 官方解析线路: 二次 POST 解票根拿真直链 (票根有时效, 此时用刚 resolve 的新鲜票根).
+                // 需登录 session (SESSION_COOKIE); 未配或解不出 (401/404/票根失效) -> 回落采集线路.
+                String[] r = postResolveLine(url);
+                if (!TextUtils.isEmpty(r[0])) {
+                    return passthrough(r[0], r[1]); // 官方线路成功, 按 url_kind 区分格式 (m3u8->m3u8(), 其他->octet())
+                }
+                // 回落: 该集取第一条 m3u8 采集线路 (不需要登录, 实测能播)
+                String fallback = pickFirstM3u8(lo);
+                if (TextUtils.isEmpty(fallback)) return Result.error("官方线路 " + flag + " 解析失败且无采集线路兜底");
+                return passthrough(fallback, "m3u8");
             }
             // 采集线路: 直接透传 m3u8 直链
             if (TextUtils.isEmpty(url)) return Result.error("线路 " + flag + " 在该集无 m3u8 url");
-            return passthroughM3u8(url);
+            return passthrough(url, kind);
         } catch (Exception e) {
             return Result.error("resolve 失败: " + e.getMessage());
         }
     }
 
-    /** 透传 m3u8 直链 + Referer/Origin/UA 头, parse=1, format=m3u8. */
-    private String passthroughM3u8(String m3u8Url) {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", UA);
-        headers.put("Accept", "*/*");
-        headers.put("Referer", host + "/");
-        headers.put("Origin", host);
-        return Result.get()
-                .parse(1)
-                .url(m3u8Url)
-                .header(headers)
-                .m3u8()
-                .string();
+    /** 取 line_options 里第一条 m3u8 直链 (官方线路失败时的兜底, 采集线路不需要登录). */
+    private String pickFirstM3u8(JSONArray lo) {
+        if (lo == null) return "";
+        for (int i = 0; i < lo.length(); i++) {
+            try {
+                JSONObject l = lo.getJSONObject(i);
+                if ("m3u8".equals(l.optString("url_kind", ""))) {
+                    String u = l.optString("url", "");
+                    if (!TextUtils.isEmpty(u)) return u;
+                }
+            } catch (Exception ignored) {}
+        }
+        return "";
     }
 }
