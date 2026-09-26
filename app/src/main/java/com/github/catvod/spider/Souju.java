@@ -482,7 +482,7 @@ public class Souju extends Spider {
     private String passthrough(String url, String urlKind) {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
-        headers.put("Referer", host + "/");
+    // headers.put("Referer", host + "/");
         headers.put("Origin", host);
         headers.put("Accept", "*/*");
         Result r = Result.get().parse(0).url(url).header(headers);
