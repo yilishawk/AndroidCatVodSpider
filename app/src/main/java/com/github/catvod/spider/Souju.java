@@ -22,10 +22,11 @@ import java.util.Map;
 /**
  * 搜剧AI souju2.ai (API 爬虫, HMAC-SHA256 请求签名)
  *
- * ★ 命名: 本类 = B 方案 (多线路可选). 干净单线路版见 Souju (A 方案, 同签名协议).
+ * ★ 命名: 本类 = B 方案 (多线路可选, 解析线路+采集线路全收). 干净单线路版见 Souju (A 方案, 同签名协议).
  *   两者 browse/category/search 完全相同, 唯一差别在 detailContent 的播放环:
- *     B (本类): 收全部 m3u8 线路, vod_play_from 多线路 $$$ 分隔, 可切线路;
- *               vod_play_url 每段存 "集名$episodeToken" (token 非真 url), 播放时按集 resolve
+ *     B (本类): 收全部解析线路(resolve_ticket 二次 POST) + 采集线路(m3u8 直链),
+ *               vod_play_from = "官方·线路名$$$采集线路名..." 可切线路;
+ *               vod_play_url 每段存 "集名$episodeToken" (token 非真 url), 播放时按集 resolve/解票根
  *     A (Souju): 只取第 1 条可播 m3u8 线路, 单线路, 播放环干净 (真 m3u8 url 直接透传)
  *
  * 端点 (已实测 2026-09-25):
@@ -42,12 +43,14 @@ import java.util.Map;
  * 视频解析链路 (已实测, B 方案 = "播放哪集才 resolve 哪集"):
  *   1. detailContent:  GET /v1/catalog/{id}/detail + /v1/catalog/{id}/episodes
  *      -> 只 resolve 第 1 集一次 (GET /v1/playback/resolve/{token0}) 定线路名集合, 不逐集预 resolve
- *      -> B 方案: vod_play_from = 线路名 $$$ 拼接 (按第 1 集 line_options 顺序),
+ *      -> B 方案: vod_play_from = "官方·线路名$$$采集线路名..." (解析线路在前, 采集线路在后),
  *                 vod_play_url   = 每线路一段 "第i集$episodeToken#..." (token 非真 url, 来自 /episodes)
- *   2. playerContent:  flag = 线路名(定下标 j), id = "第i集$episodeToken"(定集 i)
- *      -> 点哪集才 GET /v1/playback/resolve/{token_i} 拿该集 line_options,
- *         按"线路名 + provider_id 兜底"匹配第 j 条 m3u8 url 返回 (防跨集线路数浮动错位)
- *   不实现: 官方 resolve_ticket 线路 (resolve-line 服务端 400, 票根有时效), 不兜底.
+ *   2. playerContent:  flag = 线路名(定下标), id = "第i集$episodeToken"(定集 i)
+ *      -> 点哪集才 GET /v1/playback/resolve/{token_i} 拿该集 line_options
+ *      -> flag 带 "官方·" 前缀: POST /v1/playback/resolve-line (ticket->真直链) 取 m3u8 url
+ *      -> flag 无前缀(采集 m3u8 线路): 直接取该集 line_options 里同 label 的 m3u8 url
+ *   边界: 官方票根有时效 (实测: 当时有效票根 200/201, 隔几分钟的缓存票根 POST 返 404 playback_line_unavailable).
+ *     代码按"播放时新鲜 resolve 再解票根"设计, 能否出画面需真机日志确认; 票根失效时该线路当集不可播, 不崩.
  *
  * 签名协议 (已抠出 + 验证):
  *   前端电影 chunk (movie-card-runtime) 的 Na() 函数:
@@ -176,8 +179,9 @@ public class Souju extends Spider {
             JSONArray arr = json.getJSONArray("cards");
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject c = arr.getJSONObject(i);
-                String name  = firstNonEmpty(c, "title", "name", "vod_name", "show_name", "label");
-                String pic   = firstNonEmpty(c, "poster", "image", "pic", "cover", "media_url");
+                String name  = firstNonEmpty(c, "title", "normalized_title", "name", "show_name", "label");
+                // 实测 cards[] 图片字段 = poster_url (百度 gimg 镜像, 非 poster/image/pic)
+                String pic   = firstNonEmpty(c, "poster_url", "poster", "image", "pic", "cover", "media_url", "backdrop_url", "carousel_url");
                 String id    = firstNonEmpty(c, "id", "vod_id", "uid", "card_id", "source_id");
                 if (TextUtils.isEmpty(name)) continue;
                 if (TextUtils.isEmpty(id)) id = name + "_" + i;
@@ -186,8 +190,11 @@ public class Souju extends Spider {
                 vod.setVodId(id);
                 vod.setVodName(name);
                 if (!TextUtils.isEmpty(pic)) vod.setVodPic(pic);
-                // 备注/年份/地区等: 以实测 cards 字段为准, 这里先透传 remarks/year/area 若有
-                vod.setVodRemarks(firstNonEmpty(c, "year", "release_year"));
+                // cards 实测含 year/area/remarks (如 "侠探杰克 第4季", 2026, 美国, 更新至8集), 一并透传
+                vod.setVodYear(firstNonEmpty(c, "year", "release_year"));
+                vod.setVodArea(firstNonEmpty(c, "area"));
+                vod.setVodRemarks(firstNonEmpty(c, "remarks", "updated_at"));
+                vod.setVodTag(joinTop(c.optJSONArray("genres"), 4));
                 list.add(vod);
             }
         } catch (Exception e) {
@@ -253,14 +260,17 @@ public class Souju extends Spider {
             if (eps == null || eps.length() == 0) return p;
 
             // 只 resolve 第 1 集, 定线路名集合 (后续集不预 resolve, 播放时按集解析)
-            JSONArray firstLines = resolveM3u8Lines(eps.getJSONObject(0).optString("token", ""));
+            JSONArray firstLines = resolveAllLines(eps.getJSONObject(0).optString("token", ""));
             if (firstLines.length() == 0) return p;
 
             int n = Math.min(eps.length(), 5);
             String[] lineNames = new String[firstLines.length()];
             for (int j = 0; j < firstLines.length(); j++) {
                 JSONObject l = firstLines.getJSONObject(j);
-                String name = firstNonEmpty(l, "label", "display_label", "provider_name");
+                // 解析线路 (resolve_ticket) 加 "官方·" 前缀, 采集线路 (m3u8) 用原 label
+                String name = "resolve_ticket".equals(l.optString("url_kind", ""))
+                        ? officialLineName(l)
+                        : firstNonEmpty(l, "label", "display_label", "provider_name");
                 if (TextUtils.isEmpty(name)) name = "线路" + (j + 1);
                 lineNames[j] = name;
                 p.playFroms += (j == 0 ? "" : "$$$") + name;
@@ -294,10 +304,11 @@ public class Souju extends Spider {
     }
 
     /**
-     * resolve 一集, 返回 url_kind=m3u8 的线路 JSONArray (按 line_options 原序, 可能为空).
+     * resolve 一集, 返回全部线路 JSONArray (url_kind=m3u8 + resolve_ticket, 按 line_options 原序, 可能为空).
+     * 解析线路(resolve_ticket)和采集线路(m3u8)都要, 供 playerContent 按 flag 前缀路由.
      * 同一部片 provider 顺序对全片一致 (已实测), 仅路径段随集变化, 故第 1 集定线路名集合.
      */
-    private JSONArray resolveM3u8Lines(String episodeToken) {
+    private JSONArray resolveAllLines(String episodeToken) {
         try {
             String json = getSigned("/v1/playback/resolve/" + URLEncoder.encode(episodeToken, "UTF-8") + "?view=compact");
             if (TextUtils.isEmpty(json)) return new JSONArray();
@@ -307,7 +318,8 @@ public class Souju extends Spider {
             JSONArray out = new JSONArray();
             for (int i = 0; i < lo.length(); i++) {
                 JSONObject l = lo.getJSONObject(i);
-                if ("m3u8".equals(l.optString("url_kind", ""))) out.put(l);
+                String kind = l.optString("url_kind", "");
+                if ("m3u8".equals(kind) || "resolve_ticket".equals(kind)) out.put(l);
             }
             return out;
         } catch (Exception e) {
@@ -315,42 +327,54 @@ public class Souju extends Spider {
         }
     }
 
-    /** 按"provider_id(主) + 线路名(兜底)"在该集 m3u8 线路里定位第 idx 条 url, 找不到返回 "". */
-    private String pickM3u8Url(JSONArray allLines, int idx, String name) {
-        if (allLines == null || allLines.length() == 0) return "";
-        if (idx < 0 || idx >= allLines.length()) return "";
-        JSONObject want = null;
+    /** 官方解析线路名 (resolve_ticket), 用于 flag 前缀路由; 采集线路名 (m3u8) 无此标记. */
+    private String officialLineName(JSONObject line) {
+        String label = firstNonEmpty(line, "label", "display_label", "provider_name");
+        if (TextUtils.isEmpty(label)) label = line.optString("provider_id", "");
+        if (TextUtils.isEmpty(label)) label = "线路";
+        return "官方·" + label;
+    }
+
+    /**
+     * 把票根 (resolve_ticket) 二次解析成可播直链:
+     * POST /v1/playback/resolve-line?view=compact, body={"ticket":"<剥 resolve:// 前缀的票根>"}.
+     * 返回真 url (m3u8/mp4 直链); 票根失效/资源不可用 (404 playback_line_unavailable) 返回 "".
+     * 边界: 票根有时效, 须用当时 resolve 的新鲜票根, 缓存票根大概率 404.
+     */
+    private String postResolveLine(String rawTicket) {
+        if (TextUtils.isEmpty(rawTicket)) return "";
+        String ticket = rawTicket.startsWith("resolve://") ? rawTicket.substring(10) : rawTicket;
+        ticket = ticket.trim();
+        if (TextUtils.isEmpty(ticket)) return "";
         try {
-            want = allLines.getJSONObject(idx);
-        } catch (Exception ignored) {
+            String path = "/v1/playback/resolve-line?view=compact";
+            String ts    = String.valueOf(System.currentTimeMillis());
+            String nonce = randomNonce();
+            String sig   = signatureOf("POST", path, ts, nonce);
+            Map<String, String> h = new HashMap<>();
+            h.put("User-Agent", UA);
+            h.put("Accept", "application/json");
+            h.put("Content-Type", "application/json");
+            h.put("Referer", host + "/");
+            h.put("Origin", host);
+            h.put("x-ai-movie-client-name", CLIENT_NAME);
+            h.put("x-ai-movie-client-version", CLIENT_VERSION);
+            h.put("x-ai-movie-build-version", BUILD_VERSION);
+            h.put("x-ai-movie-protocol-version", PROTOCOL_VERSION);
+            h.put("x-ai-movie-timestamp", ts);
+            h.put("x-ai-movie-nonce", nonce);
+            h.put("x-ai-movie-signature", sig);
+            String abs = host + path;
+            String body = OkHttp.post(abs, "{\"ticket\":\"" + ticket + "\"}", h).getBody();
+            if (TextUtils.isEmpty(body)) return "";
+            JSONObject j = new JSONObject(body);
+            JSONObject line = j.optJSONObject("line");
+            if (line == null) return "";
+            return line.optString("url", "");
+        } catch (Exception e) {
+            // 404 playback_line_unavailable / 票根失效 -> 返 "", 不崩
             return "";
         }
-        String wantPid = want.optString("provider_id", "");
-        // 1) 主匹配: 按 provider_id (线路身份, 比 label 稳)
-        for (int i = 0; i < allLines.length(); i++) {
-            try {
-                JSONObject l = allLines.getJSONObject(i);
-                if ("m3u8".equals(l.optString("url_kind", ""))
-                        && wantPid.length() > 0
-                        && wantPid.equals(l.optString("provider_id", ""))) {
-                    return l.optString("url", "");
-                }
-            } catch (Exception ignored) {}
-        }
-        // 2) 兜底: 按线路名 label (线路名跨集若一致命中)
-        String wantLabel = firstNonEmpty(want, "label", "display_label", "provider_name");
-        if (wantLabel.length() > 0) {
-            for (int i = 0; i < allLines.length(); i++) {
-                try {
-                    JSONObject l = allLines.getJSONObject(i);
-                    if (!"m3u8".equals(l.optString("url_kind", ""))) continue;
-                    if (firstNonEmpty(l, "label", "display_label", "provider_name").equals(wantLabel)) {
-                        return l.optString("url", "");
-                    }
-                } catch (Exception ignored) {}
-            }
-        }
-        return "";
     }
 
     // ==================== Spider ====================
@@ -502,7 +526,7 @@ public class Souju extends Spider {
         return passthroughM3u8(url);
     }
 
-    /** 按 episodeToken 调 /v1/playback/resolve/{token}, 按线路名 flag 定位 m3u8 url, 透传返回. */
+    /** 按 episodeToken 调 /v1/playback/resolve/{token}, 按 flag 前缀路由: 官方线路解票根, 采集线路取 m3u8 url. */
     private String resolveAndReturn(String episodeToken, String flag) {
         try {
             String json = getSigned("/v1/playback/resolve/" + URLEncoder.encode(episodeToken, "UTF-8") + "?view=compact");
@@ -511,25 +535,47 @@ public class Souju extends Spider {
             JSONArray lo = j.optJSONArray("line_options");
             if (lo == null || lo.length() == 0) return Result.error("该集无可用线路");
 
-            String picked = "";
-            // 1) 按线路名 flag 匹配 (flag = vod_play_from 里的线路名, 与第 1 集 line_options 同名)
+            String targetLabel;
+            boolean isOfficial = false;
             if (flag != null && flag.length() > 0) {
+                if (flag.startsWith("官方·")) { isOfficial = true; targetLabel = flag.substring(3); }
+                else targetLabel = flag;
+            } else { targetLabel = ""; }
+
+            // 1) 按线路名匹配 (官方线路: 找 resolve_ticket; 采集线路: 找 m3u8)
+            JSONObject hit = null;
+            if (targetLabel.length() > 0) {
                 for (int i = 0; i < lo.length(); i++) {
                     JSONObject l = lo.getJSONObject(i);
-                    if (!"m3u8".equals(l.optString("url_kind", ""))) continue;
                     String nm = firstNonEmpty(l, "label", "display_label", "provider_name");
-                    if (flag.equals(nm)) { picked = l.optString("url", ""); break; }
+                    String kind = l.optString("url_kind", "");
+                    if (nm.equals(targetLabel)) {
+                        if (isOfficial && "resolve_ticket".equals(kind)) { hit = l; break; }
+                        if (!isOfficial && "m3u8".equals(kind)) { hit = l; break; }
+                    }
                 }
             }
-            // 2) 兜底: flag 未命中时取第一条 m3u8 (避免静默空)
-            if (picked.length() == 0) {
+            // 2) 兜底: 找不到目标线路名时, 按类型取第一条 (官方取 resolve_ticket, 采集取 m3u8)
+            if (hit == null) {
+                String wantKind = isOfficial ? "resolve_ticket" : "m3u8";
                 for (int i = 0; i < lo.length(); i++) {
                     JSONObject l = lo.getJSONObject(i);
-                    if ("m3u8".equals(l.optString("url_kind", ""))) { picked = l.optString("url", ""); break; }
+                    if (wantKind.equals(l.optString("url_kind", ""))) { hit = l; break; }
                 }
             }
-            if (picked.length() == 0) return Result.error("线路 " + flag + " 在该集无 m3u8 url");
-            return passthroughM3u8(picked);
+            if (hit == null) return Result.error("线路 " + flag + " 在该集无可用 url");
+
+            String url = hit.optString("url", "");
+            String kind = hit.optString("url_kind", "");
+            if ("resolve_ticket".equals(kind)) {
+                // 官方解析线路: 二次 POST 解票根拿真直链 (票根有时效, 此时用刚 resolve 的新鲜票根)
+                url = postResolveLine(url);
+                if (TextUtils.isEmpty(url)) return Result.error("线路 " + flag + " 票根解析失败 (资源不可用/票根时效)");
+                return passthroughM3u8(url);
+            }
+            // 采集线路: 直接透传 m3u8 直链
+            if (TextUtils.isEmpty(url)) return Result.error("线路 " + flag + " 在该集无 m3u8 url");
+            return passthroughM3u8(url);
         } catch (Exception e) {
             return Result.error("resolve 失败: " + e.getMessage());
         }
