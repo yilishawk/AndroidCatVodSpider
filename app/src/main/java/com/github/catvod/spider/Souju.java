@@ -481,8 +481,6 @@ public class Souju extends Spider {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Accept", "*/*");
-        headers.put("Referer", host + "/");
-        headers.put("Origin", host);
         Result r = Result.get().parse(1).url(url).header(headers);
         if ("m3u8".equals(urlKind)) r.m3u8();
         else r.octet(); // mp4/unknown -> 普通流, 不套 m3u8 格式 (消掉"源是 mp4 却标 m3u8"的格式错)
