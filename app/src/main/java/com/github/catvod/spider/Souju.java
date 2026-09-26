@@ -476,16 +476,16 @@ public class Souju extends Spider {
         }
     }
 
-    /** 直连透传给壳子 (凯哥: "解析出来的直连直接推给壳子就行").
-     *  最简透传: 只给 url + parse=1 + 按 url_kind 给 format, 不附加任何 header (UA/Accept/Origin/Referer 全不带).
-     *    壳子拿 url 自己去拉, 附加头越少越不易被 CDN 反爬 / 播放器挑解码器误导.
-     *  按 url_kind 选 format:
-     *    m3u8   -> application/x-mpegURL (壳子走 HLS)
-     *    mp4    -> application/octet-stream (普通流; 字节图床 mp4 真实响应标 image/jpeg 是源伪装,
-     *              壳子按 url 拉后自己判容器, 这里不替它改 Content-Type)
-     *    unknown-> application/octet-stream 兜底 */
+    /** 直连透传给壳子: url + 4 个请求头 (UA/Referer/Origin/Accept), parse=0 (我们已解析好, 直接推直连; 失败才用 parse=1 让壳子再解析).
+     *  按 url_kind 选 format: m3u8 -> application/x-mpegURL (壳子走 HLS); mp4/unknown -> application/octet-stream.
+     *  Origin 不带斜杠 (HTTP 规范), Referer 带 / (凯哥样例). 注: 字节图床 mp4 真实响应标 image/jpeg 是源伪装, 壳子按 url 自己判容器. */
     private String passthrough(String url, String urlKind) {
-        Result r = Result.get().parse(1).url(url);
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", UA);
+        headers.put("Referer", host + "/");
+        headers.put("Origin", host);
+        headers.put("Accept", "*/*");
+        Result r = Result.get().parse(0).url(url).header(headers);
         if ("m3u8".equals(urlKind)) r.m3u8();
         else r.octet(); // mp4/unknown -> 普通流
         return r.string();
