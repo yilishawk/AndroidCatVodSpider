@@ -476,14 +476,28 @@ public class Souju extends Spider {
         }
     }
 
-    /** 采集线路 (m3u8) 透传 + Referer/Origin/UA, parse=1. 按 url_kind 选格式: m3u8 走 m3u8(), mp4/unknown 走 octet(). */
+    /** 采集/解析线路 (m3u8/mp4) 透传给壳子, parse=1. 按 url_kind 选格式:
+     *   m3u8 -> application/x-mpegURL; mp4/unknown -> video/mp4 (octet 兜底).
+     *  注: 透传头只带 UA/Accept, 不带 Origin/Referer (实测字节图床直链不需要这两头, 删了不影响).
+     *  ★ 官方V 字节图床直链真实响应 Content-Type=image/jpeg (伪装成图片反爬), 但内容是 ftyp 视频容器.
+     *    故 mp4 线路显式把 Content-Type 头改 video/mp4, 让壳子按视频挑解码器, 不被 image/jpeg 误导.
+     *    若壳子仍不认 (看魔数而非响应头), 需真机日志定位, 这里能做的到此. */
     private String passthrough(String url, String urlKind) {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Accept", "*/*");
-        Result r = Result.get().parse(1).url(url).header(headers);
-        if ("m3u8".equals(urlKind)) r.m3u8();
-        else r.octet(); // mp4/unknown -> 普通流, 不套 m3u8 格式 (消掉"源是 mp4 却标 m3u8"的格式错)
+        String format;
+        if ("m3u8".equals(urlKind)) {
+            format = "application/x-mpegURL";
+        } else if ("mp4".equals(urlKind)) {
+            // 字节图床 mp4 直链真实响应标 image/jpeg, 显式改写为 video/mp4 给壳子
+            headers.put("Content-Type", "video/mp4");
+            format = "video/mp4";
+        } else {
+            // unknown -> 普通流兜底
+            format = "application/octet-stream";
+        }
+        Result r = Result.get().parse(1).url(url).header(headers).format(format);
         return r.string();
     }
 
