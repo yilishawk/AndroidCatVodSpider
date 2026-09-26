@@ -98,8 +98,14 @@ public class Souju extends Spider {
     //   两站 (souju2/kanju2) IP 不同, session 不跨站, 必须用 souju2 域自己的.
     //   为空时官方线路 resolve-line 会 401, 采集线路 (m3u8 直链) 不受影响.
     private static final String SESSION_COOKIE = "";
-    // ★ 懒加载 session: 优先用上面手填的 SESSION_COOKIE; 为空时试 WebView 自动拿 (需 Context + 主线程).
-    //   只取 souju2 域 .souju2.ai 下的 ai_movie_session, 拿到后缓存到这里 (首次访问后常驻, 后续秒取).
+    // ★ 兜底 cookie 整串 (凯哥 2026-09-26 从浏览器导出): ai_movie_home_address_visited_v1 + ai_movie_browser + ai_movie_session.
+    //   策略 (凯哥): 先走 WebView (ensureSession) 拿现成 session; 拿不到 -> 用这套常量兜底.
+    //   session 有时效 (ums_xxx), 失效后需重新导出. 采集线路 (m3u8) 不依赖此串.
+    private static final String COOKIE_FALLBACK =
+            "ai_movie_home_address_visited_v1=1; "
+          + "ai_movie_browser=brw_SFhUu2h-j7ZJ2AhchN8BpdrX_ck1LCjEQ71SgOCeFpA; "
+          + "ai_movie_session=ums_8HytFesALXqgVRhh3MPXBdusw3Gs1_Pe89uw8UBS2vY";
+    // ★ 懒加载 session: WebView 先拿; 拿不到 -> COOKIE_FALLBACK. 拿到/兜底后缓存到这里 (首次后常驻, 后续秒取).
     private String liveSession = "";
     private static final String SIGN_SECRET     = "f39d73aa7a6426203cdee1ef17b31d3b7ea8c23f4c59c62a3a8aa0f39ee5e79d";
 
@@ -123,20 +129,25 @@ public class Souju extends Spider {
         }
     }
 
-    /** 取官方线路要用的登录 session: 优先手填的 SESSION_COOKIE, 否则试 WebView 自动拿. */
+    /**
+     * 取官方线路要用的 cookie 整串: 策略 = 先走 WebView (ensureSession) 拿现成 cookie;
+     * 拿不到 (context 为空 / WebView 异常 / 10 秒内没种上) -> 用 COOKIE_FALLBACK 兜底.
+     * 结果缓存到 liveSession (首次后常驻, 后续秒取). 官方线路 + 搜索 POST /v1/threads 都走这里.
+     */
     private String sessionValue() {
-        if (!TextUtils.isEmpty(SESSION_COOKIE)) return SESSION_COOKIE;
         if (!TextUtils.isEmpty(liveSession)) return liveSession;
-        liveSession = ensureSession(); // 懒加载: 首次调到这里才真去 WebView 拿, 之后缓存
+        liveSession = ensureSession();      // 先 WebView 拿
+        if (TextUtils.isEmpty(liveSession)) liveSession = COOKIE_FALLBACK; // 拿不到用已有常量兜底
         return liveSession;
     }
 
     /**
-     * 用 WebView 访问 souju2 首页, 从 .souju2.ai 域 CookieManager 里拿 ai_movie_session.
+     * 用 WebView 访问 souju2 首页, 从 .souju2.ai 域 CookieManager 里拿**全部 cookie 整串**
+     * (k1=v1; k2=v2; ...), 不止 ai_movie_session, 也带 ai_movie_browser 等 (与浏览器态一致).
      * 前提: 本爬虫能在 App 里跑, 且能拿到 Context (init 传入).
-     * 边界 (诚实): 若该站"匿名访问不种 session cookie"(我实测匿名 / 与 /v1/runtime/bootstrap 都不 Set-Cookie),
-     *   则 WebView 只能拿到你手动登录态残留的 session, 首登需在 WebView 里手动登一次. 能否自动种需真机验证.
-     * 返回拿到的 ai_movie_session (ums_xxx); 拿不到返回 "" (不崩, 官方线路会 401 -> 回落采集线路).
+     * 边界 (诚实): 该站匿名访问可能不种 session cookie (实测匿名 / 与 /v1/runtime/bootstrap 都不 Set-Cookie),
+     *   则 WebView 只能拿到手动登录态残留的 cookie; 首登需在 WebView 里手动登一次. 能否自动种需真机验证.
+     * 返回拼好的整串; 拿不到返回 "" (不崩, 由 sessionValue() 回落 COOKIE_FALLBACK).
      */
     private String ensureSession() {
         if (context == null) return "";
@@ -159,16 +170,10 @@ public class Souju extends Spider {
                             public void onPageFinished(WebView view, String url) {
                                 try {
                                     CookieManager cm = CookieManager.getInstance();
-                                    // 取 souju2 域下所有 cookie, 找 ai_movie_session=ums_xxx
+                                    // 取 souju2 域下全部 cookie, 拼成 "k=v; ..." 整串 (WebView 已自动 Set-Cookie, 直接 dump)
                                     String all = cm.getCookie(host);
-                                    if (all != null) {
-                                        for (String kv : all.split(";\\s*")) {
-                                            int eq = kv.indexOf('=');
-                                            if (eq > 0 && kv.substring(0, eq).trim().equals("ai_movie_session")) {
-                                                holder[0] = kv.substring(eq + 1).trim();
-                                                break;
-                                            }
-                                        }
+                                    if (all != null && !all.trim().isEmpty()) {
+                                        holder[0] = all.trim();
                                     }
                                 } catch (Exception ignored) {}
                                 latch.countDown();
@@ -182,9 +187,9 @@ public class Souju extends Spider {
             });
             // 等页面加载完 (onPageFinished), 最多 10 秒
             latch.await(10, TimeUnit.SECONDS);
-            return TextUtils.isEmpty(holder[0]) ? "" : holder[0];
+            return holder[0];
         } catch (Exception e) {
-            // WebView/主线程不可用 -> 返空, 不崩 (官方线路 401 回落采集线路)
+            // WebView/主线程不可用 -> 返空, 不崩 (sessionValue() 回落 COOKIE_FALLBACK)
             return "";
         }
     }
@@ -440,10 +445,10 @@ public class Souju extends Spider {
             h.put("Content-Type", "application/json");
             h.put("Referer", host + "/");
             h.put("Origin", host);
-            String sess = sessionValue(); // 优先手填 SESSION_COOKIE, 否则 WebView 自动拿 (懒加载)
+            String sess = sessionValue(); // WebView 先拿, 拿不到用 COOKIE_FALLBACK (整串 cookie, 非单个 session)
             if (!TextUtils.isEmpty(sess)) {
-                // 官方线路需登录 session: ai_movie_session=ums_xxx (两站不跨, 用 souju2 域的值)
-                h.put("Cookie", "ai_movie_session=" + sess);
+                // 官方线路需登录态: 整串透传 (含 ai_movie_session=ums_xxx + ai_movie_browser 等, 两站不跨)
+                h.put("Cookie", sess);
             }
             h.put("x-ai-movie-client-name", CLIENT_NAME);
             h.put("x-ai-movie-client-version", CLIENT_VERSION);
@@ -482,6 +487,109 @@ public class Souju extends Spider {
         if ("m3u8".equals(urlKind)) r.m3u8();
         else r.octet(); // mp4/unknown -> 普通流, 不套 m3u8 格式 (消掉"源是 mp4 却标 m3u8"的格式错)
         return r.string();
+    }
+
+    /** JSON 字符串转义 (中文 key/value 拼 body 用, 避免引号/反斜杠破坏 body). */
+    private static String jsonEscape(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:   sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 带签名的 POST (JSON body). 签名串与 GET 同公式: METHOD\npath+query\ntimestamp\nnonce,
+     * 但路径用 **不带 query 的 path** (实测 resolve-line POST 按 view 参数分开签, 这里 body 走 JSON 不走 query).
+     * 返回 JSON 字符串, 失败返 "". 7 个 x-ai-movie-* 头与 GET 相同.
+     */
+    private String postSigned(String path, String jsonBody) {
+        try {
+            String ts    = String.valueOf(System.currentTimeMillis());
+            String nonce = randomNonce();
+            String sig   = signatureOf("POST", path, ts, nonce);
+            Map<String, String> h = new HashMap<>();
+            h.put("User-Agent", UA);
+            h.put("Accept", "application/json");
+            h.put("Content-Type", "application/json");
+            h.put("Referer", host + "/");
+            h.put("Origin", host);
+            h.put("x-ai-movie-client-name", CLIENT_NAME);
+            h.put("x-ai-movie-client-version", CLIENT_VERSION);
+            h.put("x-ai-movie-build-version", BUILD_VERSION);
+            h.put("x-ai-movie-protocol-version", PROTOCOL_VERSION);
+            h.put("x-ai-movie-timestamp", ts);
+            h.put("x-ai-movie-nonce", nonce);
+            h.put("x-ai-movie-signature", sig);
+            String body = OkHttp.post(host + path, jsonBody, h).getBody();
+            return body == null ? "" : body;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * 搜索第 1 步: POST /v1/threads 起一个搜索线程, 返回 thread_id (at_xxx). 拿不到返 "".
+     * 抓包权威协议 (凯哥 2026-09-26):
+     *   body = {"title":"<key>","metadata":{"search_fields":"all","search_scope_label":"综合",
+     *           "search_mode":"fast","source":"movie_composer_route","submission_id":"<uuid>"}}
+     *   返回 = {"id":"at_xxx","object":"thread"}
+     * 注: 每次搜索都要新起 thread (thread_id 有时效, 换词即废), 不缓存.
+     */
+    private String openSearchThread(String key) {
+        if (TextUtils.isEmpty(key)) return "";
+        String k = jsonEscape(key.trim());
+        String subId = "souju2-" + System.currentTimeMillis() + "-" + (int) (Math.random() * 0xFFFFFF);
+        String body = "{\"title\":\"" + k
+                + "\",\"metadata\":{\"search_fields\":\"all\",\"search_scope_label\":\"综合\""
+                + ",\"search_mode\":\"fast\",\"source\":\"movie_composer_route\""
+                + ",\"submission_id\":\"" + subId + "\"}}";
+        String json = postSigned("/v1/threads", body);
+        if (TextUtils.isEmpty(json)) return "";
+        try {
+            JSONObject j = new JSONObject(json);
+            // 线程对象 = {"id":"at_xxx","object":"thread"}, id 字段即 thread_id
+            String tid = j.optString("id", "");
+            if (TextUtils.isEmpty(tid)) tid = j.optString("thread_id", "");
+            return tid;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * 搜索第 2 步: GET /v1/browse/catalog?query_mode=fast_v3&thread_id=<at>&search_fields=all&q=<key>
+     * 返回的 cards[] 结构与 browse 完全一致 (id/title/poster_url/genres/year/area...), 直接 parseCards.
+     * 翻页: 本步带 thread_id 复用同一搜索线程; 抓包 response 里有 continuation.response_id (ar_xxx),
+     *   多页翻页机制 (游标) 未探明, 暂按"每页带 thread_id + page"实现, 真机确认游标后再优化.
+     */
+    private List<Vod> browseByThread(String key, int page) {
+        String tid = openSearchThread(key);
+        if (TextUtils.isEmpty(tid)) return new ArrayList<>();
+        String qEnc;
+        try {
+            qEnc = URLEncoder.encode(key, "UTF-8");
+        } catch (Exception e) {
+            qEnc = key;
+        }
+        String query = "?query_mode=fast_v3&thread_id=" + tid + "&search_fields=all&limit=20"
+                + "&page=" + page + "&q=" + qEnc;
+        String json = getSigned("/v1/browse/catalog" + query);
+        if (TextUtils.isEmpty(json)) return new ArrayList<>();
+        try {
+            return parseCards(new JSONObject(json));
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
     }
 
     /** 旧版兼容: 直链透传 (无 url_kind 时默认 m3u8). */
@@ -609,13 +717,25 @@ public class Souju extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) {
-        // 边界: 搜索端点未探明 (被签名挡), 不臆造, 诚实返回空。
-        return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+        // 搜索两步协议 (凯哥 2026-09-26 抓包): POST /v1/threads 起线程 -> GET /v1/browse/catalog?thread_id=...
+        // 第 1 页; 翻页见带 pg 的重载. 拿不到 thread / 无结果 -> 诚实空列表, 不崩.
+        if (TextUtils.isEmpty(key)) return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+        List<Vod> vods = browseByThread(key, 1);
+        int total = 0; // 搜索响应 continuation 未暴露总页数, 保持 0 -> 调用方按 hasNext 判断
+        int next = vods.isEmpty() ? 1 : 2;
+        return Result.get().vod(vods).page(1, next, vods.size(), total).string();
     }
 
     @Override
     public String searchContent(String key, boolean quick, String pg) {
-        return searchContent(key, quick);
+        // 多页搜索: 每次都重新 POST /v1/threads 起新线程 (thread_id 有时效, 换词即废), 带 page 取该页.
+        // 翻页机制 (是否用 continuation.response_id 游标) 真机确认后再优化, 暂按 page 数字.
+        if (TextUtils.isEmpty(key)) return Result.get().vod(new ArrayList<>()).page(1, 1, 0, 0).string();
+        int page = TextUtils.isEmpty(pg) ? 1 : Integer.parseInt(pg);
+        List<Vod> vods = browseByThread(key, page);
+        int total = 0;
+        int next = vods.isEmpty() ? page : page + 1;
+        return Result.get().vod(vods).page(page, next, vods.size(), total).string();
     }
 
     @Override
