@@ -476,28 +476,18 @@ public class Souju extends Spider {
         }
     }
 
-    /** 采集/解析线路 (m3u8/mp4) 透传给壳子, parse=1. 按 url_kind 选格式:
-     *   m3u8 -> application/x-mpegURL; mp4/unknown -> video/mp4 (octet 兜底).
-     *  注: 透传头只带 UA/Accept, 不带 Origin/Referer (实测字节图床直链不需要这两头, 删了不影响).
-     *  ★ 官方V 字节图床直链真实响应 Content-Type=image/jpeg (伪装成图片反爬), 但内容是 ftyp 视频容器.
-     *    故 mp4 线路显式把 Content-Type 头改 video/mp4, 让壳子按视频挑解码器, 不被 image/jpeg 误导.
-     *    若壳子仍不认 (看魔数而非响应头), 需真机日志定位, 这里能做的到此. */
+    /** 直连透传给壳子 (凯哥: "解析出来的直连直接推给壳子就行").
+     *  最简透传: 只给 url + parse=1 + 按 url_kind 给 format, 不附加任何 header (UA/Accept/Origin/Referer 全不带).
+     *    壳子拿 url 自己去拉, 附加头越少越不易被 CDN 反爬 / 播放器挑解码器误导.
+     *  按 url_kind 选 format:
+     *    m3u8   -> application/x-mpegURL (壳子走 HLS)
+     *    mp4    -> application/octet-stream (普通流; 字节图床 mp4 真实响应标 image/jpeg 是源伪装,
+     *              壳子按 url 拉后自己判容器, 这里不替它改 Content-Type)
+     *    unknown-> application/octet-stream 兜底 */
     private String passthrough(String url, String urlKind) {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", UA);
-        headers.put("Accept", "*/*");
-        String format;
-        if ("m3u8".equals(urlKind)) {
-            format = "application/x-mpegURL";
-        } else if ("mp4".equals(urlKind)) {
-            // 字节图床 mp4 直链真实响应标 image/jpeg, 显式改写为 video/mp4 给壳子
-            headers.put("Content-Type", "video/mp4");
-            format = "video/mp4";
-        } else {
-            // unknown -> 普通流兜底
-            format = "application/octet-stream";
-        }
-        Result r = Result.get().parse(1).url(url).header(headers).format(format);
+        Result r = Result.get().parse(1).url(url);
+        if ("m3u8".equals(urlKind)) r.m3u8();
+        else r.octet(); // mp4/unknown -> 普通流
         return r.string();
     }
 
