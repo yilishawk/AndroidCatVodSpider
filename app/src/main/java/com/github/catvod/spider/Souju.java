@@ -340,7 +340,7 @@ public class Souju extends Spider {
         PlayPlan p = new PlayPlan();
         try {
             String epJson = getSigned("/v1/catalog/" + URLEncoder.encode(catalogId, "UTF-8")
-                    + "/episodes?limit=48&offset=0");
+                    + "/episodes?limit=200&offset=0");
             if (TextUtils.isEmpty(epJson)) return p;
             JSONObject epj = new JSONObject(epJson);
             JSONArray eps = epj.optJSONArray("episodes");
@@ -350,7 +350,8 @@ public class Souju extends Spider {
             JSONArray firstLines = resolveAllLines(eps.getJSONObject(0).optString("token", ""));
             if (firstLines.length() == 0) return p;
 
-            int n = Math.min(eps.length(), 5);
+            // 全片集数 (设计: 播放哪集才 resolve 哪集, detail 不预 resolve, 故全片列进去不增加请求量)
+            int n = eps.length();
             String[] lineNames = new String[firstLines.length()];
             for (int j = 0; j < firstLines.length(); j++) {
                 JSONObject l = firstLines.getJSONObject(j);
@@ -476,14 +477,13 @@ public class Souju extends Spider {
         }
     }
 
-    /** 直连透传给壳子: url + 4 个请求头 (UA/Referer/Origin/Accept), parse=0 (我们已解析好, 直接推直连; 失败才用 parse=1 让壳子再解析).
-     *  按 url_kind 选 format: m3u8 -> application/x-mpegURL (壳子走 HLS); mp4/unknown -> application/octet-stream.
-     *  Origin 不带斜杠 (HTTP 规范), Referer 带 / (凯哥样例). 注: 字节图床 mp4 真实响应标 image/jpeg 是源伪装, 壳子按 url 自己判容器. */
+    /** 直连透传给壳子: url + 2 个请求头 (UA/Accept), parse=0 (我们已解析好, 直接推直连; 失败才用 parse=1 让壳子再解析).
+     *  不带 Referer/Origin (凯哥: 去掉这两头, 直连干净透传). 按 url_kind 选 format:
+     *    m3u8 -> application/x-mpegURL (壳子走 HLS); mp4/unknown -> application/octet-stream.
+     *  注: 字节图床 mp4 真实响应标 image/jpeg 是源伪装, 壳子按 url 自己判容器. */
     private String passthrough(String url, String urlKind) {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
-    // headers.put("Referer", host + "/");
-        headers.put("Origin", host);
         headers.put("Accept", "*/*");
         Result r = Result.get().parse(0).url(url).header(headers);
         if ("m3u8".equals(urlKind)) r.m3u8();
