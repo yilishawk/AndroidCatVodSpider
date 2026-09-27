@@ -112,12 +112,16 @@ public class Souju extends Spider {
     private static final String UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 
-    // 类型映射: tid -> kind (browse 已实测 series; movie/anime 未验证, 按站点语义推测)
+    // 类型映射: tid -> kind (实测 2026-09-27 带 cookie+签名: short/variety/documentary 全 200 有卡;
+    //   series 站点不分国家, "国产新剧" 走 series, 美剧/韩剧/续看 依赖登录进度, 匿名爬虫拿不到, 不列).
     private static final Map<String, String> TID_TO_KIND = new HashMap<>();
     static {
         TID_TO_KIND.put("1", "movie");
         TID_TO_KIND.put("2", "series");
         TID_TO_KIND.put("bangumi", "anime");
+        TID_TO_KIND.put("short", "short");       // 短剧 (站点真实 kind, 实测有卡)
+        TID_TO_KIND.put("variety", "variety");   // 综艺 (站点真实 kind, 实测有卡)
+        TID_TO_KIND.put("documentary", "documentary"); // 纪录片 (站点真实 kind, 实测有卡)
     }
 
     @Override
@@ -604,9 +608,12 @@ public class Souju extends Spider {
     @Override
     public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
+        classes.add(new Class("1", "电影"));
         classes.add(new Class("bangumi", "番剧"));
+        classes.add(new Class("short", "短剧"));
+        classes.add(new Class("variety", "综艺"));
+        classes.add(new Class("documentary", "纪录片"));
 
         // 首页 = 默认分类第 1 页 (browse)
         List<Vod> vods = browse("2", "series", 1, 20);
