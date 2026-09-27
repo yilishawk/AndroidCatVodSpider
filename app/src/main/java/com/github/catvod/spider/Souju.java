@@ -124,6 +124,13 @@ public class Souju extends Spider {
         TID_TO_KIND.put("documentary", "documentary");   // 纪录片 (站点真实 kind, 实测有卡)
     }
 
+    /** 地区榜 (hot_list_key 维度, 独立于 kind). 凯哥抓包 2026-09-28 实测三 key 全 200 有卡:
+     *   tv_domestic=国产剧 (深渊无间...) / tv_american=美剧 (流人第6季...) / tv_korean=韩剧 (现在不是出轨的问题...)
+     * 这些 tid 不走 kind, 走 hot_list_key 参数 (见 browse). */
+    private static final java.util.Set<String> HOT_LIST_KEYS =
+            java.util.Collections.unmodifiableSet(new java.util.HashSet<>(java.util.Arrays.asList(
+                    "tv_domestic", "tv_american", "tv_korean")));
+
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
@@ -608,12 +615,15 @@ public class Souju extends Spider {
     @Override
     public String homeContent(boolean filter) {
         List<Class> classes = new ArrayList<>();
+        classes.add(new Class("tv_domestic", "国产剧"));
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
         classes.add(new Class("bangumi", "番剧"));
         classes.add(new Class("short_drama", "短剧"));
         classes.add(new Class("variety", "综艺"));
         classes.add(new Class("documentary", "纪录片"));
+        classes.add(new Class("tv_american", "美剧"));
+        classes.add(new Class("tv_korean", "韩剧"));
 
         // 首页 = 默认分类第 1 页 (browse)
         List<Vod> vods = browse("2", "series", 1, 20);
@@ -640,18 +650,35 @@ public class Souju extends Spider {
                 .string();
     }
 
-    /** 核心抓取: 带签名 GET /v1/browse/catalog, 解析 cards[] -> List<Vod> */
+    /**
+     * 核心抓取: 带签名 GET /v1/browse/catalog, 解析 cards[] -> List<Vod>
+     *
+     * 两个独立维度 (凯哥抓包):
+     *   kind         -> 电影/电视剧/番剧/短剧/综艺/纪录片 ... (按内容类型)
+     *   hot_list_key -> tv_domestic/tv_american/tv_korean (按地区, 卡片结构与 kind 完全一致)
+     * 命中 HOT_LIST_KEYS 的 tid 走 hot_list_key 参数, 否则走 kind 参数。
+     */
     private List<Vod> browse(String tid, String kind, int page, int limit) {
         String path = "/v1/browse/catalog";
-        String kindEncoded;
-        try {
-            kindEncoded = URLEncoder.encode(kind, "UTF-8");
-        } catch (Exception e) {
-            kindEncoded = kind; // 兜底: 编码异常时透传原 kind (kind 实际是 series/movie/anime 英文, 无需编码)
+
+        String query;
+        if (HOT_LIST_KEYS.contains(tid)) {
+            // 地区榜: 不带 kind, 用 hot_list_key 指定地区 (实测三个 key 全 200 有卡)
+            query = "?sort=trending&window=day&page=" + page
+                    + "&limit=" + limit + "&hot_list_key=" + tid
+                    + "&offset=" + (page - 1) * limit;
+        } else {
+            String kindEncoded;
+            try {
+                kindEncoded = URLEncoder.encode(kind, "UTF-8");
+            } catch (Exception e) {
+                kindEncoded = kind; // 兜底: 编码异常时透传原 kind (kind 实际是 series/movie 等英文, 无需编码)
+            }
+            query = "?sort=trending&window=day&page=" + page
+                    + "&limit=" + limit + "&kind=" + kindEncoded
+                    + "&offset=" + (page - 1) * limit;
         }
-        String query = "?sort=trending&window=day&page=" + page
-                + "&limit=" + limit + "&kind=" + kindEncoded
-                + "&offset=" + (page - 1) * limit;
+
         String fullPath = path + query;
         String json = getSigned(fullPath);
         if (TextUtils.isEmpty(json)) return new ArrayList<>();
