@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 public class Vanale extends Spider {
 
-    private static final String HOST = "https://a.v-anale.best";
+    private static final String HOST = "https://b.v-anale.best";
     
     // 1. 添加密码门禁状态变量
     private boolean unlocked = false;
