@@ -490,10 +490,28 @@ public class Avdb extends Spider {
         if (dollar >= 0 && dollar < url.length() - 1) url = url.substring(dollar + 1);
         url = extractPlayUrl(url);
 
+        // ★ 修改 4 (2026-09-29): Origin/Referer 按推出去 URL 的真实 host 生成.
+        // 直连型 link_embed -> stream27.com 等; upload18 型 -> helvid.com.
+        // 之前写死 host (avdbapi.com) 会让真地址的 Referer 域对不上, 服务端校验可能 403.
+        String origin = host;
+        String referer = host + "/";
+        if (!TextUtils.isEmpty(url) && url.startsWith("http")) {
+            try {
+                java.net.URL u = new java.net.URL(url);
+                String proto = u.getProtocol();
+                String hst = u.getHost();
+                if (!TextUtils.isEmpty(hst)) {
+                    origin = proto + "://" + hst;
+                    referer = origin + "/";
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
-        h.put("Referer", host + "/");
-        h.put("Origin", host);
+        h.put("Referer", referer);
+        h.put("Origin", origin);
         h.put("Accept", "*/*");
 
         return Result.get().parse(0).url(url).header(h).string();
