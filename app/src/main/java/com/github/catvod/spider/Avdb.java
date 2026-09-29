@@ -19,6 +19,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * AVDB API (avdbapi.com) + PasswordGate 门禁
@@ -54,7 +56,7 @@ public class Avdb extends Spider {
         super.init(context, extend);
 
         if (!TextUtils.isEmpty(extend) && extend.trim().startsWith("http")) {
-            String e = extend.trim().replaceAll("/$", "");
+            String e = extend.trim().replaceAll("/+$", "");
             if (e.contains("api.php")) {
                 api = e;
                 int i = e.indexOf("/api.php");
@@ -118,6 +120,20 @@ public class Avdb extends Spider {
         return "";
     }
 
+    /**
+     * ★ 修改 1 (2026-09-29, 凯哥拍板):
+     * 原代码取 strField(o, "year"), 但 avdbapi 实测 "year" 字段是脏数据 ("2 May, 202" 这种截断值, 不是 4 位年份),
+     * 真年份在 vod_pubdate ("2 May, 2025"). 改成优先 vod_pubdate, 正则抽 4 位.
+     * 影响面: 列表/详情里年份列 + 筛选 "年份" 的传参. 回退: 把 yearOf 调用点改回 strField(o, "year") 即可.
+     */
+    private static final Pattern YEAR_4_RE = Pattern.compile("(19|20)\\d{2}");
+    private String yearOf(JSONObject o) {
+        String raw = strField(o, "vod_pubdate", "created_at", "year");
+        if (TextUtils.isEmpty(raw)) return "";
+        Matcher m = YEAR_4_RE.matcher(raw);
+        return m.find() ? m.group() : "";
+    }
+
     private JSONObject apiGet(String query) {
         String body = get(api + (query.startsWith("?") ? query : "?" + query));
         if (TextUtils.isEmpty(body)) return null;
@@ -148,7 +164,7 @@ public class Avdb extends Spider {
                 String code = strField(o, "movie_code");
                 String typeName = strField(o, "type_name");
                 String quality = strField(o, "quality");
-                String year = strField(o, "year");
+                String year = yearOf(o);   // ★ 修改 1: 走 yearOf (vod_pubdate 优先)
 
                 StringBuilder remark = new StringBuilder();
                 if (!TextUtils.isEmpty(code)) remark.append(code);
@@ -244,6 +260,7 @@ public class Avdb extends Spider {
         }
     }
 
+    /** 从 link_embed 解出 ?s=<encoded> 里的真 m3u8 url */
     private String extractPlayUrl(String link) {
         if (TextUtils.isEmpty(link)) return link;
         try {
@@ -379,7 +396,7 @@ public class Avdb extends Spider {
         vod.setVodId(String.valueOf(o.opt("id")));
         vod.setVodName(strField(o, "name", "origin_name"));
         vod.setVodPic(strField(o, "poster_url", "thumb_url"));
-        vod.setVodYear(strField(o, "year"));
+        vod.setVodYear(yearOf(o));                          // ★ 修改 1: 走 yearOf
         vod.setVodArea(strField(o, "country"));
         vod.setVodActor(strField(o, "actor"));
         vod.setVodDirector(strField(o, "director"));
@@ -413,6 +430,13 @@ public class Avdb extends Spider {
         return Result.get().vod(list).page(page, pagecount, PAGE_SIZE, total).string();
     }
 
+    /**
+     * ★ 修改 2 (2026-09-29, 凯哥拍板):
+     * 原代码有 "if (url.contains(\"avdbapi.com/player\")) parse(1) 分支" — 死代码:
+     * extractPlayUrl 已经把 ?s= 解掉, url 此时是 stream 域名 (如 avdb.stream27.com/.../playlist.m3u8),
+     * 不可能再含 "avdbapi.com/player". 且 player/?s= 被 Cloudflare 拦 403, parse(1) 嗅探也出不了.
+     * 改成恒 parse(0) 直连透传. 回退: 把 parse(0) 改回 parse(1) 即可.
+     */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (!unlocked) return Result.get().url("").string();
@@ -429,9 +453,6 @@ public class Avdb extends Spider {
         h.put("Origin", host);
         h.put("Accept", "*/*");
 
-        if (url.contains("avdbapi.com/player")) {
-            return Result.get().parse(1).url(url).header(h).string();
-        }
         return Result.get().parse(0).url(url).header(h).string();
     }
 }
