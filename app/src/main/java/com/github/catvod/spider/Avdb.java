@@ -275,7 +275,50 @@ public class Avdb extends Spider {
             }
         } catch (Exception ignored) {
         }
+        // ★ 修改 3 (2026-09-29): upload18 播放页型 link_embed 没有 ?s=, 上面直接 return link.
+        // 这里识别 upload18 域, 走二级解析抠 PLAYER_CONFIG.m3u8; 抠不到则原样返回 link_embed 让壳子嗅探兜底.
+        try {
+            String hostName = new java.net.URL(link).getHost().toLowerCase();
+            if (hostName.endsWith("upload18.org") || hostName.equals("upload18.cc")
+                    || hostName.equals("upload18.com")) {
+                String m3u8 = extractM3u8FromUpload18(link);
+                if (!TextUtils.isEmpty(m3u8)) return m3u8;
+            }
+        } catch (Exception ignored) {
+        }
         return link;
+    }
+
+    /**
+     * ★ 修改 3 (2026-09-29): upload18 播放页二级解析
+     * 服务端把真 m3u8 (helvid.com/m/<base64>?e=&h=&s=&x=&d=&i=&v=&k=) 明文挂在
+     * window.PLAYER_CONFIG.m3u8, 前端 u18_*.js 只是透传 + worker 轮换 (_wd/_rt), 不加密.
+     * 所以纯 Java GET 一次播放页 HTML, 正则抠出 "m3u8":"..." 即可.
+     * 注意: JSON 里的 "/" 是 "\/" 形式, 抠出来要 replace("\\/", "/").
+     * 代价: URL 带 e= (epoch 秒, 短 TTL), 过期需重取. 壳子侧若发现 403/404 应再次调用 playerContent.
+     */
+    private static final Pattern U18_M3U8_RE =
+            Pattern.compile("\"m3u8\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*?)\"");
+
+    private String extractM3u8FromUpload18(String playPageUrl) {
+        if (TextUtils.isEmpty(playPageUrl)) return "";
+        try {
+            Map<String, String> h = new HashMap<>();
+            h.put("User-Agent", UA);
+            h.put("Referer", playPageUrl);
+            h.put("Origin", "https://" + new java.net.URL(playPageUrl).getHost());
+            h.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            h.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+            String html = OkHttp.string(playPageUrl, h);
+            if (TextUtils.isEmpty(html)) return "";
+            Matcher m = U18_M3U8_RE.matcher(html);
+            if (m.find()) {
+                String v = m.group(1).replace("\\/", "/");
+                if (v.startsWith("http")) return v;
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
     }
 
     private List<Class> parseClasses(JSONObject j) {
