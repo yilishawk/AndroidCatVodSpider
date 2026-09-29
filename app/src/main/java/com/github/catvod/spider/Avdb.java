@@ -510,8 +510,8 @@ public class Avdb extends Spider {
 
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
-        h.put("Referer", referer);
-        h.put("Origin", origin);
+        h.put("Referer","https://upload18.org/");
+        h.put("Origin", "https://upload18.org/");
         h.put("Accept", "*/*");
 
         return Result.get().parse(0).url(url).header(h).string();
