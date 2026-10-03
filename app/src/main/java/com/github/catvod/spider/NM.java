@@ -2,14 +2,12 @@ package com.github.catvod.spider;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-
 import okhttp3.Headers;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -26,8 +24,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 农民影视
+ * 农民影视 / 旺旺影视
  * - 筛选从列表页动态解析（类型/地区/年份/排序）
+ * - 详情页拿到的地址就是真实地址，直接推送给壳子（parse=0）
  * - parse=0 不带 Referer，带 Origin
  * - 返回壳子的 URL 对汉字做 percent-encode
  */
@@ -219,7 +218,6 @@ public class NM extends Spider {
             String classId = extend.containsKey("class") ? extend.get("class") : "0";
             String year = extend.containsKey("year") ? extend.get("year") : "0";
             String area = extend.containsKey("area") ? extend.get("area") : "";
-
             if (order == null || order.isEmpty()) order = "time";
             if (classId == null || classId.isEmpty()) classId = "0";
             if (year == null || year.isEmpty()) year = "0";
@@ -227,7 +225,6 @@ public class NM extends Spider {
 
             String classParam = "0";
             String listId = !"0".equals(classId) ? classId : tid;
-
             String yearPart = "0".equals(year) ? "--" : "-" + year;
             String areaPart;
             if (area.isEmpty()) {
@@ -444,8 +441,8 @@ public class NM extends Spider {
             Document doc = Jsoup.parse(html);
             Elements items = doc.select("ul#data_list li");
             if (items.isEmpty()) items = doc.select("ul.ulPicTxt li");
-
             JSONArray videoList = new JSONArray();
+
             for (Element li : items) {
                 Element titleEl = li.selectFirst(".txt .sTit");
                 if (titleEl == null) titleEl = li.selectFirst("a[title]");
@@ -506,6 +503,12 @@ public class NM extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         try {
+            // 详情页拿到的地址就是真实地址，直接推送给壳子（parse=0）
+            if (id != null && (id.startsWith("http") || id.contains(".m3u8") || id.contains(".mp4") || id.contains(".flv") || id.contains(".ts"))) {
+                return successPlayerResult(id);
+            }
+
+            // 兼容旧逻辑（如果还有加密串需要走 API）
             if (id != null && !id.contains("http") && !id.contains("$") && !id.contains("?")) {
                 String apiUrl = apiHost + "/player/?url=" + id;
                 String res = fetch(apiUrl);
@@ -519,47 +522,21 @@ public class NM extends Spider {
                     return successPlayerResult(iframeMatcher.group(1));
                 }
             } else {
+                // 兼容旧播放页逻辑（极少情况）
                 String playUrl = id.startsWith("http") ? id : siteUrl + id;
                 String html = fetch(playUrl);
                 Matcher macUrlMatcher = Pattern.compile("mac_url\\s*=\\s*'([^']+)'").matcher(html);
-                if (!macUrlMatcher.find()) {
-                    return fallbackToParse(playUrl);
-                }
-                String macUrl = macUrlMatcher.group(1);
-                int currentNum = 1;
-                Matcher numMatcher = Pattern.compile("-num-(\\d+)\\.html").matcher(playUrl);
-                if (numMatcher.find()) currentNum = Integer.parseInt(numMatcher.group(1));
-
-                String targetEncrypted = null;
-                String[] lines = macUrl.split("\\$\\$\\$");
-                for (String line : lines) {
-                    String[] parts = line.split("#");
+                if (macUrlMatcher.find()) {
+                    String macUrl = macUrlMatcher.group(1);
+                    // 直接取第一个真实地址返回
+                    String[] parts = macUrl.split("#");
                     for (String part : parts) {
-                        Matcher m = Pattern.compile("第(\\d+)集\\$(.*)").matcher(part);
-                        if (m.find() && Integer.parseInt(m.group(1)) == currentNum) {
-                            targetEncrypted = m.group(2);
-                            break;
+                        if (part.contains("$")) {
+                            String real = part.substring(part.indexOf('$') + 1).trim();
+                            if (real.startsWith("http")) {
+                                return successPlayerResult(real);
+                            }
                         }
-                    }
-                    if (targetEncrypted != null) break;
-                }
-                if (targetEncrypted == null) {
-                    Pattern p = Pattern.compile("第" + currentNum + "集\\$(.*?)(?=#|$)");
-                    for (String line : lines) {
-                        Matcher m = p.matcher(line);
-                        if (m.find()) {
-                            targetEncrypted = m.group(1);
-                            break;
-                        }
-                    }
-                }
-                if (targetEncrypted != null && !targetEncrypted.isEmpty()) {
-                    String apiUrl = apiHost + "/player/?url=" + targetEncrypted;
-                    String apiRes = fetch(apiUrl);
-                    Matcher urlMatcher = Pattern.compile("\"url\":\\s*\"([^\"]+)\"").matcher(apiRes);
-                    if (urlMatcher.find()) {
-                        String realUrl = urlMatcher.group(1).replace("\\u0026", "&");
-                        return successPlayerResult(realUrl);
                     }
                 }
             }
