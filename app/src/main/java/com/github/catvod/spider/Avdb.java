@@ -216,9 +216,10 @@ public class Avdb extends Spider {
                             String link = one.optString("link_embed", "");
                             if (TextUtils.isEmpty(link)) link = one.optString("link", "");
                             if (TextUtils.isEmpty(link)) continue;
-                            String play = extractPlayUrl(link);
+                            // ★ 修改 5 (2026-10-09, 凯哥拍板): 不在 spider 内解析真地址,
+                            // 直接把播放页链接交给壳子嗅探. 故此处存 link, 不再 extractPlayUrl(link).
                             String title = TextUtils.isEmpty(key) ? "正片" : key;
-                            eps.add(title + "$" + play);
+                            eps.add(title + "$" + link);
                         }
                     }
                     if (!eps.isEmpty()) {
@@ -242,8 +243,10 @@ public class Avdb extends Spider {
                         JSONObject one = data.optJSONObject(key);
                         if (one == null) continue;
                         String link = one.optString("link_embed", "");
+                        if (TextUtils.isEmpty(link)) link = one.optString("link", "");
                         if (TextUtils.isEmpty(link)) continue;
-                        eps.add(key + "$" + extractPlayUrl(link));
+                        // ★ 修改 5 (2026-10-09, 凯哥拍板): 同上, 存播放页链接, 不解析真地址.
+                        eps.add(key + "$" + link);
                     }
                     if (!eps.isEmpty()) {
                         froms.add(serverName);
@@ -260,7 +263,11 @@ public class Avdb extends Spider {
         }
     }
 
-    /** 从 link_embed 解出 ?s=<encoded> 里的真 m3u8 url */
+    /**
+     * 以下两个方法 (extractPlayUrl / extractM3u8FromUpload18) 在【播放路径】上已不再调用:
+     * 2026-10-09 起改为把播放页直接推给壳子嗅探 (见 playerContent). 保留以免误删,
+     * 若日后要回退到 "spider 内解析真地址", 恢复 fillPlay / playerContent 里的 extractPlayUrl 调用即可.
+     */
     private String extractPlayUrl(String link) {
         if (TextUtils.isEmpty(link)) return link;
         try {
@@ -275,8 +282,6 @@ public class Avdb extends Spider {
             }
         } catch (Exception ignored) {
         }
-        // ★ 修改 3 (2026-09-29): upload18 播放页型 link_embed 没有 ?s=, 上面直接 return link.
-        // 这里识别 upload18 域, 走二级解析抠 PLAYER_CONFIG.m3u8; 抠不到则原样返回 link_embed 让壳子嗅探兜底.
         try {
             String hostName = new java.net.URL(link).getHost().toLowerCase();
             if (hostName.endsWith("upload18.org") || hostName.equals("upload18.cc")
@@ -289,14 +294,6 @@ public class Avdb extends Spider {
         return link;
     }
 
-    /**
-     * ★ 修改 3 (2026-09-29): upload18 播放页二级解析
-     * 服务端把真 m3u8 (helvid.com/m/<base64>?e=&h=&s=&x=&d=&i=&v=&k=) 明文挂在
-     * window.PLAYER_CONFIG.m3u8, 前端 u18_*.js 只是透传 + worker 轮换 (_wd/_rt), 不加密.
-     * 所以纯 Java GET 一次播放页 HTML, 正则抠出 "m3u8":"..." 即可.
-     * 注意: JSON 里的 "/" 是 "\/" 形式, 抠出来要 replace("\\/", "/").
-     * 代价: URL 带 e= (epoch 秒, 短 TTL), 过期需重取. 壳子侧若发现 403/404 应再次调用 playerContent.
-     */
     private static final Pattern U18_M3U8_RE =
             Pattern.compile("\"m3u8\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*?)\"");
 
@@ -474,25 +471,24 @@ public class Avdb extends Spider {
     }
 
     /**
-     * ★ 修改 2 (2026-09-29, 凯哥拍板):
-     * 原代码有 "if (url.contains(\"avdbapi.com/player\")) parse(1) 分支" — 死代码:
-     * extractPlayUrl 已经把 ?s= 解掉, url 此时是 stream 域名 (如 avdb.stream27.com/.../playlist.m3u8),
-     * 不可能再含 "avdbapi.com/player". 且 player/?s= 被 Cloudflare 拦 403, parse(1) 嗅探也出不了.
-     * 改成恒 parse(0) 直连透传. 回退: 把 parse(0) 改回 parse(1) 即可.
+     * ★ 修改 5 (2026-10-09, 凯哥拍板): 不在 spider 内解析真地址, 直接把播放页推给壳子嗅探.
+     *   - 去掉 extractPlayUrl(url): url 保持为播放页链接 (link_embed / link), 不解出 m3u8.
+     *   - 去掉写死的 "https://upload18.org/" Referer/Origin: 改成按播放页链接自身的域名生成,
+     *     域对得上, 壳子嗅探时才不会因 Referer/Origin 不匹配被服务端 403.
+     *   - 返回 parse(1): 告诉壳子"这是播放页, 你嗅探去", 由壳子 (WebView/嗅探器) 解出真地址.
+     * 回退: 恢复 url = extractPlayUrl(url), 并把 parse(1) 改回 parse(0) 即可.
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (!unlocked) return Result.get().url("").string();
         if (TextUtils.isEmpty(id)) return Result.error("播放地址为空");
 
+        // id 形如 "标题$播放页链接"; 取 $ 后的播放页链接, 不在 spider 内解析真地址
         String url = id;
         int dollar = url.indexOf('$');
         if (dollar >= 0 && dollar < url.length() - 1) url = url.substring(dollar + 1);
-        url = extractPlayUrl(url);
 
-        // ★ 修改 4 (2026-09-29): Origin/Referer 按推出去 URL 的真实 host 生成.
-        // 直连型 link_embed -> stream27.com 等; upload18 型 -> helvid.com.
-        // 之前写死 host (avdbapi.com) 会让真地址的 Referer 域对不上, 服务端校验可能 403.
+        // Referer / Origin 取播放页链接自身的域名, 让壳子嗅探时域对得上
         String origin = host;
         String referer = host + "/";
         if (!TextUtils.isEmpty(url) && url.startsWith("http")) {
@@ -510,10 +506,11 @@ public class Avdb extends Spider {
 
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
-        h.put("Referer","https://upload18.org/");
-        h.put("Origin", "https://upload18.org/");
+        h.put("Referer", referer);
+        h.put("Origin", origin);
         h.put("Accept", "*/*");
 
-        return Result.get().parse(0).url(url).header(h).string();
+        // parse=1: 把播放页推给壳子, 由壳子自己嗅探出真地址
+        return Result.get().parse(1).url(url).header(h).string();
     }
 }
