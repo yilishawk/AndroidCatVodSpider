@@ -545,7 +545,6 @@ public class HgTv extends Spider {
 
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
-        h.put("Referer", origin + "/");
         h.put("Origin", origin);
         h.put("Accept", "*/*");
 
