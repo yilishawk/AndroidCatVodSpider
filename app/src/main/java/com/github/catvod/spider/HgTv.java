@@ -21,6 +21,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.security.SecureRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -59,6 +61,14 @@ public class HgTv extends Spider {
             "https://hgxml.00api-agy5u.com/api",
             "https://awsapi.ipa001-7hzktt.com/api"
     };
+
+    /**
+     * 图片 CDN 兜底（不带 /api 后缀）。
+     * 实探确认：部分分类（AI短剧 / 擦边短剧）的 cover 是【相对路径】（uploads/...jpg），
+     * 它只在 API 域下返回真图（image/jpeg）；H5 域（google.huge* / hgtv.kvk9*）全是 SPA HTML 兜底。
+     * 故相对封面统一拼到 API 域。轮换域随 config.domains.api 更新时，这里跟着换。
+     */
+    private static final String IMG_BASE_FALLBACK = "https://hgxml.00api-agy5u.com";
 
     private static final String UA =
             "Mozilla/5.0 (Linux; Android 11; SM-G9910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36";
@@ -295,6 +305,53 @@ public class HgTv extends Spider {
     // 列表 / 详情解析
     // ===================================================================
 
+    /**
+     * 修复封面：cover 可能是【相对路径】（uploads/...jpg，AI短剧/擦边短剧常见），需拼 API 域才出真图；
+     * 也可能是完整 https://...（成人漫剧常见），原样保留。
+     */
+    private String fixPic(String pic) {
+        if (TextUtils.isEmpty(pic)) return pic;
+        if (pic.startsWith("http://") || pic.startsWith("https://")) return pic;
+        String base = currentImgBase();
+        return base + "/" + pic.replaceFirst("^/+", "");
+    }
+
+    /** 从 m3u8 播放链接里抽"目录号"（.../storage/1620/index.m3u8 → 1620）。 */
+    private static final Pattern M3U8_DIR_RE = Pattern.compile("/(\\d+)/index\\.m3u8");
+
+    private static int m3u8Dir(String url) {
+        if (TextUtils.isEmpty(url)) return -1;
+        Matcher m = M3U8_DIR_RE.matcher(url);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (Exception ignored) {
+            }
+        }
+        return -1;
+    }
+
+    /** m3u8 存储基址（.../storage）。兜底为实探确认的 CDN。 */
+    private static final String M3U8_STORAGE_FALLBACK = "https://haguapi.huangguo.top/storage";
+
+    private String currentM3u8Base() {
+        return M3U8_STORAGE_FALLBACK;
+    }
+
+    /** 当前生效的 API 域（不带 /api 后缀），用于拼相对封面；取不到用兜底域。 */
+    private String currentImgBase() {
+        for (String b : baseList) {
+            if (b.startsWith("http")) {
+                try {
+                    String host = new java.net.URL(b).getHost();
+                    if (!TextUtils.isEmpty(host)) return "https://" + host;
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return IMG_BASE_FALLBACK;
+    }
+
     private List<Vod> parseList(JSONArray arr) {
         List<Vod> list = new ArrayList<>();
         if (arr == null) return list;
@@ -309,7 +366,7 @@ public class HgTv extends Spider {
             Vod v = new Vod();
             v.setVodId(id);
             v.setVodName(name);
-            String pic = o.optString("cover", "");
+            String pic = fixPic(o.optString("cover", ""));
             if (!TextUtils.isEmpty(pic)) v.setVodPic(pic);
 
             int ep = o.optInt("episode_count", 0);
@@ -431,10 +488,31 @@ public class HgTv extends Spider {
         }
 
         JSONObject d = api(q.toString(), "GET", null);
-        List<Vod> list = parseList(d != null ? d.optJSONArray("list") : null);
-        int total = d != null ? d.optInt("total", list.size()) : list.size();
-        int pageCount = total > 0 ? (total + PAGE_SIZE - 1) / PAGE_SIZE : page;
-        return Result.get().vod(list).page(page, pageCount, PAGE_SIZE, total).string();
+        JSONArray rawList = d != null ? d.optJSONArray("list") : null;
+        int total = d != null ? d.optInt("total", 0) : 0;
+        boolean hasMore = d != null && d.optBoolean("hasMore", false);
+
+        // ★ 翻页修复（凯哥 2026-10-09）：/app/filter 实测恒返回 total=0、hasMore=true。
+        //   旧逻辑 pageCount=(total+sz-1)/sz → total=0 时恒为 1，壳子以为只有一页就不翻。
+        //   改为按"是否有下一页"(hasMore) + "本页满页(说明还有下一页)"推算 pageCount，
+        //   让壳子翻到第 page+1 页时 hasMore=false 或不满页才停。
+        int pageSize = PAGE_SIZE;
+        int pageCount;
+        if (hasMore || total > 0) {
+            if (total > 0) {
+                pageCount = Math.max((total + pageSize - 1) / pageSize, page);
+            } else {
+                // total=0：满页(本页数据量==pageSize)视为还有下一页，pageCount 至少 page+1；
+                // 不满页(最后一页)则 pageCount=page。
+                int filled = rawList != null ? rawList.length() : 0;
+                pageCount = (filled >= pageSize) ? page + 1 : page;
+            }
+        } else {
+            pageCount = Math.max(1, page);
+        }
+        return Result.get().vod(parseList(rawList))
+                .page(page, pageCount, pageSize, total)
+                .string();
     }
 
     @Override
@@ -448,7 +526,7 @@ public class HgTv extends Spider {
         Vod v = new Vod();
         v.setVodId(id);
         v.setVodName(d != null ? d.optString("title", "") : "");
-        String pic = d != null ? d.optString("cover", "") : "";
+        String pic = d != null ? fixPic(d.optString("cover", "")) : "";
         if (!TextUtils.isEmpty(pic)) v.setVodPic(pic);
         if (d != null) {
             v.setVodContent(d.optString("description", d.optString("intro", "")));
@@ -473,13 +551,51 @@ public class HgTv extends Spider {
         if (ep != null) {
             JSONArray list = ep.optJSONArray("list");
             if (list != null && list.length() > 0) {
-                List<String> eps = new ArrayList<>();
-                for (int i = 0; i < list.length(); i++) {
+                int n = list.length();
+                int[] epNo = new int[n];      // 集号
+                String[] epid = new String[n]; // episode_id
+                String[] title = new String[n];
+                String[] realUrl = new String[n]; // 有链接的集: /app/play 返回的真实 m3u8
+
+                for (int i = 0; i < n; i++) {
                     JSONObject e = list.optJSONObject(i);
                     if (e == null) continue;
-                    String epid = String.valueOf(e.opt("id"));
-                    String title = e.optString("title", "第" + (i + 1) + "集");
-                    eps.add(title + "$" + epid);
+                    epNo[i] = e.optInt("ep", i + 1);
+                    epid[i] = String.valueOf(e.opt("id"));
+                    title[i] = e.optString("title", "第" + epNo[i] + "集");
+                    // 只对"有链接"的集取真实 m3u8（VIP 集 /app/play 会返回空 play_url，不取）
+                    JSONObject p = api("/app/play/" + epid[i], "GET", null);
+                    String pu = p != null ? p.optString("play_url", "") : "";
+                    if (TextUtils.isEmpty(pu)) pu = "";
+                    realUrl[i] = p.optBoolean("can_play", false) ? pu : "";
+                }
+
+                // 收集各集真实 m3u8 目录号，用于推断缺链接的集
+                int[] dir = new int[n];
+                for (int i = 0; i < n; i++) dir[i] = m3u8Dir(realUrl[i]);
+
+                // 缺链接的集：取"集号最接近的已知目录号"做锚点，按 ±(集号差) 类推
+                String m3u8Base = currentM3u8Base();
+                List<String> eps = new ArrayList<>();
+                for (int i = 0; i < n; i++) {
+                    String playRef;
+                    if (!TextUtils.isEmpty(realUrl[i])) {
+                        playRef = realUrl[i]; // 有链接: 直接存 m3u8
+                    } else {
+                        int bestDir = -1, bestGap = Integer.MAX_VALUE;
+                        for (int j = 0; j < n; j++) {
+                            if (dir[j] < 0) continue;
+                            int gap = Math.abs(epNo[i] - epNo[j]);
+                            if (gap < bestGap) {
+                                bestGap = gap;
+                                bestDir = dir[j] + (epNo[i] - epNo[j]);
+                            }
+                        }
+                        playRef = bestDir > 0 ? (m3u8Base + "/" + bestDir + "/index.m3u8") : epid[i];
+                    }
+                    // ★ 播放换集逻辑不动：仅当"缺链接"时用类推 m3u8 补链接（存 m3u8）。
+                    //   有链接的集仍存真实 m3u8；playerContent 见 $ 后是 http 即直接播。
+                    eps.add(title[i] + "$" + playRef);
                 }
                 if (!eps.isEmpty()) {
                     v.setVodPlayFrom("默认线路");
@@ -524,6 +640,24 @@ public class HgTv extends Spider {
         String epId = id;
         int dollar = epId.indexOf('$');
         if (dollar >= 0 && dollar < epId.length() - 1) epId = epId.substring(dollar + 1);
+
+        // ★ 缺链接集的类推 m3u8：detailContent 对"只有集数没链接"的集已按邻近集目录号
+        //   补成 .../storage/NNNN/index.m3u8，直接透传播放（不再走 /app/play）。
+        //   注意：这只在 epId 已是 http 时生效；"episode_id 数字"（有链接集/正常换集）仍走 /app/play，逻辑不变。
+        if (epId.startsWith("http://") || epId.startsWith("https://")) {
+            String origin = epId;
+            try {
+                java.net.URL u = new java.net.URL(epId);
+                origin = u.getProtocol() + "://" + u.getHost();
+            } catch (Exception ignored) {
+            }
+            Map<String, String> h = new HashMap<>();
+            h.put("User-Agent", UA);
+            h.put("Referer", origin + "/");
+            h.put("Origin", origin);
+            h.put("Accept", "*/*");
+            return Result.get().parse(0).url(epId).header(h).string();
+        }
 
         JSONObject p = api("/app/play/" + epId, "GET", null);
         if (p == null) return Result.error("播放信息获取失败");
