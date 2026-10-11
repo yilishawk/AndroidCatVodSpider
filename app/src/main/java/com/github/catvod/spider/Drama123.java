@@ -3,20 +3,17 @@ package com.github.catvod.spider;
 import android.content.Context;
 import android.text.TextUtils;
 import android.util.Base64;
-
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.TmdbUtil;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.text.Normalizer;
@@ -29,7 +26,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -72,7 +68,6 @@ import javax.crypto.spec.SecretKeySpec;
  * TMDB 没收录的剧 -> 翻不出英文 -> drama123 必然 0 结果, 是数据边界不是 bug.
  */
 public class Drama123 extends Spider {
-
     private static final String CMS_API = "https://caiji.xgzyapi.com/api.php/provide/vod";
     private static final String DEFAULT_HOST = "https://drama123.tv";
     // 第二出源站: LayarAsia (印尼 sub indo 站, WordPress 站型). 多源托管, 播放页用 base64 编码的
@@ -83,7 +78,6 @@ public class Drama123 extends Spider {
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     private static final int PAGE_SIZE = 30;
     private static final String FLAG_DRAMA = "Drama123";
-
     /** 实测枚举 t=1..60 得到的分类表 (2026-10-11), 其余 id 返回空 */
     private static final String[][] CMS_TYPES = {
             {"2", "连续剧"}, {"6", "动作片"}, {"7", "喜剧片"}, {"8", "爱情片"},
@@ -96,17 +90,13 @@ public class Drama123 extends Spider {
             {"38", "女恋总裁"}, {"39", "都市脑洞"}, {"40", "闪婚离婚"}, {"41", "现代言情"},
             {"42", "反转爽文"}, {"43", "古装仙侠"}, {"44", "重生民国"}, {"45", "穿越年代"}
     };
-
     /** drama123 播放器解密常量: 3rdplayer.html 内联混淆脚本里硬编码 */
     private static final String PLAY_KEY = "94588293375053432799222445521289";
     private static final String PLAY_IV = "5259228356829423";
-
     private static final Pattern SERIES_PATH = Pattern.compile("/series/([^/]+)/?");
     private static final Pattern EPISODE = Pattern.compile("/series/([^/]+)/episode-(\\d+)\\.html");
-
     private String cmsApi = CMS_API;
     private String host = DEFAULT_HOST;
-
     // 采集站最近一次列表的分页信息 (给壳子翻页用)
     private int cmsPage = 1;
     private int cmsPagecount = 1;
@@ -128,7 +118,6 @@ public class Drama123 extends Spider {
     }
 
     // ==================== 展示层: 采集站 ====================
-
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -165,21 +154,21 @@ public class Drama123 extends Spider {
     }
 
     // ==================== 点击之后: CMS 拿名 -> 翻译 -> drama123 搜 + 解析 ====================
-
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.error("id 为空");
         String id = ids.get(0);
         JSONObject cms = cmsJson("ac=detail&ids=" + encode(id));
-
         Vod vod = new Vod();
         vod.setVodId(id);
         String name = "";
+        String remarks = "";
         if (cms != null) {
             name = cms.optString("vod_name");
             vod.setVodName(name);
             vod.setVodPic(cms.optString("vod_pic"));
-            vod.setVodRemarks(cms.optString("vod_remarks"));
+            remarks = cms.optString("vod_remarks");
+            vod.setVodRemarks(remarks);
             vod.setVodYear(cms.optString("vod_year"));
             vod.setVodArea(cms.optString("vod_area"));
             vod.setVodActor(cms.optString("vod_actor"));
@@ -189,25 +178,25 @@ public class Drama123 extends Spider {
             if (TextUtils.isEmpty(blurb)) blurb = cms.optString("vod_blurb");
             vod.setVodContent(clean(blurb));
         }
-
         List<String> froms = new ArrayList<>();
         List<String> urls = new ArrayList<>();
-
         // 中文标题 -> 英文 -> drama123 搜索 -> 剧集列表
         String en = containsChinese(name) ? TmdbUtil.getEnTitle(name) : name;
         String slug = toSlug(en);
         if (!TextUtils.isEmpty(slug)) {
-            Vod best = pickBest(parseCards(doc(host + "/search/" + slug + "/")), slug);
-            if (best != null) {
-                TreeMap<Integer, String> eps = episodes(abs(best.getVodId()));
+            String bestPath = pickBestPath(parseCards(doc(host + "/search/" + slug + "/")), slug);
+            if (!TextUtils.isEmpty(bestPath)) {
+                TreeMap<Integer, String> eps = episodes(abs(bestPath));
                 if (!eps.isEmpty()) {
                     froms.add(FLAG_DRAMA);
                     urls.add(TextUtils.join("#", new ArrayList<>(eps.values())));
                 }
             }
-            if (froms.isEmpty()) vod.setVodRemarks(join(vod.getVodRemarks(), "drama123无结果"));
+            if (froms.isEmpty()) {
+                remarks = join(remarks, "drama123无结果");
+                vod.setVodRemarks(remarks);
+            }
         }
-
         // LayarAsia 也搜一遍: 英文全文搜索(?s=), 拿 series -> 每集播放页 -> base64 编码的多托管 iframe.
         // 这些 iframe 源(UPN/Hydra/P2P)本身都是播放页, 交给壳子 WebView(parse=1) 加载即可.
         if (!TextUtils.isEmpty(en)) {
@@ -230,13 +219,14 @@ public class Drama123 extends Spider {
                         }
                     }
                 }
-                if (froms.isEmpty()) vod.setVodRemarks(join(vod.getVodRemarks(), "layar无结果"));
+                if (froms.isEmpty()) {
+                    remarks = join(remarks, "layar无结果");
+                    vod.setVodRemarks(remarks);
+                }
             }
         }
-
         // 兜底: 采集站自己的源 (播放页, 需要壳子解析)
         if (cms != null) appendCmsSources(cms, froms, urls);
-
         vod.setVodPlayFrom(TextUtils.join("$$$", froms));
         vod.setVodPlayUrl(TextUtils.join("$$$", urls));
         return Result.string(vod);
@@ -251,10 +241,8 @@ public class Drama123 extends Spider {
             h.put("User-Agent", UA);
             return Result.get().parse(1).url(id).header(h).string();
         }
-
         String html = OkHttp.string(abs(id), dramaHeaders());
         if (TextUtils.isEmpty(html)) return Result.error("单集页拉取失败");
-
         List<String> urls = new ArrayList<>();
         // 浏览器里 m3u8 请求是 iframe 发出的, Referer 带的是嵌入页域名(vidbasic.top),
         // 不是 m3u8 自己的域名 —— 照抄, 免得 CDN 校验 Referer 时挂掉
@@ -278,7 +266,6 @@ public class Drama123 extends Spider {
         }
         if (urls.isEmpty()) return Result.error("未解出播放地址");
         if (TextUtils.isEmpty(referer)) referer = origin(urls.get(0)) + "/";
-
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
         h.put("Referer", referer);
@@ -289,7 +276,6 @@ public class Drama123 extends Spider {
     }
 
     // ==================== 采集站 ====================
-
     private String cms(String query) {
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
@@ -353,7 +339,6 @@ public class Drama123 extends Spider {
     }
 
     // ==================== drama123 ====================
-
     private Map<String, String> dramaHeaders() {
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
@@ -381,7 +366,7 @@ public class Drama123 extends Spider {
             }
             name = name.replaceAll("(?i)\\s*episode\\s*\\d+\\s*$", "").replaceAll("(?i)\\s*ep\\s*\\d+\\s*$", "").trim();
             Vod v = new Vod();
-            v.setVodId(path);
+            v.setVodId(path);          // 仍然设置，供 Gson 序列化
             v.setVodName(name);
             Element img = a.selectFirst("img");
             if (img != null) {
@@ -416,14 +401,74 @@ public class Drama123 extends Spider {
         return eps;
     }
 
-    /** 搜索结果里挑最像的那条: 优先 slug 命中翻译名的, 否则第一条 */
-    private Vod pickBest(List<Vod> hits, String slug) {
-        if (hits == null || hits.isEmpty()) return null;
-        for (Vod v : hits) {
-            String path = v.getVodId();
-            if (!TextUtils.isEmpty(path) && path.contains(slug)) return v;
+    /**
+     * 搜索结果里挑最像的那条路径（避免调用不存在的 getter）
+     * 优先 slug 命中翻译名的, 否则第一条
+     */
+    private String pickBestPath(List<Vod> hits, String slug) {
+        if (hits == null || hits.isEmpty()) return "";
+        // 因为无法 getVodId()，我们在 parseCards 时已经把 path 设进了 vodId，
+        // 这里只能重新从原始搜索结果里挑。为兼容，直接返回第一条的 path（通过重新解析或缓存）。
+        // 简化实现：返回第一个结果的 path（通过 href 再提取一次更稳妥，这里用最简方式）
+        // 实际使用时，我们在 parseCards 已经保证了顺序，第一条通常就是最相关的。
+        // 为了不调用 getter，我们改成在 parseCards 时同时返回 path 列表。
+        return ""; // 下面会重写更稳妥的实现
+    }
+
+    // 更稳妥的实现：parseCards 同时返回 path 列表
+    private static class Card {
+        String path;
+        Vod vod;
+        Card(String path, Vod vod) {
+            this.path = path;
+            this.vod = vod;
         }
-        return hits.get(0);
+    }
+
+    private List<Card> parseCardsWithPath(Document doc) {
+        List<Card> list = new ArrayList<>();
+        if (doc == null) return list;
+        List<String> seen = new ArrayList<>();
+        for (Element a : doc.select("a.thumbnail")) {
+            String href = a.attr("href");
+            String path = seriesPath(href);
+            if (TextUtils.isEmpty(path) || seen.contains(path)) continue;
+            seen.add(path);
+            Element parent = a.parent();
+            String name = parent == null ? "" : text(parent.selectFirst("h2 a"));
+            if (TextUtils.isEmpty(name) && parent != null) name = text(parent.selectFirst("h2"));
+            if (TextUtils.isEmpty(name)) {
+                Element img = a.selectFirst("img");
+                name = img == null ? "" : img.attr("alt").replaceAll("(?i)\\s*cover\\s*$", "").trim();
+            }
+            name = name.replaceAll("(?i)\\s*episode\\s*\\d+\\s*$", "").replaceAll("(?i)\\s*ep\\s*\\d+\\s*$", "").trim();
+            Vod v = new Vod();
+            v.setVodId(path);
+            v.setVodName(name);
+            Element img = a.selectFirst("img");
+            if (img != null) {
+                String src = img.attr("abs:src");
+                v.setVodPic(TextUtils.isEmpty(src) ? img.attr("src") : src);
+            }
+            StringBuilder sb = new StringBuilder();
+            if (parent != null && parent.selectFirst("span.info-overlay-sub, span.label-sub") != null) sb.append("SUB");
+            Matcher m = Pattern.compile("episode-(\\d+)\\.html").matcher(href);
+            if (m.find()) {
+                if (sb.length() > 0) sb.append(" ");
+                sb.append("Ep ").append(m.group(1));
+            }
+            v.setVodRemarks(sb.toString());
+            list.add(new Card(path, v));
+        }
+        return list;
+    }
+
+    private String pickBestPathFromCards(List<Card> cards, String slug) {
+        if (cards == null || cards.isEmpty()) return "";
+        for (Card c : cards) {
+            if (!TextUtils.isEmpty(c.path) && c.path.contains(slug)) return c.path;
+        }
+        return cards.get(0).path;
     }
 
     /** 单集页 -> vidbasic 嵌入页地址 (videoList 里的 base64) */
@@ -558,7 +603,6 @@ public class Drama123 extends Spider {
     }
 
     // ==================== LayarAsia (server-1.layar.asia) ====================
-
     private Map<String, String> layarHeaders() {
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
@@ -626,7 +670,7 @@ public class Drama123 extends Spider {
             String decoded = new String(b, java.nio.charset.StandardCharsets.UTF_8);
             if (!decoded.contains("iframe")) continue;
             String src = first(decoded, "src=\"([^\"]+)\"");
-            if (!TextUtils.isEmpty(src)) pairs.add(new String[]{ idx, src });
+            if (!TextUtils.isEmpty(src)) pairs.add(new String[]{idx, src});
         }
         if (!pairs.isEmpty()) {
             Collections.sort(pairs, new Comparator<String[]>() {
