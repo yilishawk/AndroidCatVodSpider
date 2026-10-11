@@ -18,6 +18,9 @@ public class TmdbUtil {
     // 线程安全的内存缓存
     private static final ConcurrentHashMap<String, String[]> cache = new ConcurrentHashMap<>();
 
+    // 中文标题 -> 英文标题 缓存 (英文站搜索用)
+    private static final ConcurrentHashMap<String, String> enCache = new ConcurrentHashMap<>();
+
     /**
      * 规范化搜索关键词（清理季数、语言版本标示，提升 TMDB 命中率）
      */
@@ -93,5 +96,89 @@ public class TmdbUtil {
      */
     public static String getZhTitle(String title) {
         return getInfo(title)[0];
+    }
+
+    // ==================== 中文标题 -> 英文标题 (供英文站 searchContent 使用) ====================
+
+    /**
+     * 拿条目的英文标题. 两级检索:
+     *   ① search/multi?language=en-US —— 条目在 TMDB 英文索引里时直接拿到英文 title/name;
+     *   ② ① 拿不到拉丁字母标题时, 用 zh-CN 检索拿 id + media_type, 再取
+     *      /3/{movie|tv}/{id}?language=en-US 的 title/name / original_title.
+     * 两级都失败(或 TMDB 不通)返回原样入参, 由调用方决定回退策略 —— 不抛异常.
+     */
+    public static String getEnTitle(String title) {
+        if (TextUtils.isEmpty(title)) return title;
+        String clean = normalizeSearchTitle(title);
+        if (enCache.containsKey(clean)) return enCache.get(clean);
+        String en = "";
+        try {
+            JSONObject first = searchFirst(clean, "en-US");
+            if (first != null) en = pickEn(first);
+            if (TextUtils.isEmpty(en) || !isLatin(en)) {
+                JSONObject zh = searchFirst(clean, "zh-CN");
+                if (zh != null) {
+                    String type = zh.optString("media_type", "");
+                    String id = zh.optString("id", "");
+                    if (!TextUtils.isEmpty(id) && ("movie".equals(type) || "tv".equals(type))) {
+                        JSONObject detail = tmdb("/3/" + type + "/" + id + "?language=en-US");
+                        if (detail != null) en = pickEn(detail);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        if (TextUtils.isEmpty(en)) en = clean;
+        enCache.put(clean, en);
+        return en;
+    }
+
+    /** search/multi 的首条结果, 无结果/请求失败返回 null */
+    private static JSONObject searchFirst(String query, String lang) {
+        try {
+            String url = "https://api.themoviedb.org/3/search/multi?query="
+                    + URLEncoder.encode(query, "UTF-8")
+                    + "&language=" + lang + "&include_adult=false";
+            String json = OkHttp.string(url, authHeader());
+            if (TextUtils.isEmpty(json)) return null;
+            JSONArray results = new JSONObject(json).optJSONArray("results");
+            if (results == null || results.length() == 0) return null;
+            return results.getJSONObject(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 取 TMDB 详情, 失败返回 null */
+    private static JSONObject tmdb(String path) {
+        try {
+            String json = OkHttp.string("https://api.themoviedb.org" + path, authHeader());
+            return TextUtils.isEmpty(json) ? null : new JSONObject(json);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Map<String, String> authHeader() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + TOKEN);
+        headers.put("accept", "application/json");
+        return headers;
+    }
+
+    /** 优先拉丁字母标题: title/name -> original_title/original_name */
+    private static String pickEn(JSONObject obj) {
+        String en = obj.optString("title", obj.optString("name", ""));
+        String origin = obj.optString("original_title", obj.optString("original_name", ""));
+        if (isLatin(en)) return en;
+        if (isLatin(origin)) return origin;
+        return TextUtils.isEmpty(en) ? origin : en;
+    }
+
+    /** 含拉丁字母且不含中日韩汉字 —— 用来判断拿到的到底是不是英文标题 */
+    private static boolean isLatin(String s) {
+        if (TextUtils.isEmpty(s)) return false;
+        return s.matches(".*[A-Za-z].*") && !s.matches(".*[\\u4e00-\\u9fa5].*");
     }
 }
