@@ -1,293 +1,182 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.text.TextUtils;
 import android.util.Base64;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkHttp;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.security.SecureRandom;
-
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+/**
+ * 123影院 (com.app.app471d8505) —— 苹果CMS 风格爬虫
+ *
+ * 接口（均 POST form）：
+ *   /api.php/getappapi.index/init       首页初始化：banner_list / recommend_list / type_list / hot_search_list
+ *   /api.php/getappapi.index/rankList   分类片单：type_id + pg          → rank_list
+ *   /api.php/getappapi.index/searchList 搜索：keywords + pg             → search_list
+ *   /api.php/getappapi.index/vodDetail  详情：vod_id                    → vod + vod_play_list + same_list
+ *   /api.php/getappapi.index/vodParse   播放解析（url 为哈希的源走这里）  → {"json":"{\"code\":200,\"url\":\"...\"}"}
+ *
+ * 请求签名头（hook 实锤）：
+ *   app-api-verify-time = 秒级时间戳
+ *   app-api-verify-sign = base64(AES-128-CBC(时间戳ASCII))
+ *   密码：key = IV = VwsHxkCViDXXEExWa（libnmmp.so 0x2B07F 静态定位 + hook 双向实锤）
+ *
+ * 站点 ext 可覆盖：{"host":"https://ttss.langfeng888.com/api.php/getappapi.index","deviceId":"32位hex"}
+ */
 public class AppleBox extends Spider {
 
-    private static final String BASE = "https://ttss.langfeng888.com";
-    private static final String API_PATH = "/api.php/getappapi.index";
+    private static final String KEY = "VwsHxkCViDXXEExWa"; // key = IV
+    private static final String DEVICE_ID = "29227c815e45939da8cb0bbd13f3a3cde";
+    private static final String DEFAULT_BASE = "https://ttss.langfeng888.com/api.php/getappapi.index";
 
-    private static final String AES_KEY = "";
-    private static final String AES_IV = "";
-
-    private static final String VERSION_CODE = "101";
-    private static final String UI_MODE = "light";
-    private static final String UA = "Mozilla/5.0 (Linux; Android 13; 2211133C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
-
-    private String deviceId = "";
-    private String backupDomain = "";
-    private JSONObject appConfig = null;
+    private String base = DEFAULT_BASE;
+    private String deviceId = DEVICE_ID;
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        super.init(context, extend);
-        if (TextUtils.isEmpty(deviceId)) deviceId = genDeviceId();
+        if (extend == null || extend.trim().isEmpty()) return;
+        String ext = extend.trim();
         try {
-            JSONObject j = apiGet("initV119", "");
-            if (j != null) {
-                appConfig = j;
-                parseConfig(j);
-            }
+            JSONObject j = new JSONObject(ext);
+            if (j.has("host")) base = j.getString("host");
+            if (j.has("deviceId")) deviceId = j.getString("deviceId");
         } catch (Exception ignored) {
+            base = ext;
         }
+        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
     }
 
-    private static String genDeviceId() {
-        try {
-            SecureRandom r = new SecureRandom();
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 32; i++) sb.append(Integer.toHexString(r.nextInt(16)));
-            return sb.toString();
-        } catch (Exception e) {
-            return "00000000000000000000000000000000";
-        }
-    }
+    // ---------- 基础设施 ----------
 
-    private void parseConfig(JSONObject cfg) {
-    }
-
-    private Map<String, String> buildHeaders() {
+    private Map<String, String> header() throws Exception {
         Map<String, String> h = new HashMap<>();
-        h.put("User-Agent", UA);
-        h.put("Accept", "application/json, text/plain, */*");
-        h.put("Content-Type", "application/json; charset=utf-8");
         h.put("app-user-device-id", deviceId);
-        h.put("app-version-code", VERSION_CODE);
-        h.put("app-ui-mode", UI_MODE);
-        String ts = String.valueOf(System.currentTimeMillis() / 1000L);
+        h.put("app-version-code", "101");
+        h.put("app-ui-mode", "light");
+        h.put("User-Agent", "okhttp/3.14.9");
+        String ts = String.valueOf(System.currentTimeMillis() / 1000);
         h.put("app-api-verify-time", ts);
         h.put("app-api-verify-sign", sign(ts));
         return h;
     }
 
-    private static String aesEncrypt(String data, String key, String iv) throws Exception {
-        SecretKeySpec ks = new SecretKeySpec(key.getBytes("UTF-8"), "AES");
-        IvParameterSpec ivs = new IvParameterSpec(iv.getBytes("UTF-8"));
+    /** 签名 = base64(AES-128-CBC(时间戳 ASCII 串)) */
+    private String sign(String ts) throws Exception {
         Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
-        c.init(Cipher.ENCRYPT_MODE, ks, ivs);
-        return Base64.encodeToString(c.doFinal(data.getBytes("UTF-8")), Base64.NO_PADDING);
+        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY.getBytes("UTF-8"), "AES"), new IvParameterSpec(KEY.getBytes("UTF-8")));
+        return Base64.encodeToString(c.doFinal(ts.getBytes("UTF-8")), Base64.NO_WRAP);
     }
 
-    private static String aesDecrypt(String b64, String key, String iv) {
-        try {
-            SecretKeySpec ks = new SecretKeySpec(key.getBytes("UTF-8"), "AES");
-            IvParameterSpec ivs = new IvParameterSpec(iv.getBytes("UTF-8"));
-            Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            c.init(Cipher.DECRYPT_MODE, ks, ivs);
-            return new String(c.doFinal(Base64.decode(b64, Base64.DEFAULT)), "UTF-8");
-        } catch (Exception e) {
-            return "";
+    private String decrypt(String data) throws Exception {
+        if (data == null || data.trim().isEmpty()) return "";
+        byte[] ct = Base64.decode(data.replaceAll("\\s+", ""), Base64.NO_WRAP);
+        Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY.getBytes("UTF-8"), "AES"), new IvParameterSpec(KEY.getBytes("UTF-8")));
+        return new String(c.doFinal(ct), "UTF-8");
+    }
+
+    /** 调接口并返回解密后的内层 JSON；空数据返回空 JSONObject */
+    private JSONObject api(String action, Map<String, String> params) throws Exception {
+        String body = OkHttp.post(base + "/" + action, params, header()).getBody();
+        if (body == null || body.trim().isEmpty()) return new JSONObject();
+        JSONObject outer = new JSONObject(body);
+        Object data = outer.opt("data");
+        if (data instanceof String) {
+            String pt = decrypt((String) data);
+            if (pt.isEmpty()) return new JSONObject();
+            return new JSONObject(pt);
         }
+        return new JSONObject(); // data 为数组/null = 空结果
     }
 
-    private static String sign(String ts) {
-        try {
-            String s = aesEncrypt(ts, AES_KEY, AES_IV);
-            while (s.length() % 4 != 0) s += "=";
-            return s;
-        } catch (Exception e) {
-            return "";
+    private Map<String, String> map(String... kv) {
+        Map<String, String> m = new HashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
+        return m;
+    }
+
+    private List<Vod> toVods(JSONArray arr) {
+        List<Vod> list = new ArrayList<>();
+        if (arr == null) return list;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            Vod v = new Vod();
+            v.setVodId(o.optString("vod_id"));
+            v.setVodName(o.optString("vod_name"));
+            v.setVodPic(o.optString("vod_pic"));
+            v.setVodRemarks(o.optString("vod_remarks"));
+            v.setVodYear(o.optString("vod_year"));
+            v.setVodArea(o.optString("vod_area"));
+            v.setVodActor(o.optString("vod_actor"));
+            v.setVodDirector(o.optString("vod_director"));
+            String blurb = o.optString("vod_blurb");
+            if (blurb.isEmpty()) blurb = o.optString("vod_content");
+            v.setVodContent(blurb);
+            list.add(v);
         }
+        return list;
     }
 
-    private static String decryptBody(String body) {
-        if (TextUtils.isEmpty(body)) return "";
-        try {
-            String b64 = body.trim();
-            while (b64.length() % 4 != 0) b64 += "=";
-            String plain = aesDecrypt(b64, AES_KEY, AES_IV);
-            if (!TextUtils.isEmpty(plain)) return plain;
-        } catch (Exception ignored) {
-        }
-        return body;
-    }
-
-    private List<String> bases() {
-        List<String> ls = new ArrayList<>();
-        if (!TextUtils.isEmpty(backupDomain) && backupDomain.startsWith("http")) ls.add(norm(backupDomain));
-        ls.add(BASE);
-        return ls;
-    }
-
-    private static String norm(String raw) {
-        String s = raw.trim();
-        if (!s.startsWith("http")) s = "https://" + s;
-        return s.replaceAll("/+$", "");
-    }
-
-    private JSONObject apiGet(String action, String query) {
-        for (String base : bases()) {
-            try {
-                String url = base + API_PATH + "/" + action + (TextUtils.isEmpty(query) ? "" : ("?" + query));
-                Resp r = _get(url, buildHeaders());
-                if (r.code == 200 && !TextUtils.isEmpty(r.body)) {
-                    return toJson(decryptBody(r.body));
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        return null;
-    }
-
-    private JSONObject apiPost(String action, String jsonBody) {
-        for (String base : bases()) {
-            try {
-                String url = base + API_PATH + "/" + action;
-                Resp r = _post(url, buildHeaders(), jsonBody);
-                if (r.code == 200 && !TextUtils.isEmpty(r.body)) {
-                    return toJson(decryptBody(r.body));
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        return null;
-    }
-
-    private static JSONObject toJson(String s) {
-        if (TextUtils.isEmpty(s)) return null;
-        try {
-            int i = s.indexOf('{');
-            if (i < 0) return null;
-            JSONObject j = new JSONObject(s.substring(i));
-            JSONObject data = j.optJSONObject("data");
-            return data != null ? data : j;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private Resp _get(String url, Map<String, String> headers) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setRequestMethod("GET");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(15000);
-        c.setInstanceFollowRedirects(true);
-        for (Map.Entry<String, String> e : headers.entrySet()) c.setRequestProperty(e.getKey(), e.getValue());
-        Resp r = new Resp();
-        r.code = c.getResponseCode();
-        r.body = readStream(r.code >= 400 ? c.getErrorStream() : c.getInputStream());
-        c.disconnect();
-        return r;
-    }
-
-    private Resp _post(String url, Map<String, String> headers, String body) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setRequestMethod("POST");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(15000);
-        c.setDoOutput(true);
-        for (Map.Entry<String, String> e : headers.entrySet()) c.setRequestProperty(e.getKey(), e.getValue());
-        if (!TextUtils.isEmpty(body)) {
-            try (OutputStream os = c.getOutputStream()) {
-                os.write(body.getBytes("UTF-8"));
-            }
-        }
-        Resp r = new Resp();
-        r.code = c.getResponseCode();
-        r.body = readStream(r.code >= 400 ? c.getErrorStream() : c.getInputStream());
-        c.disconnect();
-        return r;
-    }
-
-    private static String readStream(InputStream in) {
-        if (in == null) return "";
-        try {
-            BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) sb.append(line);
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
-        } finally {
-            try { in.close(); } catch (Exception ignored) { }
-        }
-    }
-
-    private static class Resp {
-        int code;
-        String body;
-    }
-
-    private JSONArray pickArray(JSONObject j) {
-        if (j == null) return null;
-        for (String k : new String[]{"list", "data", "vod", "items", "videos", "episodes"}) {
-            Object o = j.opt(k);
-            if (o instanceof JSONArray) return (JSONArray) o;
-            if (o instanceof JSONObject) {
-                for (String k2 : new String[]{"list", "data", "vod", "items", "episodes"}) {
-                    JSONArray a = ((JSONObject) o).optJSONArray(k2);
-                    if (a != null) return a;
-                }
-            }
-        }
-        return null;
-    }
-
-    private String pickStr(JSONObject o, String[] keys) {
-        for (String k : keys) {
-            String v = o.optString(k, "");
-            if (!TextUtils.isEmpty(v) && !"null".equals(v)) return v;
-        }
-        return "";
-    }
-
-    private String absUrl(String u) {
-        if (TextUtils.isEmpty(u)) return u;
-        if (u.startsWith("http://") || u.startsWith("https://")) return u;
-        return BASE + "/" + u.replaceFirst("^/+", "");
-    }
+    // ---------- Spider 生命周期 ----------
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        List<Class> classes = parseClasses(appConfig);
-        if (classes.isEmpty()) classes = defaultClasses();
-        List<Vod> list = new ArrayList<>();
-        return Result.string(classes, list);
+        JSONObject init = api("init", new HashMap<String, String>());
+        List<Class> classes = new ArrayList<>();
+        JSONArray types = init.optJSONArray("type_list");
+        if (types != null) {
+            for (int i = 0; i < types.length(); i++) {
+                JSONObject t = types.optJSONObject(i);
+                if (t == null) continue;
+                classes.add(new Class(t.optString("type_id"), t.optString("type_name")));
+            }
+        }
+        List<Vod> vods = new ArrayList<>();
+        vods.addAll(toVods(init.optJSONArray("recommend_list")));
+        vods.addAll(toVods(init.optJSONArray("banner_list")));
+        return Result.get().classes(classes).vod(vods).string();
     }
 
     @Override
-    public String categoryContent(String tid, String pg, boolean filter,
-                                 HashMap<String, String> extend) throws Exception {
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = 1;
-        try { page = Integer.parseInt(pg); } catch (Exception ignored) { }
-        if (page < 1) page = 1;
-        String query = "type_id=" + URLEncoder.encode(tid, "UTF-8") + "&page=" + page + "&limit=20";
-        JSONObject d = apiGet("vodList", query);
-        JSONArray arr = pickArray(d);
-        List<Vod> list = parseList(arr);
-        int total = d != null ? d.optInt("total", 0) : 0;
-        int pageSize = 20;
-        int pageCount = total > 0 ? Math.max((total + pageSize - 1) / pageSize, page)
-                : (list.size() >= pageSize ? page + 1 : page);
-        return Result.get().vod(list).page(page, Math.max(pageCount, page), pageSize, total).string();
+        try {
+            page = Integer.parseInt(pg);
+        } catch (Exception ignored) {
+        }
+        JSONObject d = api("rankList", map("type_id", tid, "pg", String.valueOf(page)));
+        List<Vod> vods = toVods(d.optJSONArray("rank_list"));
+        boolean more = vods.size() >= 20;
+        return Result.get().vod(vods).page(page, more ? page + 1 : page, 20, 20).string();
+    }
+
+    @Override
+    public String searchContent(String key, boolean quick, String pg) throws Exception {
+        int page = 1;
+        try {
+            page = Integer.parseInt(pg);
+        } catch (Exception ignored) {
+        }
+        JSONObject d = api("searchList", map("keywords", key, "pg", String.valueOf(page)));
+        List<Vod> vods = toVods(d.optJSONArray("search_list"));
+        boolean more = vods.size() >= 20;
+        return Result.get().vod(vods).page(page, more ? page + 1 : page, 20, 20).string();
     }
 
     @Override
@@ -296,116 +185,134 @@ public class AppleBox extends Spider {
     }
 
     @Override
-    public String searchContent(String key, boolean quick, String pg) throws Exception {
-        int page = 1;
-        try { page = Integer.parseInt(pg); } catch (Exception ignored) { }
-        if (page < 1) page = 1;
-        String query = "word=" + URLEncoder.encode(key, "UTF-8") + "&page=" + page;
-        JSONObject d = apiGet("vodSearch", query);
-        List<Vod> list = parseList(pickArray(d));
-        int total = d != null ? d.optInt("total", list.size()) : list.size();
-        int pageCount = total > 0 ? Math.max((total + 19) / 20, page) : page;
-        return Result.get().vod(list).page(page, pageCount, 20, total).string();
-    }
-
-    @Override
     public String detailContent(List<String> ids) throws Exception {
-        if (ids == null || ids.isEmpty()) return Result.get().string();
-        String id = ids.get(0);
-        JSONObject d = apiPost("vodDetail", "{\"vod_id\":\"" + id + "\"}");
-        Vod v = new Vod();
-        v.setVodId(id);
-        if (d != null) {
-            v.setVodName(pickStr(d, new String[]{"title", "name", "vod_name"}));
-            String pic = absUrl(pickStr(d, new String[]{"pic", "cover", "img", "vod_pic"}));
-            if (!TextUtils.isEmpty(pic)) v.setVodPic(pic);
-            v.setVodContent(pickStr(d, new String[]{"content", "description", "intro", "vod_content"}));
-            v.setVodRemarks(pickStr(d, new String[]{"remarks", "vod_remarks", "note"}));
-        }
-        JSONArray eps = pickArray(d);
-        if (eps != null && eps.length() > 0) {
-            List<String> playUrls = new ArrayList<>();
-            for (int i = 0; i < eps.length(); i++) {
-                JSONObject e = eps.optJSONObject(i);
-                if (e == null) continue;
-                String title = pickStr(e, new String[]{"name", "title", "ep", "vod_name"});
-                String url = absUrl(pickStr(e, new String[]{"url", "play_url", "vod_play_url"}));
-                if (TextUtils.isEmpty(url)) continue;
-                playUrls.add(title + "$" + url);
+        if (ids == null || ids.isEmpty()) return Result.error("缺少视频ID");
+        JSONObject d = api("vodDetail", map("vod_id", ids.get(0)));
+        JSONObject vj = d.optJSONObject("vod");
+        if (vj == null) return Result.error("详情获取失败");
+        Vod vod = new Vod();
+        vod.setVodId(vj.optString("vod_id"));
+        vod.setVodName(vj.optString("vod_name"));
+        String pic = vj.optString("vod_pic");
+        if (pic.isEmpty()) pic = vj.optString("vod_pic_thumb");
+        vod.setVodPic(pic);
+        vod.setVodRemarks(vj.optString("vod_remarks"));
+        vod.setVodYear(vj.optString("vod_year"));
+        vod.setVodArea(vj.optString("vod_area"));
+        vod.setVodActor(vj.optString("vod_actor"));
+        vod.setVodDirector(vj.optString("vod_director"));
+        String blurb = vj.optString("vod_blurb");
+        if (blurb.isEmpty()) blurb = vj.optString("vod_content");
+        vod.setVodContent(blurb);
+
+        List<String> froms = new ArrayList<>();
+        List<String> urlGroups = new ArrayList<>();
+        JSONArray plays = d.optJSONArray("vod_play_list");
+        if (plays != null) {
+            for (int i = 0; i < plays.length(); i++) {
+                JSONObject p = plays.optJSONObject(i);
+                if (p == null) continue;
+                JSONObject info = p.optJSONObject("player_info");
+                String show = info != null ? info.optString("show") : "";
+                if (show.isEmpty()) show = "线路" + (i + 1);
+                String parse = info != null ? info.optString("parse") : "";
+                JSONArray urls = p.optJSONArray("urls");
+                if (urls == null || urls.length() == 0) continue;
+                List<String> eps = new ArrayList<>();
+                for (int j = 0; j < urls.length(); j++) {
+                    JSONObject u = urls.optJSONObject(j);
+                    if (u == null) continue;
+                    String name = u.optString("name");
+                    if (name.isEmpty()) name = String.format("第%02d集", j + 1);
+                    String url = u.optString("url");
+                    if (url != null && url.startsWith("http")) {
+                        eps.add(name + "$" + url); // 直链，直接播
+                    } else {
+                        // 哈希 url：打包解析所需字段，占位由 playerContent 调 vodParse
+                        // 格式: p@vod_id@nid@index@parse@url@from@token
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("p@").append(vj.optString("vod_id")).append("@");
+                        sb.append(u.optString("nid")).append("@");
+                        sb.append(String.valueOf(j)).append("@");
+                        sb.append(parse).append("@");
+                        sb.append(url == null ? "" : url).append("@");
+                        sb.append(u.optString("from")).append("@");
+                        sb.append(u.optString("token"));
+                        eps.add(name + "$" + sb.toString());
+                    }
+                }
+                froms.add(show);
+                urlGroups.add(join(eps, "#"));
             }
-            if (!playUrls.isEmpty()) {
-                v.setVodPlayFrom("默认线路");
-                v.setVodPlayUrl(TextUtils.join("#", playUrls));
-            }
         }
-        return Result.string(v);
+        vod.setVodPlayFrom(join(froms, "$$$"));
+        vod.setVodPlayUrl(join(urlGroups, "$$$"));
+        return Result.get().vod(vod).string();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (TextUtils.isEmpty(id)) return Result.error("播放地址为空");
-        String playUrl = id;
-        int d = id.indexOf('$');
-        if (d >= 0 && d < id.length() - 1) playUrl = id.substring(d + 1);
-        if (playUrl.startsWith("http://") || playUrl.startsWith("https://")) {
-            String origin = playUrl;
+        if (id == null || id.isEmpty()) return Result.error("播放地址为空");
+        if (id.startsWith("http")) {
+            Result r = Result.get().url(id);
+            if (id.contains("m3u8")) r.m3u8();
+            return r.string();
+        }
+        if (!id.startsWith("p@")) return Result.error("播放地址无效");
+        String[] a = id.split("@");
+        if (a.length < 8) return Result.error("播放信息不完整");
+        String vid = a[1], nid = a[2], idx = a[3], parse = a[4], url = a[5], from = a[6], token = a[7];
+        String real = tryParse(vid, nid, idx, parse, url, from, token);
+        if (real == null || real.isEmpty()) return Result.error("解析失败");
+        Result r = Result.get().url(real);
+        if (real.contains("m3u8")) r.m3u8();
+        return r.string();
+    }
+
+    /**
+     * vodParse 参数组合未完全实锤（请求在 native VM 内发出，TLS 遮断），
+     * 这里按抓包推断的候选组合依次尝试，命中即返回。
+     */
+    private String tryParse(String vid, String nid, String idx, String parse, String url, String from, String token) throws Exception {
+        String apiUrl = parse + url; // parse_api_url = parse 段 + url 段
+        String[][] combos = {
+                {"url", apiUrl, "vod_id", vid, "nid", nid, "url_position", idx, "from", from, "token", token},
+                {"url", url, "parse", parse, "vod_id", vid, "nid", nid, "url_position", idx, "from", from, "token", token},
+                {"parse_api_url", apiUrl, "vod_id", vid, "nid", nid, "url_position", idx, "from", from, "token", token},
+                {"vod_id", vid, "player_source_id", parse, "episode_index", idx, "url", url, "nid", nid}
+        };
+        for (int i = 0; i < combos.length; i++) {
+            JSONObject d = api("vodParse", map(combos[i]));
+            String u = pickUrl(d);
+            if (u != null && !u.isEmpty()) return u;
+        }
+        return null;
+    }
+
+    /** vodParse 响应可能双层 JSON 字符串：{"json":"{\"code\":200,\"url\":\"...\"}"} */
+    private String pickUrl(JSONObject d) throws Exception {
+        if (d == null) return null;
+        Object j = d.opt("json");
+        if (j instanceof String) {
             try {
-                URL u = new URL(playUrl);
-                origin = u.getProtocol() + "://" + u.getHost();
-            } catch (Exception ignored) { }
-            Map<String, String> h = new HashMap<>();
-            h.put("User-Agent", UA);
-            h.put("Referer", origin + "/");
-            h.put("Accept", "*/*");
-            return Result.get().parse(0).url(playUrl).header(h).string();
-        }
-        return Result.error("该集需 vodParse 二次解析（参数待实采）");
-    }
-
-    private List<Class> parseClasses(JSONObject cfg) {
-        List<Class> cs = new ArrayList<>();
-        if (cfg == null) return cs;
-        JSONArray cats = cfg.optJSONArray("class");
-        if (cats == null) cats = cfg.optJSONArray("categories");
-        if (cats != null) {
-            for (int i = 0; i < cats.length(); i++) {
-                JSONObject c = cats.optJSONObject(i);
-                if (c == null) continue;
-                String cid = String.valueOf(c.opt("id"));
-                String name = c.optString("name", cid);
-                if (!TextUtils.isEmpty(cid) && !"null".equals(cid)) cs.add(new Class(cid, name));
+                d = new JSONObject((String) j);
+            } catch (Exception e) {
+                return null;
             }
+        } else if (j instanceof JSONObject) {
+            d = (JSONObject) j;
         }
-        return cs;
+        String u = d.optString("url");
+        if (u != null && u.startsWith("http")) return u;
+        return null;
     }
 
-    private static List<Class> defaultClasses() {
-        List<Class> cs = new ArrayList<>();
-        cs.add(new Class("1", "电影"));
-        cs.add(new Class("2", "连续剧"));
-        cs.add(new Class("3", "综艺"));
-        cs.add(new Class("4", "动漫"));
-        return cs;
-    }
-
-    private List<Vod> parseList(JSONArray arr) {
-        List<Vod> list = new ArrayList<>();
-        if (arr == null) return list;
-        for (int i = 0; i < arr.length(); i++) {
-            JSONObject o = arr.optJSONObject(i);
-            if (o == null) continue;
-            String id = String.valueOf(o.opt("id"));
-            if (TextUtils.isEmpty(id) || "null".equals(id)) continue;
-            String name = pickStr(o, new String[]{"title", "name", "vod_name"});
-            if (TextUtils.isEmpty(name)) continue;
-            Vod v = new Vod();
-            v.setVodId(id);
-            v.setVodName(name);
-            String pic = absUrl(pickStr(o, new String[]{"pic", "cover", "img", "vod_pic"}));
-            if (!TextUtils.isEmpty(pic)) v.setVodPic(pic);
-            v.setVodRemarks(pickStr(o, new String[]{"remarks", "note", "year"}));
-            list.add(v);
+    private static String join(List<String> list, String sep) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(sep);
+            sb.append(list.get(i));
         }
-        return list;
+        return sb.toString();
     }
 }
