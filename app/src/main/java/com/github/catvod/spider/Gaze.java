@@ -14,6 +14,7 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -161,9 +162,12 @@ public class Gaze extends Spider {
         try {
             if (!loadLatch.await(LOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 out[0] = "{\"error\":\"page load timeout: " + url + "\"}";
+                dlog("load TIMEOUT url=" + url);
                 return out[0];
             }
+            dlog("load ok url=" + url);
             // 2) 等 proof 就绪（仅 FILTER 页需要；首页/play 传 null 跳过）
+            boolean proofReady = false;
             if (!TextUtils.isEmpty(waitProof)) {
                 long deadline = System.currentTimeMillis() + PROOF_TIMEOUT_MS;
                 while (System.currentTimeMillis() < deadline) {
@@ -179,9 +183,10 @@ public class Gaze extends Spider {
                         }
                     });
                     rl.await(3, TimeUnit.SECONDS);
-                    if ("1".equals(r[0])) break;
+                    if ("1".equals(r[0])) { proofReady = true; break; }
                     Thread.sleep(200);
                 }
+                dlog("proof ready=" + proofReady + " key=" + waitProof);
             }
             // 3) 注入并执行异步 JS（回调经桥回传）
             bridge.done = false; bridge.result = null;
@@ -199,18 +204,49 @@ public class Gaze extends Spider {
                 Thread.sleep(150);
             }
             out[0] = bridge.done ? bridge.result : "{\"error\":\"fetch timeout\"}";
+            if (!bridge.done) dlog("fetch TIMEOUT url=" + url);
         } catch (Exception e) {
             out[0] = "{\"error\":\"" + e.getMessage() + "\"}";
         } finally {
             webHandler.post(() -> { synchronized (webLock) { if (webView != null) webView.removeJavascriptInterface("GazeBridge"); } });
         }
-        return out[0] == null ? "{\"error\":\"webRun interrupted\"}" : out[0];
+        String ret = out[0] == null ? "{\"error\":\"webRun interrupted\"}" : out[0];
+        dlog("webRun ret " + head(ret));
+        return ret;
     }
 
     /** evaluateJavascript 返回值是 JSON 字符串（带引号），这里去首尾引号。 */
     private static String stripQuotes(String v) {
         if (v == null) return "0";
         if (v.startsWith("\"") && v.endsWith("\"")) return v.substring(1, v.length() - 1);
+        return v;
+    }
+
+    // ===================================================================
+    // 调试日志（开发期定位用，上线可整体删掉 dlog 调用）
+    //   —— “有分类无数据”时，看爬虫日志里的 [GAZE] 行即可区分：
+    //      · load TIMEOUT / webView init failed  → WebView 没起来
+    //      · proof ready=false                   → CF 没过，proof 头没算出来
+    //      · raw 开头是 < 或 {"error":...}        → 拿到的是 CF/419 页，不是 JSON
+    //      · raw 是 JSON 但列表空                → 字段名猜错，按 raw 校正 pickArray
+    // ===================================================================
+    private static void dlog(String s) {
+        try { SpiderDebug.log("[GAZE] " + s); } catch (Throwable ignored) {}
+    }
+    private static String head(String s) {
+        if (s == null) return "null";
+        int n = Math.min(s.length(), 800);
+        return s.length() + "::" + s.substring(0, n);
+    }
+
+    /** 空列表兜底：往 UI 塞一条调试条目，把原始响应显示在备注里（无需 logcat 也能看）。 */
+    private static Vod debugVod(String raw) {
+        Vod v = new Vod();
+        v.setVodId("__gaze_debug__");
+        v.setVodName("[GAZE调试] 列表为空，点此看原因");
+        String h = head(raw);
+        if (h.length() > 500) h = h.substring(0, 500);
+        v.setVodRemarks(h);
         return v;
     }
 
@@ -347,6 +383,8 @@ public class Gaze extends Spider {
                 if (v != null) list.add(v);
             }
         }
+        dlog("home items=" + list.size() + " raw=" + head(raw));
+        if (list.isEmpty()) list.add(debugVod(raw));
         return Result.string(buildClasses(), list);
     }
 
@@ -371,6 +409,8 @@ public class Gaze extends Spider {
             }
             total = j.optInt("total", arr != null ? arr.length() : 0);
         }
+        dlog("category tid=" + tid + " items=" + list.size() + " total=" + total + " raw=" + head(raw));
+        if (list.isEmpty()) list.add(debugVod(raw));
         if (total > 0) pageCount = Math.max((total + 20 - 1) / 20, page);
         else pageCount = page + (list.size() >= 20 ? 1 : 0);
         return Result.get().vod(list).page(page, pageCount, 20, total).string();
