@@ -3,11 +3,9 @@ package com.github.catvod.spider;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.webkit.JavascriptInterface;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -79,30 +77,24 @@ public class Gaze extends Spider {
     private static final long FETCH_TIMEOUT_MS = 20000;  // 等 fetch 返回超时
 
     private Context appCtx;
-    private HandlerThread webThread;
     private Handler webHandler;
     private WebView webView;
     private final Object webLock = new Object();
 
     // ===================================================================
-    // init：起一个带 Looper 的线程承载 WebView（WebView 需要 Looper）
+    // init：WebView 必须挂在【主线程 Looper】上。
+    // 注意：
+    //   ★ 绝不能在后台线程（如自建 HandlerThread）创建 WebView —— Android 6 / TV 盒 /
+    //     多进程 WebView 在那个场景会 native 崩溃（凯哥在 webhtv-android6 与手机均实测崩溃）。
+    //   ★ 不在 init 同步创建 WebView，改为首次 webRun 时在主线程“懒创建”，
+    //     避免在主线程上 await 导致死锁（CatVod 调用 spider 方法走的是后台线程，await 安全）。
     // ===================================================================
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
         appCtx = context.getApplicationContext() != null ? context.getApplicationContext() : context;
-        webThread = new HandlerThread("gaze-web");
-        webThread.start();
-        webHandler = new Handler(webThread.getLooper());
-        // WebView 必须在有 Looper 的线程创建
-        final CountDownLatch latch = new CountDownLatch(1);
-        webHandler.post(() -> {
-            synchronized (webLock) {
-                webView = createWebView();
-            }
-            latch.countDown();
-        });
-        latch.await(10, TimeUnit.SECONDS);
+        // 主线程 Handler：所有 WebView 创建 / 加载 / evaluateJavascript 都 post 到这里执行。
+        webHandler = new Handler(Looper.getMainLooper());
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -115,8 +107,8 @@ public class Gaze extends Spider {
         w.getSettings().setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
         w.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return false; // 同站导航交给 WebView
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return false; // 同站导航交给 WebView（用 String 重载以兼容 Android 6 / API23）
             }
         });
         return w;
@@ -147,17 +139,23 @@ public class Gaze extends Spider {
     private String webRun(final String url, final String waitProof, final String js) {
         final String[] out = new String[1];
         final JsBridge bridge = new JsBridge();
-        // 1) 触发加载（post 到 WebView 线程）
+        // 1) 触发加载（post 到主线程；首次调用懒创建 WebView）
         final CountDownLatch loadLatch = new CountDownLatch(1);
         webHandler.post(() -> {
             synchronized (webLock) {
-                if (webView == null) { out[0] = "{\"error\":\"webView null\"}"; loadLatch.countDown(); return; }
-                webView.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String u) { loadLatch.countDown(); }
-                });
-                webView.addJavascriptInterface(bridge, "GazeBridge");
-                webView.loadUrl(url);
+                try {
+                    if (webView == null) webView = createWebView();   // 主线程创建，符合 WebView 线程约束
+                    if (webView == null) { out[0] = "{\"error\":\"webView create failed\"}"; loadLatch.countDown(); return; }
+                    webView.setWebViewClient(new WebViewClient() {
+                        @Override
+                        public void onPageFinished(WebView view, String u) { loadLatch.countDown(); }
+                    });
+                    webView.addJavascriptInterface(bridge, "GazeBridge");
+                    webView.loadUrl(url);
+                } catch (Throwable t) {
+                    out[0] = "{\"error\":\"webView init failed: " + String.valueOf(t.getMessage()) + "\"}";
+                    loadLatch.countDown();
+                }
             }
         });
         try {
@@ -173,9 +171,11 @@ public class Gaze extends Spider {
                     final CountDownLatch rl = new CountDownLatch(1);
                     webHandler.post(() -> {
                         synchronized (webLock) {
-                            if (webView != null) webView.evaluateJavascript(
-                                    "(!window." + waitProof + "||!window." + waitProof + "['" + PROOF_KEY + "'])?0:1",
-                                    v -> { r[0] = stripQuotes(v); rl.countDown(); });
+                            try {
+                                if (webView != null) webView.evaluateJavascript(
+                                        "(!window." + waitProof + "||!window." + waitProof + "['" + PROOF_KEY + "'])?0:1",
+                                        v -> { r[0] = stripQuotes(v); rl.countDown(); });
+                            } catch (Throwable t) { rl.countDown(); }
                         }
                     });
                     rl.await(3, TimeUnit.SECONDS);
@@ -187,9 +187,11 @@ public class Gaze extends Spider {
             bridge.done = false; bridge.result = null;
             webHandler.post(() -> {
                 synchronized (webLock) {
-                    if (webView != null) webView.evaluateJavascript(
-                            "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
-                            null);
+                    try {
+                        if (webView != null) webView.evaluateJavascript(
+                                "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
+                                null);
+                    } catch (Throwable t) { /* 失败由下方超时兜底 */ }
                 }
             });
             long deadline = System.currentTimeMillis() + FETCH_TIMEOUT_MS;
@@ -457,9 +459,12 @@ public class Gaze extends Spider {
 
     /** 进程退出前销毁 WebView（CatVod 通常不会调，但留个口）。 */
     public void destroy() {
-        if (webHandler != null && webView != null) {
-            webHandler.post(() -> { synchronized (webLock) { if (webView != null) webView.destroy(); } });
+        if (webHandler != null) {
+            webHandler.post(() -> {
+                synchronized (webLock) {
+                    if (webView != null) { try { webView.destroy(); } catch (Throwable ignored) {} webView = null; }
+                }
+            });
         }
-        if (webThread != null) webThread.quitSafely();
     }
 }
