@@ -2,12 +2,12 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
+import android.util.Base64;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
-import com.github.catvod.utils.Crypto;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -20,6 +20,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.security.SecureRandom;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -83,9 +87,29 @@ public class AppleBox extends Spider {
         return h;
     }
 
+    private static String aesEncrypt(String data, String key, String iv) throws Exception {
+        SecretKeySpec ks = new SecretKeySpec(key.getBytes("UTF-8"), "AES");
+        IvParameterSpec ivs = new IvParameterSpec(iv.getBytes("UTF-8"));
+        Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        c.init(Cipher.ENCRYPT_MODE, ks, ivs);
+        return Base64.encodeToString(c.doFinal(data.getBytes("UTF-8")), Base64.NO_PADDING);
+    }
+
+    private static String aesDecrypt(String b64, String key, String iv) {
+        try {
+            SecretKeySpec ks = new SecretKeySpec(key.getBytes("UTF-8"), "AES");
+            IvParameterSpec ivs = new IvParameterSpec(iv.getBytes("UTF-8"));
+            Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            c.init(Cipher.DECRYPT_MODE, ks, ivs);
+            return new String(c.doFinal(Base64.decode(b64, Base64.DEFAULT)), "UTF-8");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private static String sign(String ts) {
         try {
-            String s = Crypto.aesEncrypt(ts, AES_KEY, AES_IV);
+            String s = aesEncrypt(ts, AES_KEY, AES_IV);
             while (s.length() % 4 != 0) s += "=";
             return s;
         } catch (Exception e) {
@@ -98,7 +122,7 @@ public class AppleBox extends Spider {
         try {
             String b64 = body.trim();
             while (b64.length() % 4 != 0) b64 += "=";
-            String plain = Crypto.CBC(b64, AES_KEY, AES_IV);
+            String plain = aesDecrypt(b64, AES_KEY, AES_IV);
             if (!TextUtils.isEmpty(plain)) return plain;
         } catch (Exception ignored) {
         }
