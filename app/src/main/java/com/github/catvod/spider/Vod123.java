@@ -38,7 +38,7 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * 站点 ext 可覆盖：{"host":"https://ttss.langfeng888.com/api.php/getappapi.index","deviceId":"32位hex"}
  */
-public class AppleBox extends Spider {
+public class Vod123 extends Spider {
 
     private static final String KEY = "VwsHxkCViDXXEExWa"; // key = IV
     private static final String DEVICE_ID = "29227c815e45939da8cb0bbd13f3a3cde";
