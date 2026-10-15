@@ -7,7 +7,9 @@ import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.net.OkResult;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -40,7 +42,7 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public class Vod123 extends Spider {
 
-    private static final String KEY = "VwsHxkCViDXXEExWa"; // key = IV
+    private static final String KEY = "VwsHxkCViDXEExWa"; // key = IV，16 字节（libnmmp.so 0x2B07F 坐实）
     private static final String DEVICE_ID = "29227c815e45939da8cb0bbd13f3a3cde";
     private static final String DEFAULT_BASE = "https://ttss.langfeng888.com/api.php/getappapi.index";
 
@@ -62,6 +64,13 @@ public class Vod123 extends Spider {
     }
 
     // ---------- 基础设施 ----------
+
+    private void logger(String msg) {
+        try {
+            SpiderDebug.log("[Vod123] " + msg);
+        } catch (Exception ignored) {
+        }
+    }
 
     private Map<String, String> header() throws Exception {
         Map<String, String> h = new HashMap<>();
@@ -90,18 +99,41 @@ public class Vod123 extends Spider {
         return new String(c.doFinal(ct), "UTF-8");
     }
 
-    /** 调接口并返回解密后的内层 JSON；空数据返回空 JSONObject */
+    /** 调接口并返回解密后的内层 JSON；失败/空数据返回空 JSONObject */
     private JSONObject api(String action, Map<String, String> params) throws Exception {
-        String body = OkHttp.post(base + "/" + action, params, header()).getBody();
-        if (body == null || body.trim().isEmpty()) return new JSONObject();
-        JSONObject outer = new JSONObject(body);
-        Object data = outer.opt("data");
-        if (data instanceof String) {
-            String pt = decrypt((String) data);
-            if (pt.isEmpty()) return new JSONObject();
-            return new JSONObject(pt);
+        String url = base + "/" + action;
+        OkResult res = OkHttp.post(url, params, header());
+        int code = res.getCode();
+        String body = res.getBody();
+        logger(action + " → HTTP " + code + " len=" + (body == null ? 0 : body.length()) + (body != null && body.length() > 120 ? " head=" + body.substring(0, 120) : ""));
+        if (body == null || body.trim().isEmpty()) {
+            logger(action + " 响应为空（网络失败或被拦截）");
+            return new JSONObject();
         }
-        return new JSONObject(); // data 为数组/null = 空结果
+        JSONObject outer;
+        try {
+            outer = new JSONObject(body);
+        } catch (Exception e) {
+            logger(action + " 响应非 JSON: " + body.substring(0, Math.min(120, body.length())));
+            return new JSONObject();
+        }
+        Object data = outer.opt("data");
+        if (!(data instanceof String)) {
+            logger(action + " data 非字符串（code=" + outer.opt("code") + " msg=" + outer.opt("msg") + "）");
+            return new JSONObject();
+        }
+        String pt;
+        try {
+            pt = decrypt((String) data);
+        } catch (Exception e) {
+            logger(action + " 解密失败: " + e.getMessage());
+            return new JSONObject();
+        }
+        if (pt.isEmpty()) {
+            logger(action + " 解密结果为空");
+            return new JSONObject();
+        }
+        return new JSONObject(pt);
     }
 
     private Map<String, String> map(String... kv) {
@@ -150,7 +182,10 @@ public class Vod123 extends Spider {
         List<Vod> vods = new ArrayList<>();
         vods.addAll(toVods(init.optJSONArray("recommend_list")));
         vods.addAll(toVods(init.optJSONArray("banner_list")));
-        return Result.get().classes(classes).vod(vods).string();
+        logger("homeContent: classes=" + classes.size() + " vods=" + vods.size());
+        Result r = Result.get().classes(classes).vod(vods);
+        if (classes.isEmpty()) r.msg("123 init 无分类（详见 logcat SpiderDebug）");
+        return r.string();
     }
 
     @Override
