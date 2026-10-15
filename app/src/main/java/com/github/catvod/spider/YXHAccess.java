@@ -30,8 +30,7 @@ public class YXHAccess extends Spider {
         Map<String, String> headers = new HashMap<>();
         headers.put("User-Agent", UA);
         headers.put("Referer", host + "/");
-        headers.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-        headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+        headers.put("Accept-Language", "zh-CN,zh;q=0.9");
         return headers;
     }
 
@@ -97,7 +96,7 @@ public class YXHAccess extends Spider {
         } else {
             url = host + "/" + tid;
             if (!"1".equals(pg) && !TextUtils.isEmpty(pg)) {
-                url += "/" + pg;
+                url = url + "/" + pg;
             }
         }
 
@@ -105,12 +104,11 @@ public class YXHAccess extends Spider {
         if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
 
         Document doc = Jsoup.parse(html);
-        Elements items = doc.select(".thumb-list .thumb-list__item, .video-thumb, .thumb, [data-role='video-thumb']");
+        Elements items = doc.select(".thumb-list .thumb-list__item, .video-thumb, .thumb");
 
         List<Vod> list = new ArrayList<>();
         for (Element item : items) {
-            Element a = item.selectFirst("a[href*='/videos/'], a[href*='/movies/']");
-            if (a == null) a = item.selectFirst("a");
+            Element a = item.selectFirst("a");
             if (a == null) continue;
 
             String href = a.attr("href");
@@ -119,7 +117,7 @@ public class YXHAccess extends Spider {
 
             String name = a.attr("title");
             if (TextUtils.isEmpty(name)) {
-                Element titleEl = item.selectFirst(".video-thumb-info__name, .thumb-image-container__title, [data-role='video-title']");
+                Element titleEl = item.selectFirst(".video-thumb-info__name, .thumb-image-container__title");
                 if (titleEl != null) name = titleEl.text().trim();
             }
             if (TextUtils.isEmpty(name)) name = a.text().trim();
@@ -133,7 +131,7 @@ public class YXHAccess extends Spider {
             }
 
             String remark = "";
-            Element duration = item.selectFirst(".duration, .thumb-image-container__duration, [data-role='video-duration']");
+            Element duration = item.selectFirst(".duration, .thumb-image-container__duration");
             if (duration != null) remark = duration.text().trim();
 
             Vod vod = new Vod();
@@ -150,8 +148,7 @@ public class YXHAccess extends Spider {
         if (TextUtils.isEmpty(href)) return "";
         Matcher m = Pattern.compile("/(?:videos|movies)/([^/?#]+)").matcher(href);
         if (m.find()) return m.group(1);
-        m = Pattern.compile("/embed/([^/?#]+)").matcher(href);
-        return m.find() ? m.group(1) : "";
+        return "";
     }
 
     @Override
@@ -170,7 +167,7 @@ public class YXHAccess extends Spider {
         if (h1 != null) name = h1.text().trim();
 
         String pic = "";
-        Element img = doc.selectFirst(".player-container img, .video-page img, img[data-role='video-preview']");
+        Element img = doc.selectFirst(".player-container img, .video-page img");
         if (img != null) {
             pic = img.attr("src");
             if (TextUtils.isEmpty(pic)) pic = img.attr("data-src");
@@ -183,7 +180,6 @@ public class YXHAccess extends Spider {
         vod.setVodPic(pic);
         vod.setVodPlayFrom("XHAccess");
         vod.setVodPlayUrl("播放$" + url);
-
         return Result.string(vod);
     }
 
@@ -194,12 +190,11 @@ public class YXHAccess extends Spider {
         if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
 
         Document doc = Jsoup.parse(html);
-        Elements items = doc.select(".thumb-list .thumb-list__item, .video-thumb, .thumb, [data-role='video-thumb']");
+        Elements items = doc.select(".thumb-list .thumb-list__item, .video-thumb, .thumb");
 
         List<Vod> list = new ArrayList<>();
         for (Element item : items) {
-            Element a = item.selectFirst("a[href*='/videos/'], a[href*='/movies/']");
-            if (a == null) a = item.selectFirst("a");
+            Element a = item.selectFirst("a");
             if (a == null) continue;
 
             String vid = extractVid(a.attr("href"));
@@ -207,7 +202,7 @@ public class YXHAccess extends Spider {
 
             String name = a.attr("title");
             if (TextUtils.isEmpty(name)) {
-                Element titleEl = item.selectFirst(".video-thumb-info__name, [data-role='video-title']");
+                Element titleEl = item.selectFirst(".video-thumb-info__name");
                 if (titleEl != null) name = titleEl.text().trim();
             }
 
@@ -233,32 +228,25 @@ public class YXHAccess extends Spider {
         try {
             String html = OkHttp.string(id, getHeader());
             if (!TextUtils.isEmpty(html)) {
-                // 1. 优先提取 preload 的 m3u8
-                String realUrl = extractRegex(html,
-                        "<link[^>]+rel=[\"']preload[\"'][^>]+href=[\"'](https?://[^\"']+\\.m3u8[^\"']*)[\"']");
+                // 优先提取 preload 里的真实 m3u8
+                String realUrl = extractRegex(html, "<link[^>]+rel=[\"']preload[\"'][^>]+href=[\"'](https?://[^\"']+\\.m3u8[^\"']*)[\"']");
 
-                // 2. 兜底匹配任意 m3u8
+                // 兜底匹配任意 m3u8
                 if (TextUtils.isEmpty(realUrl)) {
                     realUrl = extractRegex(html, "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
                 }
 
-                // 3. 匹配 video-nss / video-cf
-                if (TextUtils.isEmpty(realUrl)) {
-                    realUrl = extractRegex(html, "(https?://(?:video-nss|video-cf)\\.xhcdn\\.com/[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
-                }
-
                 if (!TextUtils.isEmpty(realUrl)) {
                     realUrl = realUrl.replace("\\/", "/").trim();
-                    // 真实地址，直接返回（默认 parse=0）
-                    return Result.get().url(realUrl).header(getHeader()).string();
+                    // 真实地址直接播放
+                    return Result.get().url(realUrl).string();
                 }
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-
-        // 提取失败，降级嗅探
-        return Result.get().url(id).parse().string();
+        // 提取失败，降级给壳子嗅探
+        return Result.get().url(id).parse(1).string();
     }
 
     private String extractRegex(String text, String regex) {
