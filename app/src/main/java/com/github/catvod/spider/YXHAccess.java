@@ -51,7 +51,7 @@ public class YXHAccess extends Spider {
         classes.add(new Class("categories", "分类"));
 
         if (!filter) {
-            return Result.string(classes);
+            return Result.get().classes(classes).string();
         }
 
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
