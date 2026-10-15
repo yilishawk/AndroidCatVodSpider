@@ -445,13 +445,6 @@ public class Tvyb extends Spider {
             }
         });
 
-        // 全部源的数字 id（playerContent 解析失败时按序 fallback）
-        StringBuilder idList = new StringBuilder();
-        for (int i = 0; i < srcs.size(); i++) {
-            if (i > 0) idList.append(";");
-            idList.append(srcs.get(i).optString("id"));
-        }
-
         // player_code -> 剧集列表
         Map<String, JSONArray> code2urls = new HashMap<>();
         JSONArray plays = d.optJSONArray("vod_play_url_list");
@@ -470,6 +463,12 @@ public class Tvyb extends Spider {
             if (name.isEmpty()) name = "线路" + s.optString("id");
             JSONArray urls = code2urls.get(s.optString("player_code"));
             if (urls == null || urls.length() == 0) continue;
+            // 本线路的源 id 排第一，其余源垫后（解析失败才顺延）——保证"选哪条线路播哪条"
+            StringBuilder myIds = new StringBuilder(s.optString("id"));
+            for (int k = 0; k < srcs.size(); k++) {
+                if (k == i) continue;
+                myIds.append(";").append(srcs.get(k).optString("id"));
+            }
             List<String> eps = new ArrayList<>();
             for (int j = 0; j < urls.length(); j++) {
                 JSONObject u = urls.optJSONObject(j);
@@ -478,9 +477,9 @@ public class Tvyb extends Spider {
                 String epName = u.optString("name");
                 if (epName.isEmpty()) epName = String.format("第%02d集", idx + 1);
                 String url = u.optString("url");
-                // url 非空 = 详情直发直链；为空 = 占位（playerContent 调 vodParse，源列表 fallback）
+                // url 非空 = 详情直发直链；为空 = 占位（playerContent 调 vodParse）
                 String playId = (url != null && url.startsWith("http"))
-                        ? url : (vj.optString("vod_id") + "@" + idx + "@" + idList);
+                        ? url : (vj.optString("vod_id") + "@" + idx + "@" + myIds);
                 eps.add(epName + "$" + playId);
             }
             froms.add(name);
@@ -488,7 +487,7 @@ public class Tvyb extends Spider {
         }
         vod.setVodPlayFrom(join(froms, "$$$"));
         vod.setVodPlayUrl(join(urlGroups, "$$$"));
-        logger("detailContent vod=" + ids.get(0) + " 源数=" + froms.size() + "（源id: " + idList + "）");
+        logger("detailContent vod=" + ids.get(0) + " 线路数=" + froms.size());
         return Result.get().vod(vod).string();
     }
 
