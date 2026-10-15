@@ -16,6 +16,7 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -53,8 +54,7 @@ public class YXHAccess extends Spider {
             return Result.string(classes);
         }
 
-        // 筛选
-        Map<String, List<Filter>> filters = new HashMap<>();
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
 
         List<Filter.Value> sortValues = new ArrayList<>();
         sortValues.add(new Filter.Value("最新", "newest"));
@@ -97,11 +97,7 @@ public class YXHAccess extends Spider {
 
         String url;
         if ("categories".equals(tid)) {
-            if (TextUtils.isEmpty(cate)) {
-                url = host + "/categories";
-            } else {
-                url = host + "/categories/" + cate;
-            }
+            url = TextUtils.isEmpty(cate) ? host + "/categories" : host + "/categories/" + cate;
         } else {
             url = host + "/" + tid;
             if (pg != null && !"1".equals(pg) && !TextUtils.isEmpty(pg)) {
@@ -129,31 +125,21 @@ public class YXHAccess extends Spider {
             String name = a.attr("title");
             if (TextUtils.isEmpty(name)) {
                 Element titleEl = item.selectFirst(".video-thumb-info__name, .thumb-image-container__title");
-                if (titleEl != null) {
-                    name = titleEl.text().trim();
-                }
+                if (titleEl != null) name = titleEl.text().trim();
             }
-            if (TextUtils.isEmpty(name)) {
-                name = a.text().trim();
-            }
+            if (TextUtils.isEmpty(name)) name = a.text().trim();
 
             String pic = "";
             Element img = item.selectFirst("img");
             if (img != null) {
                 pic = img.attr("data-src");
-                if (TextUtils.isEmpty(pic)) {
-                    pic = img.attr("src");
-                }
-                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) {
-                    pic = host + pic;
-                }
+                if (TextUtils.isEmpty(pic)) pic = img.attr("src");
+                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
             }
 
             String remark = "";
             Element duration = item.selectFirst(".duration, .thumb-image-container__duration");
-            if (duration != null) {
-                remark = duration.text().trim();
-            }
+            if (duration != null) remark = duration.text().trim();
 
             Vod vod = new Vod();
             vod.setVodId(vid);
@@ -168,43 +154,30 @@ public class YXHAccess extends Spider {
     private String extractVid(String href) {
         if (TextUtils.isEmpty(href)) return "";
         Matcher m = Pattern.compile("/(?:videos|movies)/([^/?#]+)").matcher(href);
-        if (m.find()) {
-            return m.group(1);
-        }
-        return "";
+        return m.find() ? m.group(1) : "";
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        if (ids == null || ids.isEmpty()) {
-            return Result.string(new Vod());
-        }
+        if (ids == null || ids.isEmpty()) return Result.string(new Vod());
         String vid = ids.get(0);
         String url = host + "/videos/" + vid;
 
         String html = OkHttp.string(url, getHeader());
-        if (TextUtils.isEmpty(html)) {
-            return Result.string(new Vod());
-        }
+        if (TextUtils.isEmpty(html)) return Result.string(new Vod());
 
         Document doc = Jsoup.parse(html);
 
         String name = "";
         Element h1 = doc.selectFirst("h1");
-        if (h1 != null) {
-            name = h1.text().trim();
-        }
+        if (h1 != null) name = h1.text().trim();
 
         String pic = "";
         Element img = doc.selectFirst(".player-container img, .video-page img");
         if (img != null) {
             pic = img.attr("src");
-            if (TextUtils.isEmpty(pic)) {
-                pic = img.attr("data-src");
-            }
-            if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) {
-                pic = host + pic;
-            }
+            if (TextUtils.isEmpty(pic)) pic = img.attr("data-src");
+            if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
         }
 
         Vod vod = new Vod();
@@ -220,9 +193,7 @@ public class YXHAccess extends Spider {
     public String searchContent(String key, boolean quick) throws Exception {
         String url = host + "/search/" + URLEncoder.encode(key, "UTF-8");
         String html = OkHttp.string(url, getHeader());
-        if (TextUtils.isEmpty(html)) {
-            return Result.string(new ArrayList<>());
-        }
+        if (TextUtils.isEmpty(html)) return Result.string(new ArrayList<>());
 
         Document doc = Jsoup.parse(html);
         Elements items = doc.select(".thumb-list .thumb-list__item, .video-thumb, .thumb");
@@ -238,21 +209,15 @@ public class YXHAccess extends Spider {
             String name = a.attr("title");
             if (TextUtils.isEmpty(name)) {
                 Element titleEl = item.selectFirst(".video-thumb-info__name");
-                if (titleEl != null) {
-                    name = titleEl.text().trim();
-                }
+                if (titleEl != null) name = titleEl.text().trim();
             }
 
             String pic = "";
             Element img = item.selectFirst("img");
             if (img != null) {
                 pic = img.attr("data-src");
-                if (TextUtils.isEmpty(pic)) {
-                    pic = img.attr("src");
-                }
-                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) {
-                    pic = host + pic;
-                }
+                if (TextUtils.isEmpty(pic)) pic = img.attr("src");
+                if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
             }
 
             Vod vod = new Vod();
@@ -279,7 +244,7 @@ public class YXHAccess extends Spider {
 
                 if (!TextUtils.isEmpty(realUrl)) {
                     realUrl = realUrl.replace("\\/", "/").trim();
-                    return Result.get().url(realUrl).string();
+                    return Result.get().url(realUrl).header(getHeader()).string();
                 }
             }
         } catch (Exception e) {
@@ -292,9 +257,6 @@ public class YXHAccess extends Spider {
     private String extractRegex(String text, String regex) {
         if (TextUtils.isEmpty(text)) return "";
         Matcher m = Pattern.compile(regex).matcher(text);
-        if (m.find()) {
-            return m.group(1);
-        }
-        return "";
+        return m.find() ? m.group(1) : "";
     }
 }
