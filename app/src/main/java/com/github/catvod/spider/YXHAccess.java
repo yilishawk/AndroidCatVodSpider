@@ -16,7 +16,6 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -38,11 +37,9 @@ public class YXHAccess extends Spider {
 
     @Override
     public void init(Context context, String extend) throws Exception {
-        // 预访问首页，获取可能需要的 cookie
         OkHttp.string(host + "/", getHeader());
     }
 
-    // ==================== 首页 + 筛选 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
@@ -56,7 +53,6 @@ public class YXHAccess extends Spider {
         if (filter) {
             Map<String, List<Filter>> filters = new HashMap<>();
 
-            // 通用排序筛选
             List<Filter> commonFilter = new ArrayList<>();
             List<Filter.Value> sortValues = new ArrayList<>();
             sortValues.add(new Filter.Value("最新", "newest"));
@@ -71,7 +67,6 @@ public class YXHAccess extends Spider {
             filters.put("4k", commonFilter);
             filters.put("vr", commonFilter);
 
-            // 分类筛选
             List<Filter> cateFilter = new ArrayList<>();
             List<Filter.Value> cateValues = new ArrayList<>();
             cateValues.add(new Filter.Value("全部", ""));
@@ -92,19 +87,13 @@ public class YXHAccess extends Spider {
         return Result.string(classes);
     }
 
-    // ==================== 分类页 ====================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        String sort = (extend != null && extend.containsKey("sort")) ? extend.get("sort") : "newest";
         String cate = (extend != null && extend.containsKey("cate")) ? extend.get("cate") : "";
 
         String url;
         if ("categories".equals(tid)) {
-            if (TextUtils.isEmpty(cate)) {
-                url = host + "/categories";
-            } else {
-                url = host + "/categories/" + cate;
-            }
+            url = TextUtils.isEmpty(cate) ? host + "/categories" : host + "/categories/" + cate;
         } else {
             url = host + "/" + tid;
             if (!"1".equals(pg) && !TextUtils.isEmpty(pg)) {
@@ -159,20 +148,18 @@ public class YXHAccess extends Spider {
 
     private String extractVid(String href) {
         if (TextUtils.isEmpty(href)) return "";
-        // 匹配 /videos/slug-id 或 /movies/id/slug.html 等常见格式
         Matcher m = Pattern.compile("/(?:videos|movies)/([^/?#]+)").matcher(href);
         if (m.find()) return m.group(1);
         m = Pattern.compile("/embed/([^/?#]+)").matcher(href);
         return m.find() ? m.group(1) : "";
     }
 
-    // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return Result.string(new Vod());
         String vid = ids.get(0);
-
         String url = host + "/videos/" + vid;
+
         String html = OkHttp.string(url, getHeader());
         if (TextUtils.isEmpty(html)) return Result.string(new Vod());
 
@@ -190,7 +177,6 @@ public class YXHAccess extends Spider {
             if (!TextUtils.isEmpty(pic) && !pic.startsWith("http")) pic = host + pic;
         }
 
-        // 播放源直接使用当前页，后续在 playerContent 提取真实地址
         Vod vod = new Vod();
         vod.setVodId(vid);
         vod.setVodName(name);
@@ -201,7 +187,6 @@ public class YXHAccess extends Spider {
         return Result.string(vod);
     }
 
-    // ==================== 搜索 ====================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         String url = host + "/search/" + URLEncoder.encode(key, "UTF-8");
@@ -243,54 +228,42 @@ public class YXHAccess extends Spider {
         return Result.string(list);
     }
 
-    // ==================== 播放解析（优先提取真实 m3u8） ====================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
             String html = OkHttp.string(id, getHeader());
-            if (TextUtils.isEmpty(html)) {
-                return Result.get().url(id).parse(1).string();
+            if (!TextUtils.isEmpty(html)) {
+                // 1. 优先提取 preload 的 m3u8
+                String realUrl = extractRegex(html,
+                        "<link[^>]+rel=[\"']preload[\"'][^>]+href=[\"'](https?://[^\"']+\\.m3u8[^\"']*)[\"']");
+
+                // 2. 兜底匹配任意 m3u8
+                if (TextUtils.isEmpty(realUrl)) {
+                    realUrl = extractRegex(html, "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
+                }
+
+                // 3. 匹配 video-nss / video-cf
+                if (TextUtils.isEmpty(realUrl)) {
+                    realUrl = extractRegex(html, "(https?://(?:video-nss|video-cf)\\.xhcdn\\.com/[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
+                }
+
+                if (!TextUtils.isEmpty(realUrl)) {
+                    realUrl = realUrl.replace("\\/", "/").trim();
+                    // 真实地址，直接返回（默认 parse=0）
+                    return Result.get().url(realUrl).header(getHeader()).string();
+                }
             }
-
-            // 1. 优先提取 <link rel="preload" ... m3u8>（你提供的源码形式）
-            String realUrl = extractRegex(html,
-                    "<link[^>]+rel=[\"']preload[\"'][^>]+href=[\"'](https?://[^\"']+\\.m3u8[^\"']*)[\"']");
-
-            // 2. 兜底匹配任意 m3u8
-            if (TextUtils.isEmpty(realUrl)) {
-                realUrl = extractRegex(html, "(https?://[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
-            }
-
-            // 3. 再匹配 video-nss / video-cf 域名
-            if (TextUtils.isEmpty(realUrl)) {
-                realUrl = extractRegex(html, "(https?://(?:video-nss|video-cf)\\.xhcdn\\.com/[^\"'\\s<>]+\\.m3u8[^\"'\\s<>]*)");
-            }
-
-            if (!TextUtils.isEmpty(realUrl)) {
-                realUrl = realUrl.replace("\\/", "/").trim();
-                // 成功拿到真实地址，使用 parse(0)
-                return Result.get()
-                        .url(realUrl)
-                        .header(getHeader())
-                        .parse(0)
-                        .string();
-            }
-
         } catch (Exception e) {
             e.printStackTrace();
         }
 
-        // 提取失败，降级给壳子嗅探
-        return Result.get().url(id).parse(1).string();
+        // 提取失败，降级嗅探
+        return Result.get().url(id).parse().string();
     }
 
     private String extractRegex(String text, String regex) {
-        return extractRegex(text, regex, 0);
-    }
-
-    private String extractRegex(String text, String regex, int flags) {
         if (TextUtils.isEmpty(text)) return "";
-        Matcher m = Pattern.compile(regex, flags).matcher(text);
+        Matcher m = Pattern.compile(regex).matcher(text);
         return m.find() ? m.group(1) : "";
     }
 }
