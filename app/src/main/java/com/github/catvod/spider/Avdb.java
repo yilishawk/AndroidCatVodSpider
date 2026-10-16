@@ -218,7 +218,9 @@ public class Avdb extends Spider {
                             if (TextUtils.isEmpty(link)) continue;
                             // ★ 修改 5 (2026-10-09, 凯哥拍板): 不在 spider 内解析真地址,
                             // 直接把播放页链接交给壳子嗅探. 故此处存 link, 不再 extractPlayUrl(link).
-                            String title = TextUtils.isEmpty(key) ? "正片" : key;
+                            // ★ 修改 6 (2026-10-16, 凯哥拍板): "Full"/"full" 映射成 "正片".
+                            String k = TextUtils.isEmpty(key) ? "" : key.trim();
+                            String title = (TextUtils.isEmpty(k) || "full".equalsIgnoreCase(k)) ? "正片" : k;
                             eps.add(title + "$" + link);
                         }
                     }
@@ -246,7 +248,10 @@ public class Avdb extends Spider {
                         if (TextUtils.isEmpty(link)) link = one.optString("link", "");
                         if (TextUtils.isEmpty(link)) continue;
                         // ★ 修改 5 (2026-10-09, 凯哥拍板): 同上, 存播放页链接, 不解析真地址.
-                        eps.add(key + "$" + link);
+                        // ★ 修改 6 (2026-10-16, 凯哥拍板): "Full"/"full" 映射成 "正片".
+                        String k = TextUtils.isEmpty(key) ? "" : key.trim();
+                        String title = (TextUtils.isEmpty(k) || "full".equalsIgnoreCase(k)) ? "正片" : k;
+                        eps.add(title + "$" + link);
                     }
                     if (!eps.isEmpty()) {
                         froms.add(serverName);
@@ -294,9 +299,15 @@ public class Avdb extends Spider {
         return link;
     }
 
-    private static final Pattern U18_M3U8_RE =
-            Pattern.compile("\"m3u8\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*?)\"");
-
+    /**
+     * ★ 修改 6 (2026-10-16, 凯哥拍板): 修 \u0026 反转义. 旧实现用正则抠 "m3u8" 字段后只
+     *   replace("\\/","/"), 漏掉 JSON 里被转义的 &(\u0026), 提取出的 m3u8 含字面量 \u0026 是坏 URL.
+     *   改为提取整段 window.PLAYER_CONFIG = {...} JSON, 用 JSONObject 解析, 由其自动还原
+     *   \u0026 / \/ / \" 等转义, 再取 m3u8 字段. 影响面: spider 内解析 upload18 真地址 (playerContent).
+     *   回退: 恢复正则抠字段 + 补 replace("\\u0026","&") 即可.
+     */
+    private static final Pattern U18_CONFIG_RE =
+            Pattern.compile("window\\.PLAYER_CONFIG\\s*=\\s*\\{");
     private String extractM3u8FromUpload18(String playPageUrl) {
         if (TextUtils.isEmpty(playPageUrl)) return "";
         try {
@@ -308,11 +319,21 @@ public class Avdb extends Spider {
             h.put("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
             String html = OkHttp.string(playPageUrl, h);
             if (TextUtils.isEmpty(html)) return "";
-            Matcher m = U18_M3U8_RE.matcher(html);
-            if (m.find()) {
-                String v = m.group(1).replace("\\/", "/");
-                if (v.startsWith("http")) return v;
+            // 定位 window.PLAYER_CONFIG = { ... }, 括号平衡截取整段 JSON (字符串值里裸括号概率极低)
+            Matcher cm = U18_CONFIG_RE.matcher(html);
+            if (!cm.find()) return "";
+            int b = html.indexOf('{', cm.end() - 1);
+            if (b < 0) return "";
+            int depth = 0, e = -1;
+            for (int i = b; i < html.length(); i++) {
+                char c = html.charAt(i);
+                if (c == '{') depth++;
+                else if (c == '}') { depth--; if (depth == 0) { e = i; break; } }
             }
+            if (e < 0) return "";
+            JSONObject cfg = new JSONObject(html.substring(b, e + 1));
+            String m3u8 = cfg.optString("m3u8", "");
+            if (!TextUtils.isEmpty(m3u8) && m3u8.startsWith("http")) return m3u8;
         } catch (Exception ignored) {
         }
         return "";
@@ -471,24 +492,48 @@ public class Avdb extends Spider {
     }
 
     /**
-     * ★ 修改 5 (2026-10-09, 凯哥拍板): 不在 spider 内解析真地址, 直接把播放页推给壳子嗅探.
-     *   - 去掉 extractPlayUrl(url): url 保持为播放页链接 (link_embed / link), 不解出 m3u8.
-     *   - 去掉写死的 "https://upload18.org/" Referer/Origin: 改成按播放页链接自身的域名生成,
-     *     域对得上, 壳子嗅探时才不会因 Referer/Origin 不匹配被服务端 403.
-     *   - 返回 parse(1): 告诉壳子"这是播放页, 你嗅探去", 由壳子 (WebView/嗅探器) 解出真地址.
-     * 回退: 恢复 url = extractPlayUrl(url), 并把 parse(1) 改回 parse(0) 即可.
+     * ★ 修改 5 (2026-10-09, 凯哥拍板): 去掉写死的 "https://upload18.org/" Referer/Origin,
+     *   改成按播放页链接自身的域名生成, 域对得上才不会被服务端 403.
+     * ★ 修改 6 (2026-10-16, 凯哥拍板): upload18 改 spider 内解析真地址, parse(0) 直出.
+     *   - 播放页链接是 upload18.org/.cc/.com 时, 调 extractM3u8FromUpload18 抓页面取
+     *     window.PLAYER_CONFIG.m3u8 (已签名的 helvid.com 地址, 含时效签名), 带 Referer=upload18
+     *     域名请求, 直接 parse(0) 返回可播 m3u8, 绕过壳子嗅探 + upload18 的 JS 反调试 (OkHttp 不发 JS).
+     *   - 非 upload18 域名 / 解析失败: 回退 parse(1) 推壳子嗅探 (原 2026-10-09 路线).
+     *   回退: 删掉 upload18 分支, 恢复纯 parse(1) 即可.
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (!unlocked) return Result.get().url("").string();
         if (TextUtils.isEmpty(id)) return Result.error("播放地址为空");
 
-        // id 形如 "标题$播放页链接"; 取 $ 后的播放页链接, 不在 spider 内解析真地址
+        // id 形如 "标题$播放页链接"; 取 $ 后的播放页链接
         String url = id;
         int dollar = url.indexOf('$');
         if (dollar >= 0 && dollar < url.length() - 1) url = url.substring(dollar + 1);
 
-        // Referer / Origin 取播放页链接自身的域名, 让壳子嗅探时域对得上
+        // upload18: spider 内解析真实 m3u8, parse(0) 直出
+        if (url.startsWith("http")) {
+            try {
+                java.net.URL pu = new java.net.URL(url);
+                String pageHost = pu.getHost().toLowerCase();
+                if (pageHost.endsWith("upload18.org") || pageHost.equals("upload18.cc")
+                        || pageHost.equals("upload18.com")) {
+                    String m3u8 = extractM3u8FromUpload18(url);
+                    if (!TextUtils.isEmpty(m3u8)) {
+                        String origin = pu.getProtocol() + "://" + pageHost;
+                        Map<String, String> h = new HashMap<>();
+                        h.put("User-Agent", UA);
+                        h.put("Referer", origin + "/");
+                        h.put("Origin", origin);
+                        h.put("Accept", "*/*");
+                        return Result.get().parse(0).url(m3u8).header(h).string();
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        // 回退: 非 upload18 / 解析失败, parse(1) 推壳子嗅探
         String origin = host;
         String referer = host + "/";
         if (!TextUtils.isEmpty(url) && url.startsWith("http")) {
@@ -503,14 +548,11 @@ public class Avdb extends Spider {
             } catch (Exception ignored) {
             }
         }
-
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", UA);
         h.put("Referer", referer);
         h.put("Origin", origin);
         h.put("Accept", "*/*");
-
-        // parse=1: 把播放页推给壳子, 由壳子自己嗅探出真地址
         return Result.get().parse(1).url(url).header(h).string();
     }
 }
