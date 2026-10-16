@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
  * 文档: https://avdbapi.com/zh/index.php/label/help.html
  * 接口: https://avdbapi.com/zh/api.php/provide/vod
  *
- * init 时走 PasswordGate，未解锁则源加载失败。
+ * init 时走  PasswordGate，未解锁则源加载失败。
  * 依赖同包 PasswordGate.java（密码当前为 123456789 的 SHA-256）。
  */
 public class Avdb extends Spider {
