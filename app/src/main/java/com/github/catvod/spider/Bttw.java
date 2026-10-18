@@ -2,6 +2,7 @@ package com.github.catvod.spider;
 
 import android.content.Context;
 import android.text.TextUtils;
+import android.util.Base64;
 
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
@@ -16,6 +17,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.net.URLEncoder;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +33,8 @@ public class Bttw extends Spider {
 
     private String host = "https://www.bttwo.life";
     private Map<String, String> headers;
+    private String userlink = "X1VUXUVdXQsHBg4FCgc7IUleV0Bb";
+    private static final String XOR_KEY = "nbmovie2024secretkey";
 
     public Bttw() {
         headers = new HashMap<>();
@@ -53,7 +57,24 @@ public class Bttw extends Spider {
                 SpiderDebug.log("[4k影视] 解析扩展配置失败: " + e.getMessage());
             }
         }
-        SpiderDebug.log("[4k影视] 初始化完成，host: " + host);
+        SpiderDebug.log("[Bttw] 初始化完成，host: " + host);
+        refreshUserlink();
+    }
+
+    /** 播放签名需要 userlink，从首页提取；失败则用内置固定值（服务端不强绑会话，固定值实测可用） */
+    private void refreshUserlink() {
+        try {
+            String html = OkHttp.string(host + "/", headers);
+            if (!TextUtils.isEmpty(html)) {
+                Matcher m = Pattern.compile("userlink:'([^']+)'").matcher(html);
+                if (m.find() && !TextUtils.isEmpty(m.group(1))) {
+                    userlink = m.group(1);
+                    SpiderDebug.log("[Bttw] userlink 已刷新");
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[Bttw] userlink 刷新失败，使用固定值: " + e.getMessage());
+        }
     }
 
     private String fetch(String url) throws Exception {
