@@ -66,9 +66,13 @@ public class Bttw extends Spider {
             String html = OkHttp.string(host + "/", headers);
             if (!TextUtils.isEmpty(html)) {
                 Matcher m = Pattern.compile("userlink:'([^']+)'").matcher(html);
-                if (m.find() && !TextUtils.isEmpty(m.group(1))) {
-                    userlink = m.group(1);
-                    SpiderDebug.log("[Bttw] userlink 已刷新");
+                if (m.find()) {
+                    String u = m.group(1);
+                    // 站点对未登录/新会话会下发无效值 '0'（实测 401：访问令牌格式错误），无效则保持固定值
+                    if (!TextUtils.isEmpty(u) && !"0".equals(u) && u.matches("[A-Za-z0-9+/=]{16,}")) {
+                        userlink = u;
+                        SpiderDebug.log("[Bttw] userlink 已刷新");
+                    }
                 }
             }
         } catch (Exception e) {
@@ -513,6 +517,8 @@ public class Bttw extends Spider {
             f.put("url", url);
             JSONObject header = new JSONObject();
             header.put("User-Agent", headers.get("User-Agent"));
+            header.put("Referer", url);
+            header.put("Origin", host);
             f.put("header", header);
             return f.toString();
         } catch (Exception e) {
