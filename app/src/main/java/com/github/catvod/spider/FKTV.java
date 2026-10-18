@@ -46,7 +46,8 @@ import okhttp3.Response;
  *      影片数据嵌在 self.__next_f.push([1,"..."]) 的文本里，每部影片是一个
  *      ["$","$L2e","<id>",{"item":{...}}] 片段；item 是扁平 JSON，含 id/name/img_x_source/
  *      canonical_path/cat_id/area/release_at 等全部字段。
- *      ⚠️ 图片只能用 img_x_source / img_y_source (.png)，不能用 img_x / img_y (.bnc)。
+ *      ⚠️ 图片只能用 img_x_source / img_y_source (.png)，不能用 img_x / img_y (.bnc)；
+ *         且 fktv 图床校验 Origin/Referer 会 403 裂图，故统一用公共图片代理 https://wsrv.nl/?url= 转发。
  *   2) /ysapi 加密 API：POST，请求体 = Base64( AES-128-ECB( JSON, key ) )，无 IV；
  *      key = "9ed1a661a6ab787a" (16 字节，AES-128)。响应若以 { 或 [ 开头即为明文 JSON，
  *      否则 Base64 解码后 AES 解密得到明文 JSON。
@@ -87,7 +88,6 @@ public class FKTV extends Spider {
         header.put("Referer", HOST + "/");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         header.put("Accept-Language", "zh-CN,zh;q=0.9");
-        header.put("Origin", HOST); // 图床/接口防盗链需要 Origin
         // 不要手动设置 Accept-Encoding，否则 OkHttp 会关闭透明 gzip 解压拿到压缩字节。
     }
 
@@ -180,7 +180,7 @@ public class FKTV extends Spider {
                 Vod v = new Vod();
                 v.setVodId(id);
                 v.setVodName(name);
-                v.setVodPic(o.optString("img"));
+                v.setVodPic(img(o.optString("img")));
                 v.setVodRemarks(o.optString("release_at"));
                 list.add(v);
             }
@@ -205,9 +205,10 @@ public class FKTV extends Spider {
         }
 
         String name = d.optString("name");
-        // ⚠️ 图片取 .png 的 source，不取 .bnc 的 img_x/img_y
+        // ⚠️ 图片取 .png 的 source，不取 .bnc 的 img_x/img_y；外层 img() 已加 wsrv.nl 图片代理
         String pic = d.optString("img_x_source");
         if (TextUtils.isEmpty(pic)) pic = d.optString("img_y_source");
+        pic = img(pic);
         String actor = joinNames(d.opt("actor"));
         String director = d.optString("director");
         String area = d.optString("area");
@@ -334,23 +335,12 @@ public class FKTV extends Spider {
     }
 
     /**
-     * 图片代理：图床 (cdn.g3ejjm8m.com / cdn-test2.irxjfs.cn) 防盗链校验 Origin + Referer，
-     * 壳子直接加载列表/详情图会裂。壳子把图片转发到本 spider 时代入 Origin/Referer 取图返回字节流。
-     * 需在壳子的「图片使用爬虫代理 / 图片走 spider」设置里把 FKTV 设为图片代理才会触发。
+     * 图片不走 spider 取图代理，也不直连 fktv 图床（图床校验 Origin/Referer 会 403 裂图）。
+     * 统一用公共图片代理 wsrv.nl 转发：壳子直连 wsrv.nl（不验证 referer），由它去抓原图返回给壳子。
      */
-    @Override
-    public Object[] proxyLocal(Map<String, String> params) throws Exception {
-        String url = params == null ? null : params.get("url");
-        if (TextUtils.isEmpty(url)) return null;
-        Map<String, String> h = new HashMap<>();
-        h.put("User-Agent", UA);
-        h.put("Referer", HOST + "/");
-        h.put("Origin", HOST);
-        Response res = OkHttp.newCall(url, h);
-        if (res == null || !res.isSuccessful() || res.body() == null) return null;
-        byte[] data = res.body().bytes();
-        String ct = res.header("content-type", "image/jpeg");
-        return new Object[]{ct, data};
+    private static String img(String url) {
+        if (TextUtils.isEmpty(url) || !url.startsWith("http") || url.contains("wsrv.nl")) return url;
+        return "https://wsrv.nl/?url=" + url;
     }
 
     /** 统一 /ysapi 调用：AES-128-ECB 加密请求体，解密响应。 */
@@ -452,7 +442,7 @@ public class FKTV extends Spider {
     /**
      * 分类 RSC 页抠影片：影片以 ["$","$L2e","<id>",{"item":{...}}] 形式嵌入。
      * item 是扁平 JSON（无嵌套对象），正则 "item":{...} 直接解析，字段全取。
-     * ⚠️ 图片取 img_x_source / img_y_source (.png)，不取 img_x / img_y (.bnc)。
+     * ⚠️ 图片取 img_x_source / img_y_source (.png)，不取 img_x / img_y (.bnc)；统一经 img() 加 wsrv.nl 图片代理。
      * area 非空时按 item.area 字段在本地二次过滤（服务端不按 URL 路径段筛选）。
      */
     private List<Vod> parseItems(String html, String area) {
@@ -472,6 +462,7 @@ public class FKTV extends Spider {
                 if (!TextUtils.isEmpty(area) && !area.equals(it.optString("area"))) continue;
                 String pic = it.optString("img_x_source");
                 if (TextUtils.isEmpty(pic)) pic = it.optString("img_y_source");
+                pic = img(pic);
                 String itemArea = it.optString("area");
                 String year = it.optString("release_at");
 
