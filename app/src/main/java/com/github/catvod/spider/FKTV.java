@@ -141,6 +141,8 @@ public class FKTV extends Spider {
 
         StringBuilder url = new StringBuilder(HOST + "/category/" + catId + "/" + urlEncode(name));
         if (!TextUtils.isEmpty(area)) url.append("/area/").append(urlEncode(area));
+        // /category 路由支持 /page/N 翻页(实测第1/2页内容不同)；第1页用基础 URL，>1 才拼 /page/N
+        if (page > 1) url.append("/page/").append(page);
 
         String html = OkHttp.string(url.toString(), header);
         // 服务端不按 /area/<值> 路径段筛选(fktv 在前端 JS 里过滤)，所以抓全量后在本地按 area 字段二次过滤
