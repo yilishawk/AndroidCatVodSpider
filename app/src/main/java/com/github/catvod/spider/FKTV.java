@@ -10,21 +10,14 @@ import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -41,294 +34,332 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * 凡客影视 (fktv.me)
- * 由 Python 版 spider 按项目 Java 规范翻译，Result/Vod/Class/OkHttp 的调用方式已对照
- * 实际上传的 Result.java / Vod.java / Class.java / OkHttp.java 源码核对过，说明如下：
+ * 凡客影视 (fktv.me) —— CatVod 爬虫
  *
- *   - Result 没有传统 setter，只能用链式 builder：Result.get().vod(list).page(...).string()；
- *     .page(page, count, limit, total) 里任何一个参数传 0 都会被规范化成 Integer.MAX_VALUE
- *     （库自身的"无限/未知"语义，不是 bug）。
- *   - Vod 用传统 setXxx()，但**没有 type_id 字段**，只有 setTypeName()，所以列表/详情里
- *     都不再设置 type_id。
- *   - Class 完全没有 setter，只能用构造函数 new Class(typeId, typeName)。
- *   - OkHttp 没有 newCall(url, headers, body) 这个三参数重载，POST 自定义 Content-Type
- *     的原始字节流必须自己拼 okhttp3.Request 再调用 OkHttp.newCall(Request)。
- *   - OkHttp.string() 内部吞掉了 IOException，失败时返回空字符串而不是抛异常，因此用
- *     TextUtils.isEmpty() 判断请求是否成功，而不是依赖 try/catch。
+ * 站点本质是 Next.js (React) SPA，数据走两种通道：
+ *   1) /ysapi 加密 API：POST，请求体 = Base64( AES-128-ECB( JSON, key ) )，无 IV；
+ *      key = "9ed1a661a6ab787a" (16 字节，AES-128)。响应若以 { 或 [ 开头即为明文 JSON，
+ *      否则 Base64 解码后 AES 解密得到明文 JSON。
+ *   2) Next.js RSC：列表/首页由服务端渲染的频道页 (/channel/<slug>) 承载，没有 /ysapi 列表端点。
+ *
+ * 最关键的踩坑点（旧版"无法使用"的根因）：
+ *   /ysapi 对 payload 里的 deviceId 做格式校验，必须是「32 位十六进制」，否则返回
+ *   「设备信息错误 errorCode 2001」。旧版把 deviceId 硬编码成了一个含非 hex 字符的 32 位串，
+ *   导致播放链路 (playerContent 二次请求 movie/detail) 永远被拒 → 点开即失败。
+ *   本版 deviceId 用 MD5(域名) 生成，保证是合法 32-hex。
+ *
+ * 播放模型：detail 阶段一次性拿到 links(集) + play_links(线路)；playerContent 用合法 deviceId
+ *   再请求一次 movie/detail {id, link_id, is_simple:"y"} 取该线路该集的已签 m3u8 直链后直出。
  */
 public class FKTV extends Spider {
 
     private static final String HOST = "https://fktv.me";
-    private static final byte[] AES_KEY = hexToBytes("39656431613636316136616237383761");
+    private static final String API = HOST + "/ysapi";
+    private static final String KEY = "9ed1a661a6ab787a"; // 16 字节 -> AES-128
+    private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
+    private String deviceId;
     private Map<String, String> header;
-    private Map<String, String> cateMap;
-    private Map<String, String> typeNameMap;
 
     @Override
     public void init(Context context, String extend) throws Exception {
+        // deviceId 必须 32 位 hex，否则 /ysapi 报「设备信息错误 2001」
+        deviceId = md5Hex("fktv.me");
         header = new HashMap<>();
-        header.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36");
+        header.put("User-Agent", UA);
         header.put("Referer", HOST + "/");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         header.put("Accept-Language", "zh-CN,zh;q=0.9");
-        // 注意：不要手动设置 Accept-Encoding！一旦调用方自己设置这个头，
-        // OkHttp 会认为调用方要自行处理响应编码，从而关闭内置的透明 gzip 解压，
-        // 导致拿到的是没解压的压缩字节而不是文本（这正是"只有分类标题、
-        // 没有视频列表"这个问题的根因——Python 的 requests 库会一直自动解压，
-        // 所以同样的写法在 Python 版本里不会出问题）。
-
-        cateMap = new HashMap<>();
-        cateMap.put("连续剧", "5");
-        cateMap.put("电影", "6");
-        cateMap.put("综艺", "4");
-        cateMap.put("短剧", "9");
-
-        typeNameMap = new HashMap<>();
-        typeNameMap.put("5", "连续剧");
-        typeNameMap.put("6", "电影");
-        typeNameMap.put("4", "综艺");
-        typeNameMap.put("9", "短剧");
+        // 注意：不要手动设置 Accept-Encoding，否则 OkHttp 会关闭透明 gzip 解压拿到压缩字节。
     }
 
-    public String getName() {
-        return "凡客影视";
-    }
-
-    // ========================= 工具方法 =========================
-
-    private static byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                    + Character.digit(hex.charAt(i + 1), 16));
-        }
-        return data;
-    }
-
-    private static String urlEncode(String s) {
-        try {
-            return URLEncoder.encode(s, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            return s;
-        }
-    }
-
-    /** 对应 Python 的 find_key_json：在嵌套 JSON 中递归查找第一个匹配的 key */
-    private Object findKeyJson(Object obj, String key) {
-        if (obj instanceof JSONObject) {
-            JSONObject jo = (JSONObject) obj;
-            if (jo.has(key)) return jo.opt(key);
-            Iterator<String> keys = jo.keys();
-            while (keys.hasNext()) {
-                Object res = findKeyJson(jo.opt(keys.next()), key);
-                if (res != null) return res;
-            }
-        } else if (obj instanceof JSONArray) {
-            JSONArray arr = (JSONArray) obj;
-            for (int i = 0; i < arr.length(); i++) {
-                Object res = findKeyJson(arr.opt(i), key);
-                if (res != null) return res;
-            }
-        }
-        return null;
-    }
-
-    /** 对应 Python 的 _find_all_m3u8_url：递归收集所有键为 m3u8_url 的值 */
-    private void findAllM3u8Url(Object obj, List<String> result) {
-        if (obj instanceof JSONObject) {
-            JSONObject jo = (JSONObject) obj;
-            Iterator<String> keys = jo.keys();
-            while (keys.hasNext()) {
-                String k = keys.next();
-                Object v = jo.opt(k);
-                if ("m3u8_url".equals(k)) {
-                    if (v != null) result.add(String.valueOf(v));
-                } else {
-                    findAllM3u8Url(v, result);
-                }
-            }
-        } else if (obj instanceof JSONArray) {
-            JSONArray arr = (JSONArray) obj;
-            for (int i = 0; i < arr.length(); i++) {
-                findAllM3u8Url(arr.opt(i), result);
-            }
-        }
-    }
-
-    private String encryptAesEcb(String text, byte[] key) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
-        byte[] encrypted = cipher.doFinal(text.getBytes(StandardCharsets.UTF_8));
-        return Base64.encodeToString(encrypted, Base64.NO_WRAP);
-    }
-
-    private String decryptAesEcb(String base64Str, byte[] key) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"));
-        byte[] decrypted = cipher.doFinal(Base64.decode(base64Str, Base64.NO_WRAP));
-        return new String(decrypted, StandardCharsets.UTF_8);
-    }
-
-    private String joinNames(Object obj) {
-        if (obj instanceof JSONArray) {
-            JSONArray arr = (JSONArray) obj;
-            List<String> names = new ArrayList<>();
-            for (int i = 0; i < arr.length(); i++) {
-                Object item = arr.opt(i);
-                if (item instanceof JSONObject) {
-                    names.add(((JSONObject) item).optString("name", item.toString()));
-                } else if (item != null) {
-                    names.add(String.valueOf(item));
-                }
-            }
-            return TextUtils.join(",", names);
-        } else if (obj instanceof String) {
-            return (String) obj;
-        }
-        return "";
-    }
-
-    private String trimSlashes(String s) {
-        if (s == null) return "";
-        int start = 0, end = s.length();
-        while (start < end && s.charAt(start) == '/') start++;
-        while (end > start && s.charAt(end - 1) == '/') end--;
-        return s.substring(start, end);
-    }
-
-    // ========================= 首页 =========================
-
+    // ========================= 首页 / 分类导航 =========================
+    // tid 直接使用频道 slug，categoryContent 据此抓 /channel/<slug> 的 RSC 页。
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("5_tag_296", "国产剧"));
-        classes.add(new Class("5", "连续剧"));
-        classes.add(new Class("6", "电影"));
-        classes.add(new Class("4", "综艺"));
-        classes.add(new Class("9", "短剧"));
-
+        classes.add(new Class("movie", "电影"));
+        classes.add(new Class("tv", "连续剧"));
+        classes.add(new Class("zy", "综艺"));
+        classes.add(new Class("comic", "动漫"));
+        classes.add(new Class("short_tv", "短剧"));
+        classes.add(new Class("js", "解说"));
         return Result.get().classes(classes).string();
     }
 
     // ========================= 分类列表 =========================
-
+    // fktv 列表走 RSC 频道页，URL 不分页 (?page= 无效，page1==page2)，这里如实返回当前可见影片。
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        String url;
-        if (tid.contains("_tag_")) {
-            String[] parts = tid.split("_tag_");
-            String baseTid = parts[0];
-            String tagId = parts[1];
-            String typeName = typeNameMap.containsKey(baseTid) ? typeNameMap.get(baseTid) : "";
-            url = HOST + "/category/" + baseTid + "/" + urlEncode(typeName) + "/tag/" + tagId + "/" + tagId + "/position/tv/page/" + pg;
-        } else {
-            String typeName = typeNameMap.containsKey(tid) ? typeNameMap.get(tid) : "";
-            url = HOST + "/category/" + tid + "/" + urlEncode(typeName) + "/page/" + pg;
-        }
-
-        String htmlText = OkHttp.string(url, header);
-        if (TextUtils.isEmpty(htmlText)) {
-            return Result.get().vod(new ArrayList<Vod>())
-                    .page(Integer.parseInt(pg), 0, 0, 0)
-                    .string();
-        }
-
-        List<Vod> videos = parseItemsFromHtml(htmlText);
-
-        int totalPages = Integer.parseInt(pg) + 1;
-        try {
-            Document doc = Jsoup.parse(htmlText);
-            Elements pageLinks = doc.select(".pagination a");
-            if (pageLinks.isEmpty()) pageLinks = doc.select(".page a");
-            int max = totalPages;
-            for (Element a : pageLinks) {
-                String t = a.text().trim();
-                if (t.matches("\\d+")) {
-                    int v = Integer.parseInt(t);
-                    if (v > max) max = v;
-                }
-            }
-            totalPages = max;
-        } catch (Exception ignore) {
-        }
-
-        return Result.get().vod(videos)
-                .page(Integer.parseInt(pg), totalPages, videos.size(), videos.size() * 10)
+        int page = safeInt(pg, 1);
+        String url = HOST + "/channel/" + tid;
+        String html = OkHttp.string(url, header);
+        List<Vod> list = parseChannel(html);
+        return Result.get().vod(list)
+                .page(page, page + 1, list.size(), list.size() * 10)
                 .string();
     }
 
-    /** categoryContent 与 searchContent 共用的列表解析逻辑（对应 Python 里重复的那段 item 提取代码） */
-    private List<Vod> parseItemsFromHtml(String htmlText) {
-        List<Vod> videos = new ArrayList<>();
-        String cleanHtml = htmlText.replace("\\\"", "\"").replace("\\/", "/");
-
-        Pattern itemPattern = Pattern.compile("\"item\":(\\{.+?\\})(?=\\}(?:,|\\]|\\}))");
-        Matcher m = itemPattern.matcher(cleanHtml);
-
-        while (m.find()) {
-            String itemStr = m.group(1);
-            if (!itemStr.endsWith("}")) itemStr = itemStr + "}";
-            try {
-                JSONObject itemObj = new JSONObject(itemStr);
-                String path = itemObj.optString("canonical_path", "");
-                String vodId;
-                if (path.contains("/movie/")) {
-                    vodId = path.substring(path.lastIndexOf("/movie/") + "/movie/".length());
-                } else {
-                    vodId = itemObj.optString("id", "");
-                }
-                vodId = trimSlashes(vodId).replace("/", "___");
-                String vodName = itemObj.optString("name", "");
-                String vodPic = itemObj.optString("img_y_source", "");
-                String vodRemarks = itemObj.optString("release_at", "");
-                if (TextUtils.isEmpty(vodRemarks)) vodRemarks = itemObj.optString("area", "");
-
-                if (!TextUtils.isEmpty(vodId) && !TextUtils.isEmpty(vodName)) {
-                    Vod vod = new Vod();
-                    vod.setVodId(vodId);
-                    vod.setVodName(vodName);
-                    vod.setVodPic(vodPic);
-                    vod.setVodRemarks(vodRemarks);
-                    videos.add(vod);
-                }
-            } catch (Exception ignore) {
-            }
-        }
-        return videos;
-    }
-
     // ========================= 搜索 =========================
-
+    // /ysapi/movie/smartSearch：仅支持关键词，不支持分类 / 分页。
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
     }
 
-    /** 重载：兼容部分壳子(如 FongMi)会额外传 pg 参数的调用方式 */
     public String searchContent(String key, boolean quick, String pg) throws Exception {
-        int pageNum = safeParseInt(pg, 1);
-
         if (TextUtils.isEmpty(key)) {
-            return Result.get().vod(new ArrayList<Vod>()).page(pageNum, 1, 0, 0).string();
+            return Result.get().vod(new ArrayList<Vod>()).string();
         }
+        JSONObject data = new JSONObject();
+        data.put("keywords", key);
+        JSONObject resp = apiPost("movie/smartSearch", data);
 
-        String url = HOST + "/channel?keywords=" + urlEncode(key);
-        String htmlText = OkHttp.string(url, header);
-        if (TextUtils.isEmpty(htmlText)) {
-            return Result.get().vod(new ArrayList<Vod>()).page(pageNum, 1, 0, 0).string();
+        List<Vod> list = new ArrayList<>();
+        JSONArray arr = resp.optJSONArray("data");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String id = o.optString("id");
+                String name = o.optString("name");
+                if (TextUtils.isEmpty(id) || TextUtils.isEmpty(name)) continue;
+                Vod v = new Vod();
+                v.setVodId(id);
+                v.setVodName(name);
+                v.setVodPic(o.optString("img"));
+                v.setVodRemarks(o.optString("release_at"));
+                list.add(v);
+            }
         }
-
-        List<Vod> videos = parseItemsFromHtml(htmlText);
-        if (quick && videos.size() > 10) {
-            videos = new ArrayList<>(videos.subList(0, 10));
+        if (quick && list.size() > 10) {
+            list = new ArrayList<>(list.subList(0, 10));
         }
-
-        return Result.get().vod(videos).page(pageNum, 1, videos.size(), videos.size()).string();
+        return Result.get().vod(list).string();
     }
 
-    private int safeParseInt(String s, int fallback) {
+    // ========================= 详情 =========================
+    // /ysapi/movie/detail {id} -> 基本信息 + links(集) + play_links(线路)
+    @Override
+    public String detailContent(List<String> ids) throws Exception {
+        String id = ids.get(0);
+        JSONObject data = new JSONObject();
+        data.put("id", id);
+        JSONObject resp = apiPost("movie/detail", data);
+        JSONObject d = resp.optJSONObject("data");
+        if (d == null) {
+            return Result.get().vod(new ArrayList<Vod>()).string();
+        }
+
+        String name = d.optString("name");
+        String pic = d.optString("img_x");
+        if (TextUtils.isEmpty(pic)) pic = d.optString("img_y");
+        String actor = joinNames(d.opt("actor"));
+        String director = d.optString("director");
+        String area = d.optString("area");
+        String year = yearOf(d.optString("release_at"));
+        String content = d.optString("description");
+        String typeName = d.optString("categories", d.optString("child_title", ""));
+
+        JSONArray links = d.optJSONArray("links");
+        JSONArray playLinks = d.optJSONArray("play_links");
+
+        List<String> fromList = new ArrayList<>();
+        List<String> urlList = new ArrayList<>();
+
+        if (playLinks != null && links != null) {
+            for (int i = 0; i < playLinks.length(); i++) {
+                JSONObject line = playLinks.optJSONObject(i);
+                if (line == null) continue;
+                String lineName = line.optString("name", "线路" + (i + 1));
+                fromList.add(lineName);
+
+                StringBuilder sb = new StringBuilder();
+                for (int j = 0; j < links.length(); j++) {
+                    JSONObject ep = links.optJSONObject(j);
+                    if (ep == null) continue;
+                    String epName = ep.optString("name", "第" + (j + 1) + "集");
+                    String linkId = ep.optString("id");
+                    if (j > 0) sb.append("#");
+                    // 播放时 playerContent 用 movieId@linkId 二次请求取精确 m3u8
+                    sb.append(epName).append("$").append(id).append("@").append(linkId);
+                }
+                urlList.add(sb.toString());
+            }
+        }
+        if (fromList.isEmpty()) {
+            fromList.add("线路1");
+            urlList.add("1$" + id + "@");
+        }
+
+        Vod v = new Vod();
+        v.setVodId(id);
+        v.setVodName(name);
+        v.setVodPic(pic);
+        v.setTypeName(typeName);
+        v.setVodRemarks(links != null ? ("共 " + links.length() + " 集") : "");
+        v.setVodActor(actor);
+        v.setVodDirector(director);
+        v.setVodArea(area);
+        v.setVodYear(year);
+        v.setVodContent(content);
+        v.setVodPlayFrom(TextUtils.join("$$$", fromList));
+        v.setVodPlayUrl(TextUtils.join("$$$", urlList));
+        return Result.get().vod(v).string();
+    }
+
+    // ========================= 播放解析 =========================
+    // id 形如 movieId@linkId：用合法 deviceId 再请求 movie/detail 取该线路该集的已签 m3u8 直链后直出。
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        if (id.startsWith("http")) {
+            return okPlay(id);
+        }
+        if (!id.contains("@")) {
+            return failPlay();
+        }
+        try {
+            String[] sp = id.split("@", 2);
+            String movieId = sp[0];
+            String linkId = sp[1];
+
+            JSONObject data = new JSONObject();
+            data.put("id", movieId);
+            data.put("link_id", linkId);
+            data.put("is_simple", "y");
+            JSONObject resp = apiPost("movie/detail", data);
+            JSONObject d = resp.optJSONObject("data");
+            if (d == null) return failPlay();
+
+            String url = null;
+            JSONArray pl = d.optJSONArray("play_links");
+            if (pl != null && pl.length() > 0) {
+                if (!TextUtils.isEmpty(flag)) {
+                    for (int i = 0; i < pl.length(); i++) {
+                        JSONObject l = pl.optJSONObject(i);
+                        if (l == null) continue;
+                        if (flag.equals(l.optString("name")) || flag.equals(String.valueOf(l.opt("id")))) {
+                            url = optM3u8(l);
+                            break;
+                        }
+                    }
+                }
+                if (TextUtils.isEmpty(url)) url = optM3u8(pl.optJSONObject(0));
+            }
+            // 最终降级
+            if (TextUtils.isEmpty(url)) url = d.optString("m3u8_url", null);
+
+            if (!TextUtils.isEmpty(url) && url.startsWith("http")) {
+                return okPlay(url);
+            }
+            return failPlay();
+        } catch (Exception e) {
+            return failPlay();
+        }
+    }
+
+    private String optM3u8(JSONObject l) {
+        if (l == null) return null;
+        String u = l.optString("m3u8_url", null);
+        if (TextUtils.isEmpty(u)) u = l.optString("hevc_m3u8_url", null);
+        return u;
+    }
+
+    // ========================= 私有工具 =========================
+
+    /** 取 m3u8 直链并带 Referer 直出 (parse=0)。 */
+    private String okPlay(String url) {
+        Map<String, String> h = new HashMap<>();
+        h.put("Referer", HOST + "/");
+        h.put("User-Agent", UA);
+        return Result.get().url(url).header(h).string();
+    }
+
+    private String failPlay() {
+        return Result.get().url("").string();
+    }
+
+    /** 统一 /ysapi 调用：AES-128-ECB 加密请求体，解密响应。 */
+    private JSONObject apiPost(String endpoint, JSONObject data) throws Exception {
+        JSONObject payload = new JSONObject();
+        payload.put("deviceId", deviceId);
+        payload.put("token", "");
+        payload.put("domain", "fktv.me");
+        payload.put("referer", "");
+        payload.put("user_agent", UA);
+        payload.put("shareCode", "");
+        payload.put("channel", "");
+        payload.put("ip", "");
+        payload.put("data", data);
+
+        String body = encrypt(payload.toString());
+
+        Map<String, String> h = new HashMap<>();
+        h.put("version", "1.0");
+        h.put("deviceType", "pc");
+        h.put("time", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
+        h.put("user-agent", UA);
+        h.put("referer", HOST + "/");
+        h.put("origin", HOST);
+        h.put("cookie", "_did=" + deviceId);
+
+        RequestBody rb = RequestBody.create(MediaType.parse("application/octet-stream"), body);
+        Request req = new Request.Builder().url(API + "/" + endpoint).post(rb).headers(Headers.of(h)).build();
+        Response res = OkHttp.newCall(req);
+        if (res == null || !res.isSuccessful() || res.body() == null) {
+            return new JSONObject();
+        }
+        String txt = res.body().string().trim();
+        if (TextUtils.isEmpty(txt)) {
+            return new JSONObject();
+        }
+        return new JSONObject(decrypt(txt));
+    }
+
+    private String encrypt(String text) throws Exception {
+        Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
+        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY.getBytes("UTF-8"), "AES"));
+        return Base64.encodeToString(c.doFinal(text.getBytes("UTF-8")), Base64.NO_WRAP);
+    }
+
+    private String decrypt(String text) throws Exception {
+        if (text.startsWith("{") || text.startsWith("[")) return text;
+        Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
+        c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY.getBytes("UTF-8"), "AES"));
+        return new String(c.doFinal(Base64.decode(text, Base64.NO_WRAP)), "UTF-8");
+    }
+
+    private static String md5Hex(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] b = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte x : b) sb.append(String.format("%02x", x));
+            return sb.toString();
+        } catch (Exception e) {
+            return "30303030303030303030303030303030";
+        }
+    }
+
+    private static String yearOf(String s) {
+        if (s != null && s.length() >= 4) return s.substring(0, 4);
+        return "";
+    }
+
+    private static String joinNames(Object o) {
+        if (o instanceof JSONArray) {
+            JSONArray a = (JSONArray) o;
+            List<String> names = new ArrayList<>();
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject x = a.optJSONObject(i);
+                if (x != null) names.add(x.optString("name", ""));
+            }
+            return TextUtils.join(",", names);
+        }
+        return o == null ? "" : o.toString();
+    }
+
+    private static int safeInt(String s, int fallback) {
         try {
             return Integer.parseInt(s);
         } catch (Exception e) {
@@ -336,347 +367,41 @@ public class FKTV extends Spider {
         }
     }
 
-    // ========================= 详情 =========================
+    /** 频道 RSC 页抠影片：以 "id":"<16hex>" 为中心，双向 600 字符窗口必须同窗含 img_x + canonical_path，过滤 React key 噪声。 */
+    private List<Vod> parseChannel(String html) {
+        List<Vod> list = new ArrayList<>();
+        if (TextUtils.isEmpty(html)) return list;
+        String clean = html.replace("\\\"", "\"").replace("\\/", "/");
 
-    @Override
-    public String detailContent(List<String> ids) throws Exception {
-        String vodId = ids.get(0);
-        String rawPath = vodId.replace("___", "/");
-        String url = HOST + "/movie/" + rawPath;
+        Pattern p = Pattern.compile("\"id\":\"([0-9a-f]{16})\"");
+        Matcher m = p.matcher(clean);
+        while (m.find()) {
+            int s = Math.max(0, m.start() - 600);
+            int e = Math.min(clean.length(), m.end() + 600);
+            String win = clean.substring(s, e);
+            if (!win.contains("img_x") || !win.contains("canonical_path")) continue;
 
-        String htmlText = OkHttp.string(url, header);
-        if (TextUtils.isEmpty(htmlText)) {
-            return Result.get().vod(new ArrayList<Vod>()).string();
+            String id = m.group(1);
+            String name = findField(win, "name");
+            if (TextUtils.isEmpty(name)) name = findField(win, "movie_name");
+            if (TextUtils.isEmpty(name)) name = findField(win, "title");
+            String pic = findField(win, "img_x");
+            if (TextUtils.isEmpty(pic)) pic = findField(win, "img_y");
+            String path = findField(win, "canonical_path");
+            if (TextUtils.isEmpty(name)) continue;
+
+            Vod v = new Vod();
+            v.setVodId(id);
+            v.setVodName(name);
+            v.setVodPic(pic);
+            v.setVodRemarks(path);
+            list.add(v);
         }
-
-        String vodName = "";
-        String vodPic = "";
-        String embedUrl = "";
-        String typeName = "未知";
-        String vodDirector = "";
-        String vodActor = "";
-        String vodArea = "";
-        String vodYear = "";
-        String vodContent = "";
-
-        Document soup = Jsoup.parse(htmlText);
-
-        // 解析 <script type="application/ld+json"> 里的 VideoObject
-        try {
-            Elements scripts = soup.select("script[type=application/ld+json]");
-            for (Element script : scripts) {
-                try {
-                    JSONObject data = new JSONObject(script.data());
-                    if ("VideoObject".equals(data.optString("@type"))) {
-                        vodName = data.optString("name", "");
-                        typeName = data.optString("genre", "未知");
-                        embedUrl = data.optString("embedUrl", "");
-
-                        JSONArray thumbs = data.optJSONArray("thumbnailUrl");
-                        if (thumbs != null && thumbs.length() > 0) vodPic = thumbs.optString(0, "");
-
-                        vodDirector = joinNames(data.opt("director"));
-                        vodActor = joinNames(data.opt("actor"));
-
-                        String pubDate = data.optString("datePublished", "");
-                        if (!TextUtils.isEmpty(pubDate) && pubDate.contains("-")) {
-                            vodYear = pubDate.split("-")[0];
-                        }
-                        vodContent = data.optString("description", "");
-                    }
-                } catch (Exception ignore) {
-                }
-            }
-        } catch (Exception ignore) {
-        }
-
-        String cleanDetailHtml = htmlText.replace("\\\"", "\"").replace("\\/", "/");
-        JSONArray linksData = null;
-        JSONArray playLinesData = null;
-
-        Matcher linksMatcher = Pattern.compile("\"links\":(\\[.+?\\])(?=\\s*(?:,|\\}))").matcher(cleanDetailHtml);
-        if (linksMatcher.find()) {
-            try {
-                linksData = new JSONArray(linksMatcher.group(1));
-            } catch (Exception ignore) {
-            }
-        }
-
-        Matcher linesMatcher = Pattern.compile("\"play_links\":(\\[.+?\\])(?=\\s*(?:,|\\}))").matcher(cleanDetailHtml);
-        if (linesMatcher.find()) {
-            try {
-                playLinesData = new JSONArray(linesMatcher.group(1));
-            } catch (Exception ignore) {
-            }
-        }
-
-        // __NEXT_DATA__ 兜底
-        JSONObject rootData = null;
-        Matcher nextDataMatcher = Pattern.compile(
-                "<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", Pattern.DOTALL
-        ).matcher(htmlText);
-        if (nextDataMatcher.find()) {
-            try {
-                rootData = new JSONObject(nextDataMatcher.group(1));
-            } catch (Exception ignore) {
-            }
-        }
-
-        if (rootData != null) {
-            if (linksData == null) {
-                Object o = findKeyJson(rootData, "links");
-                if (o instanceof JSONArray) linksData = (JSONArray) o;
-            }
-            if (playLinesData == null) {
-                Object o = findKeyJson(rootData, "play_links");
-                if (o instanceof JSONArray) playLinesData = (JSONArray) o;
-            }
-            if (TextUtils.isEmpty(vodName)) {
-                Object o = findKeyJson(rootData, "name");
-                if (o != null) vodName = String.valueOf(o);
-            }
-            if (TextUtils.isEmpty(vodPic)) {
-                Object o = findKeyJson(rootData, "img_y_source");
-                if (o == null) o = findKeyJson(rootData, "img_y");
-                if (o != null) vodPic = String.valueOf(o);
-            }
-            if (TextUtils.isEmpty(vodDirector)) {
-                vodDirector = joinNames(findKeyJson(rootData, "director"));
-            }
-            if (TextUtils.isEmpty(vodActor)) {
-                vodActor = joinNames(findKeyJson(rootData, "actor"));
-            }
-            if (TextUtils.isEmpty(vodArea)) {
-                Object o = findKeyJson(rootData, "area");
-                if (o != null) vodArea = String.valueOf(o);
-            }
-            if (TextUtils.isEmpty(vodYear)) {
-                Object o = findKeyJson(rootData, "year");
-                if (o == null) o = findKeyJson(rootData, "release_at");
-                if (o != null) {
-                    String y = String.valueOf(o);
-                    vodYear = y.length() > 4 ? y.substring(0, 4) : y;
-                }
-            }
-            if (TextUtils.isEmpty(vodContent)) {
-                Object o = findKeyJson(rootData, "description");
-                if (o == null) o = findKeyJson(rootData, "intro");
-                if (o != null) vodContent = String.valueOf(o);
-            }
-        }
-
-        if (TextUtils.isEmpty(vodContent)) {
-            Element descTag = soup.selectFirst(".vod_content");
-            if (descTag == null) descTag = soup.selectFirst(".summary");
-            if (descTag == null) descTag = soup.selectFirst("[class*=desc]");
-            if (descTag != null) vodContent = descTag.text().trim();
-        }
-
-        if (TextUtils.isEmpty(vodName)) {
-            Element titleTag = soup.selectFirst(".normal-title");
-            if (titleTag == null) titleTag = soup.selectFirst("h1");
-            vodName = titleTag != null ? titleTag.text().trim() : url;
-        }
-
-        if (TextUtils.isEmpty(vodPic)) {
-            Element imgTag = soup.selectFirst(".normal-wrap img");
-            if (imgTag == null) imgTag = soup.selectFirst(".relative img");
-            vodPic = imgTag != null ? imgTag.attr("src") : "";
-        }
-
-        // ---------- 组装播放源 ----------
-        List<String> playFromList = new ArrayList<>();
-        List<String> playUrlList = new ArrayList<>();
-        String rawMovieId = vodId.contains("___") ? vodId.substring(0, vodId.indexOf("___")) : vodId;
-
-        if (playLinesData != null && playLinesData.length() > 0 && linksData != null && linksData.length() > 0) {
-            for (int i = 0; i < playLinesData.length(); i++) {
-                JSONObject line = playLinesData.optJSONObject(i);
-                String lineName = line != null ? line.optString("name", "默认线路") : "默认线路";
-                playFromList.add(lineName);
-
-                List<String> episodeUrls = new ArrayList<>();
-                for (int j = 0; j < linksData.length(); j++) {
-                    JSONObject ep = linksData.optJSONObject(j);
-                    String epName = ep != null ? ep.optString("name", "") : "";
-                    Object epLinkId = ep != null ? ep.opt("id") : null;
-                    episodeUrls.add(epName + "$" + rawMovieId + "@" + epLinkId);
-                }
-                playUrlList.add(TextUtils.join("#", episodeUrls));
-            }
-        } else {
-            playFromList.add("默认线路");
-            playUrlList.add(!TextUtils.isEmpty(embedUrl) ? "第一集$" + embedUrl : "");
-        }
-
-        String vodPlayFrom = TextUtils.join("$$$", playFromList);
-        String vodPlayUrl = TextUtils.join("$$$", playUrlList);
-
-        Vod vod = new Vod();
-        vod.setVodId(vodId);
-        vod.setVodName(vodName);
-        vod.setVodPic(vodPic);
-        vod.setTypeName(typeName);
-        vod.setVodRemarks(linksData != null ? ("共 " + linksData.length() + " 集") : "");
-        vod.setVodContent(vodContent);
-        vod.setVodPlayFrom(vodPlayFrom);
-        vod.setVodPlayUrl(vodPlayUrl);
-        vod.setVodDirector(vodDirector);
-        vod.setVodActor(vodActor);
-        vod.setVodArea(vodArea);
-        vod.setVodYear(vodYear);
-
-        return Result.get().vod(vod).string();
+        return list;
     }
 
-    // ========================= 播放解析 =========================
-
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (id.startsWith("http")) {
-            return okPlay(id);
-        }
-
-        try {
-            if (!id.contains("@")) {
-                return failPlay();
-            }
-
-            String[] split = id.split("@", 2);
-            String movieId = split[0];
-            String linkId = split[1];
-
-            JSONObject data = new JSONObject();
-            data.put("id", movieId);
-            data.put("link_id", linkId);
-            data.put("is_simple", "y");
-
-            String ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-
-            JSONObject payload = new JSONObject();
-            payload.put("deviceId", "ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
-            payload.put("token", "");
-            payload.put("domain", "fktv.me");
-            payload.put("referer", "");
-            payload.put("user_agent", ua);
-            payload.put("shareCode", "");
-            payload.put("channel", "");
-            payload.put("ip", "");
-            payload.put("data", data);
-
-            String jsonStr = payload.toString();
-            String encryptedBody = encryptAesEcb(jsonStr, AES_KEY);
-
-            Map<String, String> apiHeaders = new HashMap<>();
-            apiHeaders.put("pragma", "no-cache");
-            apiHeaders.put("cache-control", "no-cache");
-            apiHeaders.put("ip", "");
-            apiHeaders.put("sharecode", "");
-            apiHeaders.put("sec-ch-ua-platform", "\"Windows\"");
-            apiHeaders.put("sec-ch-ua", "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"");
-            apiHeaders.put("sec-ch-ua-mobile", "?0");
-            apiHeaders.put("devicetype", "pc");
-            apiHeaders.put("time", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
-            apiHeaders.put("user-agent", ua);
-            apiHeaders.put("channel", "");
-            apiHeaders.put("version", "1.0");
-            apiHeaders.put("accept", "*/*");
-            apiHeaders.put("origin", "https://fktv.me");
-            apiHeaders.put("sec-fetch-site", "same-origin");
-            apiHeaders.put("sec-fetch-mode", "cors");
-            apiHeaders.put("sec-fetch-dest", "empty");
-            apiHeaders.put("referer", "https://fktv.me/movie/" + movieId + "/mianpintu");
-            apiHeaders.put("accept-language", "zh-CN,zh;q=0.9");
-            apiHeaders.put("cookie", "_did=ffFrmAfy2sx5C6mSrTwX08bpi2YWn48t");
-            // 注意：authority / content-type 不放进 addHeader，交给 okhttp3 请求本身处理，
-            // 避免和 OkHttpClient 自动生成的同名请求头冲突（见下方 RequestBody 的 MediaType）
-
-            RequestBody body = RequestBody.create(MediaType.parse("application/octet-stream"), encryptedBody);
-            Request.Builder builder = new Request.Builder().url("https://fktv.me/ysapi/movie/detail").post(body);
-            builder.headers(Headers.of(apiHeaders));
-            Request request = builder.build();
-
-            Response res = OkHttp.newCall(request);
-            if (res == null || !res.isSuccessful() || res.body() == null) {
-                return failPlay();
-            }
-
-            String serverText = res.body().string().trim();
-            if (serverText.startsWith("{") && serverText.contains("\"status\":\"n\"")) {
-                return failPlay();
-            }
-
-            String decrypted;
-            try {
-                decrypted = decryptAesEcb(serverText, AES_KEY);
-            } catch (Exception e) {
-                return failPlay();
-            }
-
-            JSONObject resJson;
-            try {
-                resJson = new JSONObject(decrypted);
-            } catch (Exception e) {
-                return failPlay();
-            }
-
-            String realUrl = null;
-
-            // 1. 优先从 play_links 匹配 flag
-            JSONArray playLinks = resJson.optJSONArray("play_links");
-            if (playLinks != null && playLinks.length() > 0) {
-                JSONObject matchedLink = null;
-                if (!TextUtils.isEmpty(flag)) {
-                    for (int i = 0; i < playLinks.length(); i++) {
-                        JSONObject link = playLinks.optJSONObject(i);
-                        if (link == null) continue;
-                        String linkIdStr = link.opt("id") == null ? null : String.valueOf(link.opt("id"));
-                        if (flag.equals(link.optString("name")) || flag.equals(linkIdStr)) {
-                            matchedLink = link;
-                            break;
-                        }
-                    }
-                }
-                if (matchedLink != null) {
-                    realUrl = matchedLink.optString("m3u8_url", null);
-                } else {
-                    JSONObject first = playLinks.optJSONObject(0);
-                    realUrl = first != null ? first.optString("m3u8_url", null) : null;
-                }
-            }
-
-            // 2. 降级：递归查找所有 m3u8_url
-            if (TextUtils.isEmpty(realUrl)) {
-                List<String> m3u8Urls = new ArrayList<>();
-                findAllM3u8Url(resJson, m3u8Urls);
-                for (String u : m3u8Urls) {
-                    if (u != null && u.startsWith("http")) {
-                        realUrl = u;
-                        break;
-                    }
-                }
-            }
-
-            // 3. 最终降级（注意：与 Python 版一致，故意不 fallback 到 m3u8_url_source）
-            if (TextUtils.isEmpty(realUrl)) {
-                realUrl = resJson.optString("m3u8_url", resJson.optString("url", null));
-            }
-
-            if (!TextUtils.isEmpty(realUrl) && realUrl.startsWith("http")) {
-                return okPlay(realUrl);
-            }
-            return failPlay();
-
-        } catch (Exception e) {
-            return failPlay();
-        }
-    }
-
-    private String okPlay(String url) {
-        return Result.get().url(url).string();
-    }
-
-    private String failPlay() {
-        return Result.get().url("").string();
+    private static String findField(String win, String key) {
+        Matcher m = Pattern.compile("\"" + key + "\":\"([^\"]*)\"").matcher(win);
+        return m.find() ? m.group(1) : "";
     }
 }
