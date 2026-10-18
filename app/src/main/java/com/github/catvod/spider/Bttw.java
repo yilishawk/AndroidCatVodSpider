@@ -7,7 +7,6 @@ import android.util.Base64;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Json;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -575,6 +574,7 @@ public class Bttw extends Spider {
     private static String extractQualityUrl(JSONObject data) {
         if (data == null) return null;
         JSONArray qs = data.optJSONArray("quality_urls");
+        if (qs == null) return null;
         String first = null;
         for (int i = 0; i < qs.length(); i++) {
             JSONObject q = qs.optJSONObject(i);
