@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 public class BuBu extends Spider {
 
     private static final String CONFIG_URL = "https://bubuzhuiju.com/js/config.js";
-    private String host = "https://asd123sx23xdacsx.top";
+    private String host = "https://xds2435u23422342342u.top";
 
     private static final String[][] CHANNELS = {
             {"2", "电视剧", "剧集"},
