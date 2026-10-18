@@ -7,17 +7,22 @@ import android.util.Base64;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,20 +41,22 @@ import okhttp3.Response;
 /**
  * 凡客影视 (fktv.me) —— CatVod 爬虫
  *
- * 站点本质是 Next.js (React) SPA，数据走两种通道：
- *   1) /ysapi 加密 API：POST，请求体 = Base64( AES-128-ECB( JSON, key ) )，无 IV；
+ * 站点本质是 Next.js (React) SPA：
+ *   1) 列表/首页：服务端渲染的 RSC 页 (/category/<cat_id>/<name>[/area/<地区>][/position/<位置>])，
+ *      影片数据嵌在 self.__next_f.push([1,"..."]) 的文本里，每部影片是一个
+ *      ["$","$L2e","<id>",{"item":{...}}] 片段；item 是扁平 JSON，含 id/name/img_x_source/
+ *      canonical_path/cat_id/area/release_at 等全部字段。
+ *      ⚠️ 图片只能用 img_x_source / img_y_source (.png)，不能用 img_x / img_y (.bnc)。
+ *   2) /ysapi 加密 API：POST，请求体 = Base64( AES-128-ECB( JSON, key ) )，无 IV；
  *      key = "9ed1a661a6ab787a" (16 字节，AES-128)。响应若以 { 或 [ 开头即为明文 JSON，
  *      否则 Base64 解码后 AES 解密得到明文 JSON。
- *   2) Next.js RSC：列表/首页由服务端渲染的频道页 (/channel/<slug>) 承载，没有 /ysapi 列表端点。
  *
- * 最关键的踩坑点（旧版"无法使用"的根因）：
- *   /ysapi 对 payload 里的 deviceId 做格式校验，必须是「32 位十六进制」，否则返回
- *   「设备信息错误 errorCode 2001」。旧版把 deviceId 硬编码成了一个含非 hex 字符的 32 位串，
- *   导致播放链路 (playerContent 二次请求 movie/detail) 永远被拒 → 点开即失败。
- *   本版 deviceId 用 MD5(域名) 生成，保证是合法 32-hex。
+ * 关键踩坑（旧版"无法使用"的根因）：/ysapi 对 payload.deviceId 做格式校验，必须是「32 位十六进制」，
+ *   否则返回「设备信息错误 errorCode 2001」。旧版把 deviceId 写成含非 hex 字符的 32 位串，导致播放
+ *   链路 (playerContent 二次请求 movie/detail) 永远被拒。本版 deviceId 用 MD5(域名) 生成，保证合法。
  *
- * 播放模型：detail 阶段一次性拿到 links(集) + play_links(线路)；playerContent 用合法 deviceId
- *   再请求一次 movie/detail {id, link_id, is_simple:"y"} 取该线路该集的已签 m3u8 直链后直出。
+ * 播放模型：detail 阶段一次性拿到 links(集) + play_links(线路)；playerContent 用合法 deviceId 再请求一次
+ *   movie/detail {id, link_id, is_simple:"y"} 取该线路该集的已签 m3u8 直链后直出。
  */
 public class FKTV extends Spider {
 
@@ -57,6 +64,16 @@ public class FKTV extends Spider {
     private static final String API = HOST + "/ysapi";
     private static final String KEY = "9ed1a661a6ab787a"; // 16 字节 -> AES-128
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+
+    // cat_id -> 分类名(用于拼 URL 的 <name>)
+    private static final Map<String, String> TYPE_NAME = new HashMap<>();
+    static {
+        TYPE_NAME.put("5", "连续剧");
+        TYPE_NAME.put("6", "电影");
+        TYPE_NAME.put("4", "综艺");
+        TYPE_NAME.put("7", "动漫");
+        TYPE_NAME.put("9", "短剧");
+    }
 
     private String deviceId;
     private Map<String, String> header;
@@ -70,31 +87,64 @@ public class FKTV extends Spider {
         header.put("Referer", HOST + "/");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         header.put("Accept-Language", "zh-CN,zh;q=0.9");
-        // 注意：不要手动设置 Accept-Encoding，否则 OkHttp 会关闭透明 gzip 解压拿到压缩字节。
+        // 不要手动设置 Accept-Encoding，否则 OkHttp 会关闭透明 gzip 解压拿到压缩字节。
     }
 
-    // ========================= 首页 / 分类导航 =========================
-    // tid 直接使用频道 slug，categoryContent 据此抓 /channel/<slug> 的 RSC 页。
+    // ========================= 首页 / 分类导航 + 筛选 =========================
+    // 注意：国产剧是连续剧(cat_id=5)下 area=内地剧 的子集，放在第一位；地区筛选只对连续剧生效。
     @Override
     public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
-        classes.add(new Class("movie", "电影"));
-        classes.add(new Class("tv", "连续剧"));
-        classes.add(new Class("zy", "综艺"));
-        classes.add(new Class("comic", "动漫"));
-        classes.add(new Class("short_tv", "短剧"));
-        classes.add(new Class("js", "解说"));
-        return Result.get().classes(classes).string();
+        classes.add(new Class("5_area_内地剧", "国产剧")); // 第一位：国产剧(内地剧)
+        classes.add(new Class("5", "连续剧"));
+        classes.add(new Class("6", "电影"));
+        classes.add(new Class("4", "综艺"));
+        classes.add(new Class("7", "动漫"));
+        classes.add(new Class("9", "短剧"));
+
+        if (!filter) {
+            return Result.get().classes(classes).string();
+        }
+
+        // 地区筛选（连续剧词表：内地剧/美剧/日剧/韩剧/泰剧，内地剧置顶，显示名"国产剧"）
+        List<Filter.Value> areaVals = new ArrayList<>();
+        areaVals.add(new Filter.Value("国产剧", "内地剧"));
+        areaVals.add(new Filter.Value("美剧", "美剧"));
+        areaVals.add(new Filter.Value("日剧", "日剧"));
+        areaVals.add(new Filter.Value("韩剧", "韩剧"));
+        areaVals.add(new Filter.Value("泰剧", "泰剧"));
+        Filter areaFilter = new Filter("area", "地区", areaVals);
+
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+        filters.put("5", Collections.singletonList(areaFilter));          // 连续剧
+        filters.put("5_area_内地剧", Collections.singletonList(areaFilter)); // 国产剧子类同样可再筛
+
+        return Result.get().classes(classes).filters(filters).string();
     }
 
     // ========================= 分类列表 =========================
-    // fktv 列表走 RSC 频道页，URL 不分页 (?page= 无效，page1==page2)，这里如实返回当前可见影片。
+    // tid: 分类 id；若带 "_area_<地区>" 则按地区筛选。extend 里也可带 area。
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         int page = safeInt(pg, 1);
-        String url = HOST + "/channel/" + tid;
-        String html = OkHttp.string(url, header);
-        List<Vod> list = parseChannel(html);
+        String catId = tid;
+        String area = null;
+        if (tid.contains("_area_")) {
+            String[] p = tid.split("_area_", 2);
+            catId = p[0];
+            area = p[1];
+        } else if (extend != null) {
+            area = extend.get("area");
+        }
+        String name = TYPE_NAME.get(catId);
+        if (TextUtils.isEmpty(name)) name = tid;
+
+        StringBuilder url = new StringBuilder(HOST + "/category/" + catId + "/" + urlEncode(name));
+        if (!TextUtils.isEmpty(area)) url.append("/area/").append(urlEncode(area));
+
+        String html = OkHttp.string(url.toString(), header);
+        // 服务端不按 /area/<值> 路径段筛选(fktv 在前端 JS 里过滤)，所以抓全量后在本地按 area 字段二次过滤
+        List<Vod> list = parseItems(html, area);
         return Result.get().vod(list)
                 .page(page, page + 1, list.size(), list.size() * 10)
                 .string();
@@ -152,8 +202,9 @@ public class FKTV extends Spider {
         }
 
         String name = d.optString("name");
-        String pic = d.optString("img_x");
-        if (TextUtils.isEmpty(pic)) pic = d.optString("img_y");
+        // ⚠️ 图片取 .png 的 source，不取 .bnc 的 img_x/img_y
+        String pic = d.optString("img_x_source");
+        if (TextUtils.isEmpty(pic)) pic = d.optString("img_y_source");
         String actor = joinNames(d.opt("actor"));
         String director = d.optString("director");
         String area = d.optString("area");
@@ -367,41 +418,50 @@ public class FKTV extends Spider {
         }
     }
 
-    /** 频道 RSC 页抠影片：以 "id":"<16hex>" 为中心，双向 600 字符窗口必须同窗含 img_x + canonical_path，过滤 React key 噪声。 */
-    private List<Vod> parseChannel(String html) {
+    private static String urlEncode(String s) {
+        try {
+            return URLEncoder.encode(s, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            return s;
+        }
+    }
+
+    /**
+     * 分类 RSC 页抠影片：影片以 ["$","$L2e","<id>",{"item":{...}}] 形式嵌入。
+     * item 是扁平 JSON（无嵌套对象），正则 "item":{...} 直接解析，字段全取。
+     * ⚠️ 图片取 img_x_source / img_y_source (.png)，不取 img_x / img_y (.bnc)。
+     * area 非空时按 item.area 字段在本地二次过滤（服务端不按 URL 路径段筛选）。
+     */
+    private List<Vod> parseItems(String html, String area) {
         List<Vod> list = new ArrayList<>();
         if (TextUtils.isEmpty(html)) return list;
         String clean = html.replace("\\\"", "\"").replace("\\/", "/");
 
-        Pattern p = Pattern.compile("\"id\":\"([0-9a-f]{16})\"");
+        Pattern p = Pattern.compile("\"item\":\\{([^{}]*)\\}");
         Matcher m = p.matcher(clean);
         while (m.find()) {
-            int s = Math.max(0, m.start() - 600);
-            int e = Math.min(clean.length(), m.end() + 600);
-            String win = clean.substring(s, e);
-            if (!win.contains("img_x") || !win.contains("canonical_path")) continue;
+            try {
+                JSONObject it = new JSONObject("{" + m.group(1) + "}");
+                String id = it.optString("id");
+                String name = it.optString("name");
+                if (TextUtils.isEmpty(id) || TextUtils.isEmpty(name)) continue;
+                // 本地按地区筛选（服务端路径段不生效）
+                if (!TextUtils.isEmpty(area) && !area.equals(it.optString("area"))) continue;
+                String pic = it.optString("img_x_source");
+                if (TextUtils.isEmpty(pic)) pic = it.optString("img_y_source");
+                String itemArea = it.optString("area");
+                String year = it.optString("release_at");
 
-            String id = m.group(1);
-            String name = findField(win, "name");
-            if (TextUtils.isEmpty(name)) name = findField(win, "movie_name");
-            if (TextUtils.isEmpty(name)) name = findField(win, "title");
-            String pic = findField(win, "img_x");
-            if (TextUtils.isEmpty(pic)) pic = findField(win, "img_y");
-            String path = findField(win, "canonical_path");
-            if (TextUtils.isEmpty(name)) continue;
-
-            Vod v = new Vod();
-            v.setVodId(id);
-            v.setVodName(name);
-            v.setVodPic(pic);
-            v.setVodRemarks(path);
-            list.add(v);
+                Vod v = new Vod();
+                v.setVodId(id);
+                v.setVodName(name);
+                v.setVodPic(pic);
+                v.setVodRemarks(TextUtils.isEmpty(itemArea) ? year : itemArea);
+                list.add(v);
+            } catch (Exception ignore) {
+                // 个别 item 解析失败跳过，不影响其余
+            }
         }
         return list;
-    }
-
-    private static String findField(String win, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\":\"([^\"]*)\"").matcher(win);
-        return m.find() ? m.group(1) : "";
     }
 }
