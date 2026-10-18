@@ -353,7 +353,7 @@ public class Bttw extends Spider {
             Element descElem = doc.selectFirst(".bg-dark-800.rounded-lg.p-3 p");
             String content = descElem != null ? descElem.text().trim() : "";
 
-            // 剧集列表
+            // 剧集列表（episode-link 元素上带每集独立的 dataid，播放签名需要）
             List<String> playFromList = new ArrayList<>();
             List<String> playUrlList = new ArrayList<>();
             Elements episodeLinks = doc.select(".episode-link");
@@ -361,9 +361,16 @@ public class Bttw extends Spider {
                 List<String> episodes = new ArrayList<>();
                 for (Element a : episodeLinks) {
                     String epName = a.text().trim();
-                    String link = a.attr("href");
-                    if (!link.startsWith("http")) link = host + link;
-                    episodes.add(epName + "$" + link);
+                    String dataid = a.attr("dataid");
+                    if (!TextUtils.isEmpty(dataid)) {
+                        // dataid@slug：playerContent 据此签名取真实播放地址
+                        episodes.add(epName + "$" + dataid + "@" + vodId);
+                    } else {
+                        // 无 dataid 的元素退回播放页链接，playerContent 会自行抓页解析
+                        String link = a.attr("href");
+                        if (!link.startsWith("http")) link = host + link;
+                        episodes.add(epName + "$" + link);
+                    }
                 }
                 if (!episodes.isEmpty()) {
                     playFromList.add("4K影视");
@@ -442,59 +449,141 @@ public class Bttw extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
-        String url = id.startsWith("http") ? id : host + id;
         try {
-            String html = fetch(url);
-            // 多种正则匹配视频链接
-            String[] patterns = {
-                    "<video[^>]+src=\"([^\"]+)\"",
-                    "<source[^>]+src=\"([^\"]+)\"",
-                    "(?:var|let|const)\\s+videoUrl\\s*=\\s*[\"']([^\"']+)[\"']",
-                    "(?:var|let|const)\\s+url\\s*=\\s*[\"']([^\"']+\\.m3u8)[\"']",
-                    "\"url\"\\s*:\\s*\"([^\"]+\\.m3u8)\"",
-                    "([^\"']+\\.m3u8[^\"']*)"
-            };
-            for (String pat : patterns) {
-                Pattern p = Pattern.compile(pat, Pattern.CASE_INSENSITIVE);
-                Matcher m = p.matcher(html);
-                if (m.find()) {
-                    String videoUrl = m.group(1);
-                    if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-                    else if (videoUrl.startsWith("/")) videoUrl = host + videoUrl;
-                    JSONObject result = new JSONObject();
-                    result.put("parse", 0);
-                    result.put("url", videoUrl);
-                    JSONObject header = new JSONObject();
-                    header.put("User-Agent", headers.get("User-Agent"));
-                    header.put("Referer", url);
-                    header.put("Origin", host);
-                    result.put("header", header);
-                    return result.toString();
+            // id 两种格式:
+            //   1) dataid@slug           —— detailContent 生成，每集独立 dataid
+            //   2) /play/slug 或完整 URL  —— 旧数据，抓播放页取第一个 dataid
+            String dataid = null;
+            String slug = null;
+            int at = id.indexOf('@');
+            if (at > 0) {
+                dataid = id.substring(0, at);
+                slug = id.substring(at + 1);
+            } else {
+                String pageUrl = id.startsWith("http") ? id : host + id;
+                String html = fetch(pageUrl);
+                int idx = pageUrl.lastIndexOf('/');
+                if (idx >= 0 && idx < pageUrl.length() - 1) slug = pageUrl.substring(idx + 1);
+                if (!TextUtils.isEmpty(html)) {
+                    Matcher m = Pattern.compile("dataid=\"(\\d+)\"").matcher(html);
+                    if (m.find()) dataid = m.group(1);
                 }
             }
-            // 未找到视频，返回 parse=1 让壳子嗅探
-            JSONObject fallback = new JSONObject();
-            fallback.put("parse", 1);
-            fallback.put("url", url);
+            if (TextUtils.isEmpty(dataid) || TextUtils.isEmpty(slug)) return fallback(id);
+
+            // 签名调 /video/play 接口取真实播放地址（算法逆向自站点 wasm）
+            String t = String.valueOf(System.currentTimeMillis());
+            String s = sign(dataid, slug, t);
+            String k = token(userlink);
+            String url = host + "/video/play?p=" + URLEncoder.encode(dataid, "UTF-8")
+                    + "&v=" + URLEncoder.encode(slug, "UTF-8")
+                    + "&q=1080&s=" + s + "&t=" + t
+                    + "&k=" + URLEncoder.encode(k, "UTF-8");
+
+            String resp = fetch(url);
+            if (TextUtils.isEmpty(resp)) return fallback(id);
+            JSONObject j = new JSONObject(resp);
+            if (j.optInt("code", -1) != 200) {
+                SpiderDebug.log("[Bttw] play 接口 code=" + j.optInt("code", -1) + " msg=" + j.optString("message", ""));
+                return fallback(id);
+            }
+            String playUrl = extractQualityUrl(j.optJSONObject("data"));
+            if (TextUtils.isEmpty(playUrl)) return fallback(id);
+
+            JSONObject result = new JSONObject();
+            result.put("parse", 0);
+            result.put("url", playUrl);
+            JSONObject header = new JSONObject();
+            header.put("User-Agent", headers.get("User-Agent"));
+            header.put("Referer", host + "/");
+            header.put("Origin", host);
+            result.put("header", header);
+            return result.toString();
+        } catch (Exception e) {
+            SpiderDebug.log("[Bttw] playerContent 错误: " + e.getMessage());
+            return fallback(id);
+        }
+    }
+
+    /** 取不到直链时返回 parse=1 让壳子嗅探（保持原行为） */
+    private String fallback(String id) {
+        try {
+            String url = id.startsWith("http") ? id : host + id;
+            JSONObject f = new JSONObject();
+            f.put("parse", 1);
+            f.put("url", url);
             JSONObject header = new JSONObject();
             header.put("User-Agent", headers.get("User-Agent"));
             header.put("Referer", url);
             header.put("Origin", host);
-            fallback.put("header", header);
-            return fallback.toString();
+            f.put("header", header);
+            return f.toString();
         } catch (Exception e) {
-            SpiderDebug.log("[4k影视] playerContent 错误: " + e.getMessage());
-            try {
-                JSONObject fallback = new JSONObject();
-                fallback.put("parse", 1);
-                fallback.put("url", url);
-                JSONObject header = new JSONObject();
-                header.put("User-Agent", headers.get("User-Agent"));
-                fallback.put("header", header);
-                return fallback.toString();
-            } catch (Exception ex) {
-                return "{\"parse\":1,\"url\":\"" + url + "\"}";
-            }
+            return "{\"parse\":1,\"url\":\"" + id + "\"}";
         }
+    }
+
+    // ---------- 播放签名（算法逆向自站点 wasm，36/36 用例 + 现场双视频验证） ----------
+
+    /** 小写 hex */
+    private static String hex(byte[] bs) {
+        StringBuilder sb = new StringBuilder(bs.length * 2);
+        for (byte b : bs) sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        return sb.toString();
+    }
+
+    private static byte[] sha256(byte[] input) throws Exception {
+        return MessageDigest.getInstance("SHA-256").digest(input);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        byte[] r = new byte[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
+    }
+
+    /**
+     * s = hex(SHA256((K^0x5C) || SHA256((K^0x36) || "dataid:t:secret_key")))[0:32]
+     * K = secretKey 零填充到 64 字节（超过 64 字节先 SHA-256）
+     * 注：0x5C = 0x36^0x6A，原站 opad 作用在已 ipad 的块上，服务端已固化该构造
+     */
+    private static String sign(String dataid, String secretKey, String t) throws Exception {
+        byte[] msg = (dataid + ":" + t + ":" + secretKey).getBytes("UTF-8");
+        byte[] k = secretKey.getBytes("UTF-8");
+        if (k.length > 64) k = sha256(k);
+        byte[] kb = new byte[64];
+        System.arraycopy(k, 0, kb, 0, Math.min(k.length, 64));
+        byte[] ipad = kb.clone();
+        for (int i = 0; i < 64; i++) ipad[i] ^= 0x36;
+        byte[] opad = ipad.clone();
+        for (int i = 0; i < 64; i++) opad[i] ^= 0x6A;
+        byte[] inner = sha256(concat(ipad, msg));
+        byte[] outer = sha256(concat(opad, inner));
+        return hex(outer).substring(0, 32);
+    }
+
+    /** k = Base64(userlink XOR "nbmovie2024secretkey" 循环) */
+    private static String token(String ul) throws Exception {
+        byte[] b = ul.getBytes("UTF-8");
+        byte[] key = XOR_KEY.getBytes("UTF-8");
+        for (int i = 0; i < b.length; i++) b[i] ^= key[i % key.length];
+        return Base64.encodeToString(b, Base64.NO_WRAP);
+    }
+
+    /** 取 data.quality_urls 中第一个未锁定清晰度的 url，全部锁定则退第一个非空 */
+    private static String extractQualityUrl(JSONObject data) {
+        if (data == null) return null;
+        JSONArray qs = data.optJSONArray("quality_urls");
+        String first = null;
+        for (int i = 0; i < qs.length(); i++) {
+            JSONObject q = qs.optJSONObject(i);
+            if (q == null) continue;
+            String u = q.optString("url", "");
+            if (TextUtils.isEmpty(u) || u.equals("1")) continue;
+            if (first == null) first = u;
+            if (!q.optBoolean("locked", false)) return u;
+        }
+        return first;
     }
 }
