@@ -87,6 +87,7 @@ public class FKTV extends Spider {
         header.put("Referer", HOST + "/");
         header.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
         header.put("Accept-Language", "zh-CN,zh;q=0.9");
+        header.put("Origin", HOST); // 图床/接口防盗链需要 Origin
         // 不要手动设置 Accept-Encoding，否则 OkHttp 会关闭透明 gzip 解压拿到压缩字节。
     }
 
@@ -330,6 +331,26 @@ public class FKTV extends Spider {
 
     private String failPlay() {
         return Result.get().url("").string();
+    }
+
+    /**
+     * 图片代理：图床 (cdn.g3ejjm8m.com / cdn-test2.irxjfs.cn) 防盗链校验 Origin + Referer，
+     * 壳子直接加载列表/详情图会裂。壳子把图片转发到本 spider 时代入 Origin/Referer 取图返回字节流。
+     * 需在壳子的「图片使用爬虫代理 / 图片走 spider」设置里把 FKTV 设为图片代理才会触发。
+     */
+    @Override
+    public Object[] proxyLocal(Map<String, String> params) throws Exception {
+        String url = params == null ? null : params.get("url");
+        if (TextUtils.isEmpty(url)) return null;
+        Map<String, String> h = new HashMap<>();
+        h.put("User-Agent", UA);
+        h.put("Referer", HOST + "/");
+        h.put("Origin", HOST);
+        Response res = OkHttp.newCall(url, h);
+        if (res == null || !res.isSuccessful() || res.body() == null) return null;
+        byte[] data = res.body().bytes();
+        String ct = res.header("content-type", "image/jpeg");
+        return new Object[]{ct, data};
     }
 
     /** 统一 /ysapi 调用：AES-128-ECB 加密请求体，解密响应。 */
