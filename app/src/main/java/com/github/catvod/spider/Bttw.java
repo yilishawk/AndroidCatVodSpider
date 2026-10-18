@@ -513,8 +513,6 @@ public class Bttw extends Spider {
             f.put("url", url);
             JSONObject header = new JSONObject();
             header.put("User-Agent", headers.get("User-Agent"));
-            header.put("Referer", url);
-            header.put("Origin", host);
             f.put("header", header);
             return f.toString();
         } catch (Exception e) {
