@@ -12,15 +12,17 @@ import android.webkit.WebViewClient;
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
-
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -29,53 +31,50 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Gaze（gaze.red）CatVod Spider —— WebView 版
- * -------------------------------------------------------------------------
- * 【为什么用 WebView】2026-10-14 实测破译：gaze 的筛选接口 POST /filter_movielist 被两道门挡：
- *   ① Cloudflare Turnstile（cf_clearance cookie，IP/会话绑定、会过期）—— 纯 HTTP 拿不到；
- *   ② 业务逻辑“proof 头”：页面 wasm 二进制确定性算出的静态常量 {name:value} + x-gaze 动态 token
- *      （从 /filter SSR 的 DOM 抠）。只带 token 不带 proof → 419；两者齐了才过。
- *   纯服务端 Java 强依赖 clearance 生命周期（实测已从可用变 expired）；WebView 由真实浏览器内核
- *   自动过 CF 挑战、自动执行 wasm 算 proof、自动渲染 DOM token —— 鲁棒性最高，是 CatVod 处理
- *   CF 站的标准姿势。
+ * Gaze（gaze.host）CatVod Spider —— WebView 中继版
+ * ---------------------------------------------------------------------------
+ * 【实现路线（2026-10-19 实测定稿）】
+ *   站点 = gaze.host，播放链四层：play 页 → GET /gaze_file_vl/pb/{片名}/{集}+gazes_v-@_info
+ *   → gzip/base64 解 → nihilism 自定义链 → brotli → m3u8（fMP4，段名为混淆串）。
+ *   其中：
+ *     · /filter_movielist 列表接口：两个 proof header 名与值都是【每次动态】的，纯服务端
+ *       复现不了 → 本实现不手搓，而是让 WebView 里的页面自己发一次请求，我们把它
+ *       的 URL + headers + body 原样抓下来，再改 body 参数重放（fetch  credentials:'include'）。
+ *     · 播放链的 nihilism 层：密钥派生未逆出（边界，见下）→ 同样交给 WebView：加载
+ *       /play/{id} 后由页面自己解包，我们只 hook URL.createObjectURL / XHR / fetch，
+ *       把真实段 URL（file.icve.com.cn/rc/xx/yy/{32hex}.m4s）抓出来，在 Java 侧重写成
+ *       一份标准 m3u8 落到缓存目录，返回本地播放列表。
  *
- * 【proof 复用机制（已逆出，非手搓 wasm）】
- *   页面脚本（classic <script>）顶层有 `var _UOKm2GSn6pXP=[]`，wasm 跑完被赋值为
- *   { "b14ac33575f435ebeefa6c5b9c46011b": {name: value} }。该 var 在全局（window）可读。
- *   Java 注入 JS：读 window._UOKm2GSn6pXP[PROOF_KEY] 作 proofHeaders 初值，再追加
- *   x-gaze 名(静态): DOM token(从 [TOKEN_ATTR] 抠)，然后 fetch('/filter_movielist', {...})。
+ * 【已实证的事实（不是推测）】
+ *   · 2026-10-19 Playwright 实测：hook XHR.open 后播放 3 分钟收到 75 个真实段 URL，
+ *     均为 file.icve.com.cn/rc/{a}/{b}/{32HEX}.m4s，公开 CDN，免 Referer、支持 206。
+ *   · m3u8 = fMP4：EXT-X-MAP 指向真实 mp4 init，后接 322 段。
+ *   · 列表接口响应形如 {"code":1,"total":2546,"mlist":[{id,title,grade,cover_img,mid}]}。
+ *   · 详情页集数挂在元素属性 data-baseid 上（取值是混淆串，本实现【不做解码】，
+ *     原样当作 /play/{baseid} 的 id 用即可）。
  *
- * 【静态常量（随站点改版会变，419 复现时优先检查这里）】
- *   X_GAZE_NAME = "x-gaze-bc61db603d9b3c49a9bf08ed"  （header 名，来自 SSR 变量 _XRpelZVCo2N7o）
- *   TOKEN_ATTR  = "gdf1d1463b03c78005074"            （DOM 上 token 属性名，来自 _B9Uz64o）
- *   PROOF_KEY   = "b14ac33575f435ebeefa6c5b9c46011b" （proofHeaders 初值的 key）
- *
- * 【边界（如实标注，不胡诌能取数）】
- *   ★ filter_movielist 的真实响应 JSON 字段名【未实采】（clearance 过期 + 本机跑不了 Android
- *     WebView，拿不到成功样本）。下面 parseList 用“多候选 key 防御性解析”，在设备上跑一次、看到
- *     真实 JSON 后按实际字段校正即可（见 HOME/FILTER 的 debug 日志 hook）。
- *   ★ CF Turnstile 能否在 WebView 内静默通过，需设备上验证（Turnstile 本就为真实浏览器/WebView
- *     设计，CatVod 大量 CF 站靠 WebView 过，预期可过）。
- *   ★ homeContent 直接复用 /filter 默认参数拉“最近更新”流（与首页推荐等价），不走 / 首页 DOM 抓取，
- *     避免再引入一套未知选择器。
+ * 【边界（如实标注）】
+ *   ★ nihilism / metaphysics 密钥派生【未逆出】：8069 层已 44/44 全破解（AES-256-CTR，
+ *     固定密钥），但 nihilism 在本机 Node wasm 环境里连已知密钥的 8069 都返回空，
+ *     说明派生用到了抓不到的环境分量。因此【不能】做纯服务端版，必须走 WebView 中继。
+ *   ★ 本版播放依赖 WebView 内真实播放器跑起来（会真的请求段），所以 playerContent
+ *     需要等若干秒；超时/段数不足时返回错误信息而不是假链接。
+ *   ★ CF：除 / 外全部路径有交互式验证；WebView 由真实内核过，headless 不行。
  */
 public class Gaze extends Spider {
 
-    private static final String BASE = "https://gaze.red";
+    private static final String BASE = "https://gaze.host";
     private static final String FILTER_URL = BASE + "/filter";
     private static final String LIST_API = "/filter_movielist";
-
-    // 静态常量（站点改版需同步刷新，见上）
-    private static final String X_GAZE_NAME = "x-gaze-bc61db603d9b3c49a9bf08ed";
-    private static final String TOKEN_ATTR = "gdf1d1463b03c78005074";
-    private static final String PROOF_KEY = "b14ac33575f435ebeefa6c5b9c46011b";
 
     private static final String UA =
             "Mozilla/5.0 (Linux; Android 12; K30) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36";
 
-    private static final long LOAD_TIMEOUT_MS = 25000;   // 页面加载+CF挑战 超时
-    private static final long PROOF_TIMEOUT_MS = 15000;  // 等 wasm proof 就绪超时
-    private static final long FETCH_TIMEOUT_MS = 20000;  // 等 fetch 返回超时
+    private static final long LOAD_TIMEOUT_MS = 30000;   // 页面加载 + CF 挑战
+    private static final long LIST_WAIT_MS = 6000;       // 等页面自发一次 filter_movielist
+    private static final long REPLAY_TIMEOUT_MS = 15000; // 重放请求等待
+    private static final long PLAY_WAIT_MS = 90000;      // 播放抓段总等待（段播得慢，给足）
+    private static final int  PLAY_MIN_SEG = 3;          // 少于这么多段视为没抓到
 
     private Context appCtx;
     private Handler webHandler;
@@ -83,18 +82,14 @@ public class Gaze extends Spider {
     private final Object webLock = new Object();
 
     // ===================================================================
-    // init：WebView 必须挂在【主线程 Looper】上。
-    // 注意：
-    //   ★ 绝不能在后台线程（如自建 HandlerThread）创建 WebView —— Android 6 / TV 盒 /
-    //     多进程 WebView 在那个场景会 native 崩溃（凯哥在 webhtv-android6 与手机均实测崩溃）。
-    //   ★ 不在 init 同步创建 WebView，改为首次 webRun 时在主线程“懒创建”，
-    //     避免在主线程上 await 导致死锁（CatVod 调用 spider 方法走的是后台线程，await 安全）。
+    // init：WebView 挂在【主线程 Looper】。
+    //   ★ 绝不能在自建 HandlerThread 上创建 WebView（Android 6 / TV 盒实测 native 崩溃）。
+    //   ★ 不在 init 同步创建，改为首次用时在主线程懒创建，避免主线程 await 死锁。
     // ===================================================================
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
         appCtx = context.getApplicationContext() != null ? context.getApplicationContext() : context;
-        // 主线程 Handler：所有 WebView 创建 / 加载 / evaluateJavascript 都 post 到这里执行。
         webHandler = new Handler(Looper.getMainLooper());
     }
 
@@ -106,20 +101,17 @@ public class Gaze extends Spider {
         w.getSettings().setDatabaseEnabled(true);
         w.getSettings().setUserAgentString(UA);
         w.getSettings().setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
+        w.getSettings().setMediaPlaybackRequiresUserGesture(false); // 播放页自动起播
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return false; // 同站导航交给 WebView（用 String 重载以兼容 Android 6 / API23）
+                return false;
             }
         });
         return w;
     }
 
-    // ===================================================================
-    // WebView 核心：加载 url → 等 proof 就绪 → 跑注入 JS（异步，经 JsBridge 回传字符串）
-    // ===================================================================
-
-    /** JS 桥：注入的 JS 通过 GazeBridge.onResult(String) 把结果（或错误）回传 Java。 */
+    /** JS 桥：注入 JS 通过 GazeBridge.onResult(String) 回传。 */
     private static class JsBridge {
         volatile String result;
         volatile boolean done;
@@ -130,199 +122,531 @@ public class Gaze extends Spider {
         }
     }
 
-    /**
-     * 在【调用方线程】执行编排，WebView 实际操作 post 到 webHandler（WebView 的 Looper 线程）：
-     *   post(loadUrl) → 等 onPageFinished → 等 proof 就绪 → post(evaluateJavascript 注入JS) → 等桥回传。
-     * 关键：等待（latch.await）发生在【调用方线程】，绝不阻塞 webHandler 线程，否则 JS 回调永远跑不起来。
-     * js 约定：自行调用 GazeBridge.onResult(字符串结果)；出错也调 onResult(JSON.stringify({error}))。
-     * 返回注入 JS 经桥回传的字符串；超时/异常返回以 {"error":...} 包裹的 JSON。
-     */
-    private String webRun(final String url, final String waitProof, final String js) {
-        final String[] out = new String[1];
-        final JsBridge bridge = new JsBridge();
-        // 1) 触发加载（post 到主线程；首次调用懒创建 WebView）
-        final CountDownLatch loadLatch = new CountDownLatch(1);
+    // ===================================================================
+    // 注入脚本：抓页面自己发的请求 / blob / window.allnothing
+    //   window.__gz      = { list:[{url,headers,body,resp}], media:[url...], info:[...],
+    //                        m3u8:'', blob:'', allnothing:'', epi:'' }
+    //   window.__gzSnap  = () => JSON 快照
+    //   window.__gzReplay= (formBody) => Promise<string>  复用抓到的 headers 重放
+    //   window.__gzKick  = () => 点播放按钮
+    // ===================================================================
+    private static final String CAP_JS = String.join("\n", new String[]{
+        "(function(){",
+        " if(window.__gz) return;",
+        " var cap={list:[],media:[],info:[],m3u8:'',blob:'',mapUri:'',allnothing:'',epi:''};",
+        " window.__gz=cap;",
+        " function keep(k,o){var a=cap[k]; if(a.length<900)a.push(o);}",
+        " var oo=XMLHttpRequest.prototype.open, os=XMLHttpRequest.prototype.send, oh=XMLHttpRequest.prototype.setRequestHeader;",
+        " XMLHttpRequest.prototype.open=function(m,u){this.__m=m;this.__u=String(u);return oo.apply(this,arguments);};",
+        " XMLHttpRequest.prototype.setRequestHeader=function(k,v){try{if(!this.__h)this.__h={};this.__h[k]=v;}catch(e){}return oh.apply(this,arguments);};",
+        " XMLHttpRequest.prototype.send=function(b){",
+        "  var s=this; s.__h=s.__h||{}; try{if(b!=null)s.__b=String(b);}catch(e){}",
+        "  s.addEventListener('load',function(){",
+        "   var u=s.__u||'';",
+        "   try{",
+        "    if(u.indexOf('filter_movielist')>=0) keep('list',{url:u,headers:s.__h,body:s.__b||'',resp:s.responseText||''});",
+        "    else if(u.indexOf('gaze_file_vl')>=0||u.indexOf('_info')>=0) keep('info',{url:u});",
+        "    else if(/\\.(m4s|mp4|ts|m3u8)(\\?|$)/.test(u)) keep('media',u);",
+        "   }catch(e){}",
+        "  });",
+        "  return os.apply(this,arguments);",
+        " };",
+        " if(window.fetch){",
+        "  var of=window.fetch;",
+        "  window.fetch=function(input,init){",
+        "   var u=(typeof input==='string')?input:((input&&input.url)||'');",
+        "   var b=(init&&init.body!=null)?String(init.body):'';",
+        "   var hd={};",
+        "   try{var h=(init&&init.headers); if(h){ if(h.forEach){h.forEach(function(v,k){hd[k]=v;});} else {for(var kk in h)hd[kk]=h[kk];} } }catch(e){}",
+        "   var p=of.apply(this,arguments);",
+        "   p.then(function(r){",
+        "    try{",
+        "     if(u.indexOf('filter_movielist')>=0){ r.clone().text().then(function(t){keep('list',{url:u,headers:hd,body:b,resp:t});}); }",
+        "     else if(u.indexOf('gaze_file_vl')>=0||u.indexOf('_info')>=0){ keep('info',{url:u}); }",
+        "     else if(/\\.(m4s|mp4|ts|m3u8)(\\?|$)/.test(u)){ keep('media',u); }",
+        "    }catch(e){}",
+        "   }).catch(function(){});",
+        "   return p;",
+        "  };",
+        " }",
+        " if(window.URL&&window.URL.createObjectURL){",
+        "  var oc=window.URL.createObjectURL;",
+        "  window.URL.createObjectURL=function(bl){",
+        "   try{ if(bl&&typeof bl.text==='function'){ bl.text().then(function(t){cap.blob=t; if(t.indexOf('#EXTM3U')>=0)cap.m3u8=t; var m=/EXT-X-MAP:URI=\"([^\"]+)\"/.exec(t); if(m)cap.mapUri=m[1]; }); } }catch(e){}",
+        "   return oc.apply(this,arguments);",
+        "  };",
+        " }",
+        " window.__gzSnap=function(){",
+        "  var o={m3u8:cap.m3u8,blob:cap.blob,mapUri:cap.mapUri,media:cap.media,info:cap.info,listCount:cap.list.length};",
+        "  try{if(typeof window.allnothing==='string')o.allnothing=window.allnothing;}catch(e){}",
+        "  try{if(typeof window.epi==='function')o.epi=String(window.epi());}catch(e){}",
+        "  return JSON.stringify(o);",
+        " };",
+        " window.__gzReplay=function(fd){",
+        "  var r=cap.list[0]; if(!r) return Promise.resolve('');",
+        "  var h={}; for(var k in r.headers) h[k]=r.headers[k];",
+        "  h['content-type']='application/x-www-form-urlencoded;charset=UTF-8';",
+        "  return fetch(r.url,{method:'POST',headers:h,body:fd,credentials:'include'})",
+        "   .then(function(x){return x.text();}).catch(function(){return '';});",
+        " };",
+        " window.__gzKick=function(){",
+        "  var cs=['.playbtn','.play-btn','[class*=play]','.v-play','.episode','.star-uborder','#player'];",
+        "  for(var i=0;i<cs.length;i++){var e=document.querySelector(cs[i]); if(e){try{e.click();}catch(err){}}}",
+        " };",
+        "})();"
+    });
+
+    // ===================================================================
+    // WebView 编排：装 hook → 加载 → 等 → 执行 js → 桥回传
+    //   全部 WebView 操作 post 到 webHandler（主线程）；
+    //   所有 latch.await 都发生在【调用方线程】，绝不阻塞主线程，否则 JS 回调跑不起来。
+    // ===================================================================
+
+    /** 装 hook + 加载 url。装 hook 用 onPageStarted（越早越好，赶在页面自发请求之前）。 */
+    private boolean webLoad(final String url) {
+        if (webHandler == null) return false;
+        final boolean[] ok = new boolean[1];
+        final CountDownLatch latch = new CountDownLatch(1);
         webHandler.post(() -> {
             synchronized (webLock) {
                 try {
-                    if (webView == null) webView = createWebView();   // 主线程创建，符合 WebView 线程约束
-                    if (webView == null) { out[0] = "{\"error\":\"webView create failed\"}"; loadLatch.countDown(); return; }
+                    if (webView == null) webView = createWebView();
+                    if (webView == null) { latch.countDown(); return; }
+                    webView.addJavascriptInterface(new JsBridge(), "GazeBridge");
                     webView.setWebViewClient(new WebViewClient() {
                         @Override
-                        public void onPageFinished(WebView view, String u) { loadLatch.countDown(); }
+                        public void onPageStarted(WebView view, String u, android.graphics.Bitmap f) {
+                            try { view.evaluateJavascript(CAP_JS, null); } catch (Throwable ignored) {}
+                        }
                     });
-                    webView.addJavascriptInterface(bridge, "GazeBridge");
                     webView.loadUrl(url);
+                    ok[0] = true;
                 } catch (Throwable t) {
-                    out[0] = "{\"error\":\"webView init failed: " + String.valueOf(t.getMessage()) + "\"}";
-                    loadLatch.countDown();
+                    dlog("webLoad failed: " + t);
+                } finally {
+                    latch.countDown();
                 }
             }
         });
-        try {
-            if (!loadLatch.await(LOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                out[0] = "{\"error\":\"page load timeout: " + url + "\"}";
-                dlog("load TIMEOUT url=" + url);
-                return out[0];
-            }
-            dlog("load ok url=" + url);
-            // 2) 等 proof 就绪（仅 FILTER 页需要；首页/play 传 null 跳过）
-            boolean proofReady = false;
-            if (!TextUtils.isEmpty(waitProof)) {
-                long deadline = System.currentTimeMillis() + PROOF_TIMEOUT_MS;
-                while (System.currentTimeMillis() < deadline) {
-                    final String[] r = new String[1];
-                    final CountDownLatch rl = new CountDownLatch(1);
-                    webHandler.post(() -> {
-                        synchronized (webLock) {
-                            try {
-                                if (webView != null) webView.evaluateJavascript(
-                                        "(!window." + waitProof + "||!window." + waitProof + "['" + PROOF_KEY + "'])?0:1",
-                                        v -> { r[0] = stripQuotes(v); rl.countDown(); });
-                            } catch (Throwable t) { rl.countDown(); }
-                        }
-                    });
-                    rl.await(3, TimeUnit.SECONDS);
-                    if ("1".equals(r[0])) { proofReady = true; break; }
-                    Thread.sleep(200);
-                }
-                dlog("proof ready=" + proofReady + " key=" + waitProof);
-            }
-            // 3) 注入并执行异步 JS（回调经桥回传）
-            bridge.done = false; bridge.result = null;
-            webHandler.post(() -> {
-                synchronized (webLock) {
-                    try {
-                        if (webView != null) webView.evaluateJavascript(
-                                "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
-                                null);
-                    } catch (Throwable t) { /* 失败由下方超时兜底 */ }
-                }
-            });
-            long deadline = System.currentTimeMillis() + FETCH_TIMEOUT_MS;
-            while (System.currentTimeMillis() < deadline && !bridge.done) {
-                Thread.sleep(150);
-            }
-            out[0] = bridge.done ? bridge.result : "{\"error\":\"fetch timeout\"}";
-            if (!bridge.done) dlog("fetch TIMEOUT url=" + url);
-        } catch (Exception e) {
-            out[0] = "{\"error\":\"" + e.getMessage() + "\"}";
-        } finally {
-            webHandler.post(() -> { synchronized (webLock) { if (webView != null) webView.removeJavascriptInterface("GazeBridge"); } });
-        }
-        String ret = out[0] == null ? "{\"error\":\"webRun interrupted\"}" : out[0];
-        dlog("webRun ret " + head(ret));
-        return ret;
+        try { latch.await(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        return ok[0];
     }
 
-    /** evaluateJavascript 返回值是 JSON 字符串（带引号），这里去首尾引号。 */
+    /** 在主线程 evaluateJavascript，返回其原始返回值（JSON 编码的字符串）。 */
+    private String webEval(final String js, final long timeoutMs) {
+        final String[] out = new String[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        if (webHandler == null) return null;
+        webHandler.post(() -> {
+            synchronized (webLock) {
+                try {
+                    if (webView == null) { latch.countDown(); return; }
+                    webView.evaluateJavascript(js, v -> { out[0] = v; latch.countDown(); });
+                } catch (Throwable t) { latch.countDown(); }
+            }
+        });
+        try { if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return null; } catch (InterruptedException e) { return null; }
+        return out[0];
+    }
+
+    /** 执行一段自行负责回传的 JS（内部调 GazeBridge.onResult），等桥结果。 */
+    private String webBridge(final String js, final long timeoutMs) {
+        final JsBridge[] holder = new JsBridge[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        webHandler.post(() -> {
+            synchronized (webLock) {
+                try {
+                    if (webView == null) { latch.countDown(); return; }
+                    JsBridge b = new JsBridge();
+                    holder[0] = b;
+                    webView.addJavascriptInterface(b, "GazeBridge");
+                    webView.evaluateJavascript(
+                            "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
+                            null);
+                } catch (Throwable t) { latch.countDown(); }
+            }
+        });
+        try { latch.await(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        JsBridge b = holder[0];
+        if (b == null) return "{\"error\":\"bridge not ready\"}";
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline && !b.done) {
+            try { Thread.sleep(120); } catch (InterruptedException ignored) {}
+        }
+        return b.done ? b.result : "{\"error\":\"bridge timeout\"}";
+    }
+
     private static String stripQuotes(String v) {
-        if (v == null) return "0";
-        if (v.startsWith("\"") && v.endsWith("\"")) return v.substring(1, v.length() - 1);
+        if (v == null) return null;
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+            return v.substring(1, v.length() - 1)
+                    .replace("\\\"", "\"").replace("\\n", "\n").replace("\\r", "\r")
+                    .replace("\\t", "\t").replace("\\\\", "\\");
+        }
         return v;
     }
 
-    // ===================================================================
-    // 调试日志（开发期定位用，上线可整体删掉 dlog 调用）
-    //   —— “有分类无数据”时，看爬虫日志里的 [GAZE] 行即可区分：
-    //      · load TIMEOUT / webView init failed  → WebView 没起来
-    //      · proof ready=false                   → CF 没过，proof 头没算出来
-    //      · raw 开头是 < 或 {"error":...}        → 拿到的是 CF/419 页，不是 JSON
-    //      · raw 是 JSON 但列表空                → 字段名猜错，按 raw 校正 pickArray
-    // ===================================================================
     private static void dlog(String s) {
         try { SpiderDebug.log("[GAZE] " + s); } catch (Throwable ignored) {}
     }
+
     private static String head(String s) {
         if (s == null) return "null";
-        int n = Math.min(s.length(), 800);
+        int n = Math.min(s.length(), 700);
         return s.length() + "::" + s.substring(0, n);
     }
 
-    /** 空列表兜底：往 UI 塞一条调试条目，把原始响应显示在备注里（无需 logcat 也能看）。 */
-    private static Vod debugVod(String raw) {
-        Vod v = new Vod();
-        v.setVodId("__gaze_debug__");
-        v.setVodName("[GAZE调试] 列表为空，点此看原因");
-        String h = head(raw);
-        if (h.length() > 500) h = h.substring(0, 500);
-        v.setVodRemarks(h);
-        return v;
+    // ===================================================================
+    // 列表：/filter_movielist（抓页面自发请求的 headers，再重放改参数）
+    // ===================================================================
+
+    /** 等页面自己发出至少一次 filter_movielist（拿动态 proof headers）。 */
+    private String waitListCapture() {
+        String js = "(function(){var t0=Date.now();"
+                + "(function tick(){"
+                + " if(window.__gz&&window.__gz.list.length>0){GazeBridge.onResult(JSON.stringify(window.__gz.list[0]));return;}"
+                + " if(Date.now()-t0>" + LIST_WAIT_MS + "){GazeBridge.onResult('');return;}"
+                + " setTimeout(tick,150);"
+                + "})();})();";
+        String raw = webBridge(js, LIST_WAIT_MS + 6000);
+        return raw;
     }
 
-    /**
-     * 构造 /filter_movielist 的 POST body（与页面一致：form-urlencoded）。
-     * 关键参数：mcountry=cn 筛国产剧；mform 区分剧集/电影/番剧；sort=updatetime；page 翻页。
-     */
-    private static String buildBody(String mform, String mcountry, String genre, String years, String page) {
+    /** 重放：改 form body，复用抓到的 headers。 */
+    private String replayList(String formBody) {
+        String js = "window.__gzReplay(" + JSONObject.quote(formBody) + ")"
+                + ".then(function(t){GazeBridge.onResult(t||'');});";
+        return webBridge(js, REPLAY_TIMEOUT_MS);
+    }
+
+    private static String buildBody(String mform, String mcountry, String genre,
+                                    String years, String album, String sort, String title, String page) {
         StringBuilder b = new StringBuilder();
-        b.append("mform=").append(enc(mform.isEmpty() ? "all" : mform));
-        b.append("&mcountry=").append(enc(mcountry.isEmpty() ? "all" : mcountry));
-        b.append("&genre_arr=").append(enc(genre.isEmpty() ? "all" : genre));
-        b.append("&page=").append(enc(page.isEmpty() ? "1" : page));
-        b.append("&sort=").append("updatetime");
-        b.append("&album=").append("all");
-        b.append("&title=").append("");
-        b.append("&years=").append(enc(years.isEmpty() ? "all" : years));
+        b.append("mform=").append(enc(def(mform, "all")));
+        b.append("&mcountry=").append(enc(def(mcountry, "all")));
+        b.append("&genre_arr=").append(enc(def(genre, "all")));
+        b.append("&page=").append(enc(def(page, "1")));
+        b.append("&sort=").append(enc(def(sort, "updatetime")));
+        b.append("&album=").append(enc(def(album, "all")));
+        b.append("&title=").append(enc(def(title, "")));
+        b.append("&years=").append(enc(def(years, "all")));
         return b.toString();
     }
+
+    private static String def(String s, String d) { return TextUtils.isEmpty(s) ? d : s; }
 
     private static String enc(String s) {
         try { return java.net.URLEncoder.encode(s, "UTF-8"); } catch (Exception e) { return s; }
     }
 
-    /**
-     * 注入 JS：复用页面算好的 proof + 抠 DOM token，POST /filter_movielist，回传原始响应文本。
-     * 注：X_GAZE_NAME / TOKEN_ATTR / PROOF_KEY 均为页面静态常量（站点改版需同步）。
-     */
-    private static final String FETCH_JS =
-            "var ph = (window._UOKm2GSn6pXP && window._UOKm2GSn6pXP['" + PROOF_KEY + "']) || {};"
-            + "var tok = ''; try{ tok = document.querySelector('[" + TOKEN_ATTR + "]').getAttribute('" + TOKEN_ATTR + "')||''; }catch(e){}"
-            + "ph['" + X_GAZE_NAME + "'] = tok;"
-            + "var body = BODY_PLACEHOLDER;"
-            + "fetch('" + LIST_API + "',{method:'POST',credentials:'same-origin',"
-            + "headers:Object.assign({'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},ph),"
-            + "body:body}).then(function(r){return r.text();}).then(function(t){GazeBridge.onResult(t);})"
-            + ".catch(function(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));});";
-
-    private String fetchList(String mform, String mcountry, String genre, String years, String page) {
-        String body = buildBody(mform, mcountry, genre, years, page);
-        String js = FETCH_JS.replace("BODY_PLACEHOLDER", JSONObject.quote(body));
-        return webRun(FILTER_URL, "_UOKm2GSn6pXP", js);
+    /** 拉一页列表。capture 用不到也没关系（重放失败会回落到 DOM/SSR 兜底）。 */
+    private String fetchList(String mform, String mcountry, String genre, String years,
+                             String album, String sort, String title, String page) {
+        if (!webLoad(FILTER_URL)) return "{\"error\":\"webLoad failed\"}";
+        String cap = waitListCapture();
+        dlog("capture: " + head(cap));
+        if (cap == null || cap.isEmpty() || "\"\"".equals(cap)) {
+            // 页面没自发请求：等久一点再试；仍不行就返回原始 SSHTML 让调用方兜底
+            String snap = stripQuotes(webEval("JSON.stringify({html:document.documentElement.outerHTML.length})", 3000));
+            return "{\"error\":\"no list capture\",snap:" + (snap == null ? "null" : snap) + "}";
+        }
+        return replayList(buildBody(mform, mcountry, genre, years, album, sort, title, page));
     }
 
     // ===================================================================
-    // 防御性 JSON 解析（★ 字段名待设备实采校正，见上边界说明）
+    // 详情：/play/{id} → 抠 data-baseid 作集数 id（不解码混淆串，原样回传）
     // ===================================================================
+    @Override
+    public String detailContent(List<String> ids) throws Exception {
+        if (ids == null || ids.isEmpty()) return Result.get().string();
+        String id = ids.get(0);
+        String url = BASE + "/play/" + id;
+        if (!webLoad(url)) return Result.error("WebView 加载失败： " + url);
+        // 等页面把集数渲染出来（data-baseid 是 SSR 就有的，通常很快）
+        String picked = null;
+        long deadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < deadline) {
+            String raw = webBridge(
+                    "(function(){var o=[];var es=document.querySelectorAll('[data-baseid]');"
+                            + "for(var i=0;i<es.length;i++){var e=es[i];var b=e.getAttribute('data-baseid');"
+                            + "var t=(e.innerText||e.textContent||'').trim();"
+                            + "if(b)o.push({n:t||('第'+(i+1)+'集'),id:b});}"
+                            + "GazeBridge.onResult(JSON.stringify(o));})();", 5000);
+            picked = raw;
+            if (raw != null && raw.contains("\"id\"")) break;
+            try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+        }
+        Vod v = new Vod();
+        v.setVodId(id);
+        v.setVodName(id);
+        try {
+            JSONArray arr = new JSONArray(picked);
+            List<String> eps = new ArrayList<>();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String n = o.optString("n", "第" + (i + 1) + "集");
+                String bid = o.optString("id", "");
+                if (bid.isEmpty()) continue;
+                eps.add(n + "$" + bid);
+            }
+            if (!eps.isEmpty()) {
+                v.setVodPlayFrom("默认线路");
+                v.setVodPlayUrl(TextUtils.join("#", eps));
+                v.setVodRemarks("共 " + eps.size() + " 集");
+            } else {
+                v.setVodRemarks("[GAZE] 未抠到 data-baseid，原始: " + head(picked));
+            }
+        } catch (Exception e) {
+            v.setVodRemarks("[GAZE] 解析失败: " + e + " raw=" + head(picked));
+        }
+        dlog("detail id=" + id + " picked=" + head(picked));
+        return Result.string(v);
+    }
 
-    /** 从 filter_movielist 响应里抽出条目数组（多候选 key）。 */
+    // ===================================================================
+    // 播放：WebView 起播 → 抓真实段 URL → 本地重写 m3u8
+    // ===================================================================
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        if (TextUtils.isEmpty(id)) return Result.error("播放 id 为空");
+        // id 形如 "第1集$d11CRlpcVV9VQQ=="
+        String name = "";
+        String playId = id;
+        int d = id.indexOf('$');
+        if (d >= 0) { name = id.substring(0, d); playId = id.substring(d + 1); }
+        if (playId.startsWith("http://") || playId.startsWith("https://")) {
+            Map<String, String> h = new HashMap<>();
+            h.put("User-Agent", UA);
+            h.put("Referer", BASE + "/");
+            return Result.get().parse(0).url(playId).header(h).string();
+        }
+
+        String url = BASE + "/play/" + playId;
+        if (!webLoad(url)) return Result.error("WebView 加载失败： " + url);
+        // 起点播（多处候选选择器都点一遍）
+        webEval("(function(){try{window.__gzKick&&window.__gzKick();}catch(e){}})();", 4000);
+        // 轮询抓段
+        String best = null;
+        int bestN = 0;
+        long deadline = System.currentTimeMillis() + PLAY_WAIT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            String raw = webEval("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
+            String snap = stripQuotes(raw);
+            if (snap != null && !snap.isEmpty()) {
+                try {
+                    JSONObject o = new JSONObject(snap);
+                    JSONArray media = o.optJSONArray("media");
+                    int n = media == null ? 0 : media.length();
+                    if (n > bestN) { bestN = n; best = snap; }
+                } catch (Exception ignored) {}
+            }
+            // 段数够就收（多等一会儿让播放器把前段都请求完）
+            if (bestN >= PLAY_MIN_SEG) {
+                try { Thread.sleep(2500); } catch (InterruptedException ignored) {}
+                String raw2 = webEval("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
+                String s2 = stripQuotes(raw2);
+                if (s2 != null && !s2.isEmpty()) {
+                    try {
+                        JSONObject o2 = new JSONObject(s2);
+                        JSONArray m2 = o2.optJSONArray("media");
+                        if (m2 != null && m2.length() >= bestN) best = s2;
+                    } catch (Exception ignored) {}
+                }
+                break;
+            }
+            try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
+        }
+        dlog("player playId=" + playId + " segs=" + bestN);
+        if (best == null || bestN < PLAY_MIN_SEG) {
+            return Result.error("未抓到足够分片（" + bestN + "/" + PLAY_MIN_SEG
+                    + "）。可能 CF 没过或播放器没起播。抓到的快照: " + head(best));
+        }
+
+        File f = writePlaylist(playId, best);
+        if (f == null) return Result.error("分片已抓到但 playlist 写出失败");
+
+        Map<String, String> h = new HashMap<>();
+        h.put("User-Agent", UA);
+        h.put("Referer", BASE + "/");
+        // 本地 m3u8：parse=0，壳子/播放器直接当 HLS 播
+        return Result.get().parse(0).url(f.getAbsolutePath()).header(h).string();
+    }
+
+    /** 用抓到的真实段 URL + EXT-X-MAP 重写一份标准本地 m3u8。 */
+    private File writePlaylist(String playId, String snap) {
+        try {
+            JSONObject o = new JSONObject(snap);
+            String m3u8 = o.optString("m3u8", "");
+            String blob = o.optString("blob", "");
+            if (m3u8.isEmpty()) m3u8 = blob;
+            JSONArray media = o.optJSONArray("media");
+
+            LinkedHashSet<String> all = new LinkedHashSet<>();
+            if (media != null) for (int i = 0; i < media.length(); i++) {
+                String u = media.optString(i, "").trim();
+                if (u.startsWith("http")) all.add(u);
+            }
+            if (all.isEmpty() && !m3u8.isEmpty()) {
+                for (String line : m3u8.split("\n")) {
+                    String t = line.trim();
+                    if (t.startsWith("http")) all.add(t);
+                }
+            }
+            if (all.isEmpty()) return null;
+
+            // EXT-X-MAP（init mp4）优先级：JS 同步抠到的 mapUri > m3u8 文本里的 > media 里的 .mp4
+            String mapUri = o.optString("mapUri", "");
+            if (TextUtils.isEmpty(mapUri)) {
+                Matcher mm = Pattern.compile("#EXT-X-MAP:URI=\"([^\"]+)\"").matcher(m3u8);
+                if (mm.find()) mapUri = mm.group(1);
+            }
+            if (TextUtils.isEmpty(mapUri)) mapUri = firstOf(all, ".mp4");
+
+            // .mp4 是 init 段，不能当普通分片发
+            LinkedHashSet<String> segs = new LinkedHashSet<>();
+            for (String s : all) if (!s.endsWith(".mp4")) segs.add(s);
+            if (segs.isEmpty()) return null;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("#EXTM3U\n");
+            sb.append("#EXT-X-VERSION:7\n");
+            sb.append("#EXT-X-MEDIA-SEQUENCE:0\n");
+            sb.append("#EXT-X-PLAYLIST-TYPE:VOD\n");
+            sb.append("#EXT-X-INDEPENDENT-SEGMENTS\n");
+            sb.append("#EXT-X-TARGETDURATION:15\n");
+            if (mapUri != null) sb.append("#EXT-X-MAP:URI=\"").append(mapUri).append("\"\n");
+            for (String s : segs) {
+                sb.append("#EXTINF:5.000000,\n");
+                sb.append(s).append("\n");
+            }
+            File dir = appCtx.getCacheDir();
+            File out = new File(dir, "gaze_" + safeName(playId) + ".m3u8");
+            FileOutputStream fos = new FileOutputStream(out);
+            fos.write(sb.toString().getBytes("UTF-8"));
+            fos.close();
+            dlog("playlist written " + out.getAbsolutePath() + " segs=" + segs.size());
+            return out;
+        } catch (Throwable t) {
+            dlog("writePlaylist err " + t);
+            return null;
+        }
+    }
+
+    private static String firstOf(LinkedHashSet<String> set, String suffix) {
+        for (String s : set) if (s.endsWith(suffix)) return s;
+        return null;
+    }
+
+    private static String safeName(String s) {
+        return s.replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    // ===================================================================
+    // 首页 / 分类 / 搜索
+    // ===================================================================
+    @Override
+    public String homeContent(boolean filter) throws Exception {
+        String raw = fetchList("all", "all", "all", "all", "all", "updatetime", "", "1");
+        JSONObject j = safeJson(raw);
+        List<Vod> list = new ArrayList<>();
+        if (j != null) {
+            JSONArray arr = pickArray(j);
+            if (arr != null) for (int i = 0; i < arr.length(); i++) {
+                Vod v = parseItem(arr.optJSONObject(i));
+                if (v != null) list.add(v);
+            }
+        }
+        dlog("home items=" + list.size() + " raw=" + head(raw));
+        if (list.isEmpty()) list.add(debugVod(raw));
+        return Result.string(buildClasses(), list);
+    }
+
+    @Override
+    public String categoryContent(String tid, String pg, boolean filter,
+                                  HashMap<String, String> extend) throws Exception {
+        int page = 1;
+        try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
+        if (page < 1) page = 1;
+        String[] mm = mapTid(tid);
+        String genre = extend != null ? firstNonNull(extend.get("genre"), extend.get("类型"), "") : "";
+        String years = extend != null ? firstNonNull(extend.get("years"), extend.get("年份"), "") : "";
+        String raw = fetchList(mm[0], mm[1], genre, years, "all", "updatetime", "", String.valueOf(page));
+        JSONObject j = safeJson(raw);
+        List<Vod> list = new ArrayList<>();
+        int total = 0;
+        if (j != null) {
+            JSONArray arr = pickArray(j);
+            if (arr != null) for (int i = 0; i < arr.length(); i++) {
+                Vod v = parseItem(arr.optJSONObject(i));
+                if (v != null) list.add(v);
+            }
+            total = j.optInt("total", arr != null ? arr.length() : 0);
+        }
+        dlog("category tid=" + tid + " page=" + page + " items=" + list.size() + " raw=" + head(raw));
+        if (list.isEmpty()) list.add(debugVod(raw));
+        int pageCount = total > 0 ? Math.max((total + 19) / 20, page) : page + (list.size() >= 20 ? 1 : 0);
+        return Result.get().vod(list).page(page, pageCount, 20, total).string();
+    }
+
+    @Override
+    public String searchContent(String key, boolean quick) throws Exception {
+        String raw = fetchList("all", "all", "all", "all", "all", "updatetime", key, "1");
+        JSONObject j = safeJson(raw);
+        List<Vod> list = new ArrayList<>();
+        if (j != null) {
+            JSONArray arr = pickArray(j);
+            if (arr != null) for (int i = 0; i < arr.length(); i++) {
+                Vod v = parseItem(arr.optJSONObject(i));
+                if (v != null) list.add(v);
+            }
+        }
+        if (list.isEmpty()) list.add(debugVod(raw));
+        return Result.get().vod(list).page(1, 1, 20, list.size()).string();
+    }
+
+    public void destroy() {
+        if (webHandler != null) {
+            webHandler.post(() -> {
+                synchronized (webLock) {
+                    if (webView != null) { try { webView.destroy(); } catch (Throwable ignored) {} webView = null; }
+                }
+            });
+        }
+    }
+
+    // ===================================================================
+    // 工具
+    // ===================================================================
     private JSONArray pickArray(JSONObject j) {
         if (j == null) return null;
+        // gaze.host 实测字段是 mlist
+        JSONArray a = j.optJSONArray("mlist");
+        if (a != null) return a;
         for (String k : new String[]{"data", "list", "items", "results", "vod"}) {
             Object o = j.opt(k);
             if (o instanceof JSONArray) return (JSONArray) o;
-            if (o instanceof JSONObject) { // data 可能是 {list:[...]} 或 {vod:[...]}
-                for (String k2 : new String[]{"list", "vod", "items"}) {
-                    JSONArray a = ((JSONObject) o).optJSONArray(k2);
-                    if (a != null) return a;
-                }
+            if (o instanceof JSONObject) {
+                JSONArray a2 = ((JSONObject) o).optJSONArray("list");
+                if (a2 == null) a2 = ((JSONObject) o).optJSONArray("vod");
+                if (a2 == null) a2 = ((JSONObject) o).optJSONArray("items");
+                if (a2 != null) return a2;
             }
         }
         return null;
     }
 
-    /** 防御性取 id / 标题 / 封面（多候选 key）。 */
     private Vod parseItem(JSONObject o) {
         if (o == null) return null;
         String id = pickStr(o, new String[]{"id", "vod_id", "mid", "movie_id", "tid"});
         String name = pickStr(o, new String[]{"title", "name", "vod_name", "vod_title"});
-        String pic = pickStr(o, new String[]{"pic", "cover", "img", "vod_pic", "poster", "thumb"});
+        String pic = pickStr(o, new String[]{"cover_img", "pic", "cover", "img", "vod_pic", "poster", "thumb"});
         if (TextUtils.isEmpty(id) || TextUtils.isEmpty(name)) return null;
         Vod v = new Vod();
         v.setVodId(id);
         v.setVodName(name);
         if (!TextUtils.isEmpty(pic)) v.setVodPic(absUrl(pic));
-        String remark = pickStr(o, new String[]{"remarks", "vod_remarks", "note", "year"});
+        String remark = pickStr(o, new String[]{"grade", "remarks", "vod_remarks", "note", "year"});
         if (!TextUtils.isEmpty(remark)) v.setVodRemarks(remark);
         return v;
     }
@@ -341,154 +665,11 @@ public class Gaze extends Spider {
         return BASE + "/" + u.replaceFirst("^/+", "");
     }
 
-    // ===================================================================
-    // CatVod 接口
-    // ===================================================================
-
-    /**
-     * 分类：国产剧放最前（mcountry=cn），其余按形式。
-     * 顺序即壳子里的分类顺序 → 国产剧天然在最前。
-     */
-    private List<Class> buildClasses() {
-        List<Class> cs = new ArrayList<>();
-        cs.add(new Class("cn", "国产剧"));          // mcountry=cn —— 置顶
-        cs.add(new Class("all", "全部"));
-        cs.add(new Class("tv", "电视剧"));          // mform=1
-        cs.add(new Class("movie", "电影"));         // mform=2
-        cs.add(new Class("bangumi", "番剧"));       // mform=bangumi
-        return cs;
-    }
-
-    /** tid → (mform, mcountry) 映射。 */
-    private String[] mapTid(String tid) {
-        switch (TextUtils.isEmpty(tid) ? "" : tid) {
-            case "cn":     return new String[]{"all", "cn"};
-            case "tv":     return new String[]{"1", "all"};
-            case "movie":  return new String[]{"2", "all"};
-            case "bangumi":return new String[]{"bangumi", "all"};
-            default:       return new String[]{"all", "all"};
-        }
-    }
-
-    @Override
-    public String homeContent(boolean filter) throws Exception {
-        // 首页推荐 = /filter 默认参数拉“最近更新”流（与首页推荐等价），并带分类（国产剧置顶）
-        String raw = fetchList("all", "all", "all", "all", "1");
-        JSONObject j = safeJson(raw);
-        List<Vod> list = new ArrayList<>();
-        if (j != null) {
-            JSONArray arr = pickArray(j);
-            if (arr != null) for (int i = 0; i < arr.length(); i++) {
-                Vod v = parseItem(arr.optJSONObject(i));
-                if (v != null) list.add(v);
-            }
-        }
-        dlog("home items=" + list.size() + " raw=" + head(raw));
-        if (list.isEmpty()) list.add(debugVod(raw));
-        return Result.string(buildClasses(), list);
-    }
-
-    @Override
-    public String categoryContent(String tid, String pg, boolean filter,
-                                 HashMap<String, String> extend) throws Exception {
-        int page = 1;
-        try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
-        if (page < 1) page = 1;
-        String[] mm = mapTid(tid);
-        String genre = extend != null ? firstNonNull(extend.get("genre"), extend.get("类型"), "") : "";
-        String years = extend != null ? firstNonNull(extend.get("years"), extend.get("年份"), "") : "";
-        String raw = fetchList(mm[0], mm[1], genre, years, String.valueOf(page));
-        JSONObject j = safeJson(raw);
-        List<Vod> list = new ArrayList<>();
-        int total = 0, pageCount = page;
-        if (j != null) {
-            JSONArray arr = pickArray(j);
-            if (arr != null) for (int i = 0; i < arr.length(); i++) {
-                Vod v = parseItem(arr.optJSONObject(i));
-                if (v != null) list.add(v);
-            }
-            total = j.optInt("total", arr != null ? arr.length() : 0);
-        }
-        dlog("category tid=" + tid + " items=" + list.size() + " total=" + total + " raw=" + head(raw));
-        if (list.isEmpty()) list.add(debugVod(raw));
-        if (total > 0) pageCount = Math.max((total + 20 - 1) / 20, page);
-        else pageCount = page + (list.size() >= 20 ? 1 : 0);
-        return Result.get().vod(list).page(page, pageCount, 20, total).string();
-    }
-
     private static String firstNonNull(String... xs) {
         for (String x : xs) if (!TextUtils.isEmpty(x)) return x;
         return "";
     }
 
-    @Override
-    public String detailContent(List<String> ids) throws Exception {
-        if (ids == null || ids.isEmpty()) return Result.get().string();
-        String id = ids.get(0);
-        // ★ 播放页 /play/{id} 同样 CF+proof 门；先用 WebView 加载并抠集数/选集/播放链接。
-        // 因未实采 play 页结构，这里走“加载 /play/{id} → 抠 a[href*=m3u8] / video src”的防御性提取，
-        // 字段与选择器需设备实采校正。
-        String url = BASE + "/play/" + id;
-        String js = "var out=[];try{"
-                + "document.querySelectorAll('a[href]').forEach(function(a){var h=a.getAttribute('href')||'';if(/\\.m3u8/i.test(h))out.push(a.innerText.trim()+'$'+h);});"
-                + "var vs=document.querySelectorAll('video');vs.forEach(function(v){var s=v.src||'';if(s)out.push('播放$'+s);});"
-                + "}catch(e){}GazeBridge.onResult(JSON.stringify(out));";
-        String raw = webRun(url, null, js);
-        Vod v = new Vod();
-        v.setVodId(id);
-        try {
-            JSONArray arr = new JSONArray(raw);
-            if (arr.length() > 0) {
-                List<String> eps = new ArrayList<>();
-                for (int i = 0; i < arr.length(); i++) eps.add(arr.optString(i));
-                v.setVodPlayFrom("默认线路");
-                v.setVodPlayUrl(TextUtils.join("#", eps));
-            }
-        } catch (Exception ignored) {}
-        return Result.string(v);
-    }
-
-    @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        // gaze 搜索：/filter_movielist 的 title 参数即关键字（页面 body 含 title=）。
-        String titleBody = "mform=all&mcountry=all&genre_arr=all&page=1&sort=updatetime&album=all&title="
-                + enc(key) + "&years=all";
-        String js = FETCH_JS.replace("BODY_PLACEHOLDER", JSONObject.quote(titleBody));
-        String raw = webRun(FILTER_URL, "_UOKm2GSn6pXP", js);
-        JSONObject j = safeJson(raw);
-        List<Vod> list = new ArrayList<>();
-        if (j != null) {
-            JSONArray arr = pickArray(j);
-            if (arr != null) for (int i = 0; i < arr.length(); i++) {
-                Vod v = parseItem(arr.optJSONObject(i));
-                if (v != null) list.add(v);
-            }
-        }
-        return Result.get().vod(list).page(1, 1, 20, list.size()).string();
-    }
-
-    /**
-     * 播放：id 形如 "标题$url"（detailContent 写入的播放引用）。
-     * 若已是 http(s) 直链 → 直接播（parse=0）；否则回退按 id 再走 /play 提取（极少触发）。
-     */
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (TextUtils.isEmpty(id)) return Result.error("播放地址为空");
-        String url = id;
-        int d = id.indexOf('$');
-        if (d >= 0 && d < id.length() - 1) url = id.substring(d + 1);
-        if (url.startsWith("http://") || url.startsWith("https://")) {
-            Map<String, String> h = new HashMap<>();
-            h.put("User-Agent", UA);
-            h.put("Referer", BASE + "/");
-            return Result.get().parse(0).url(url).header(h).string();
-        }
-        return Result.error("未能解析播放地址");
-    }
-
-    // ===================================================================
-    // 工具
-    // ===================================================================
     private static JSONObject safeJson(String s) {
         if (TextUtils.isEmpty(s)) return null;
         try {
@@ -497,14 +678,33 @@ public class Gaze extends Spider {
         } catch (Exception e) { return null; }
     }
 
-    /** 进程退出前销毁 WebView（CatVod 通常不会调，但留个口）。 */
-    public void destroy() {
-        if (webHandler != null) {
-            webHandler.post(() -> {
-                synchronized (webLock) {
-                    if (webView != null) { try { webView.destroy(); } catch (Throwable ignored) {} webView = null; }
-                }
-            });
+    private static Vod debugVod(String raw) {
+        Vod v = new Vod();
+        v.setVodId("__gaze_debug__");
+        v.setVodName("[GAZE调试] 列表为空，点此看原因");
+        String h = head(raw);
+        if (h.length() > 500) h = h.substring(0, 500);
+        v.setVodRemarks(h);
+        return v;
+    }
+
+    private List<Class> buildClasses() {
+        List<Class> cs = new ArrayList<>();
+        cs.add(new Class("cn", "国产剧"));
+        cs.add(new Class("all", "全部"));
+        cs.add(new Class("tv", "电视剧"));
+        cs.add(new Class("movie", "电影"));
+        cs.add(new Class("bangumi", "番剧"));
+        return cs;
+    }
+
+    private String[] mapTid(String tid) {
+        switch (TextUtils.isEmpty(tid) ? "" : tid) {
+            case "cn":      return new String[]{"all", "cn"};
+            case "tv":      return new String[]{"1", "all"};
+            case "movie":   return new String[]{"2", "all"};
+            case "bangumi": return new String[]{"bangumi", "all"};
+            default:        return new String[]{"all", "all"};
         }
     }
 }
