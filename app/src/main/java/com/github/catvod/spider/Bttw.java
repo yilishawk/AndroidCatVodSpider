@@ -57,27 +57,6 @@ public class Bttw extends Spider {
             }
         }
         SpiderDebug.log("[Bttw] 初始化完成，host: " + host);
-        refreshUserlink();
-    }
-
-    /** 播放签名需要 userlink，从首页提取；失败则用内置固定值（服务端不强绑会话，固定值实测可用） */
-    private void refreshUserlink() {
-        try {
-            String html = OkHttp.string(host + "/", headers);
-            if (!TextUtils.isEmpty(html)) {
-                Matcher m = Pattern.compile("userlink:'([^']+)'").matcher(html);
-                if (m.find()) {
-                    String u = m.group(1);
-                    // 站点对未登录/新会话会下发无效值 '0'（实测 401：访问令牌格式错误），无效则保持固定值
-                    if (!TextUtils.isEmpty(u) && !"0".equals(u) && u.matches("[A-Za-z0-9+/=]{16,}")) {
-                        userlink = u;
-                        SpiderDebug.log("[Bttw] userlink 已刷新");
-                    }
-                }
-            }
-        } catch (Exception e) {
-            SpiderDebug.log("[Bttw] userlink 刷新失败，使用固定值: " + e.getMessage());
-        }
     }
 
     private String fetch(String url) throws Exception {
@@ -321,6 +300,12 @@ public class Bttw extends Spider {
             String vodId = ids.get(0);
             String url = host + "/play/" + vodId;
             String html = fetch(url);
+            // 顺手记录播放页现场下发的 userlink（时效性令牌），playerContent 兜底用
+            Matcher um = Pattern.compile("userlink:'([^']+)'").matcher(html == null ? "" : html);
+            if (um.find()) {
+                String u = um.group(1);
+                if (!"0".equals(u) && u.matches("[A-Za-z0-9+/=]{16,}")) userlink = u;
+            }
             Document doc = Jsoup.parse(html);
 
             // 标题
@@ -463,16 +448,33 @@ public class Bttw extends Spider {
                 dataid = id.substring(0, at);
                 slug = id.substring(at + 1);
             } else {
+                // 旧格式: /play/slug 或完整 URL
                 String pageUrl = id.startsWith("http") ? id : host + id;
-                String html = fetch(pageUrl);
                 int idx = pageUrl.lastIndexOf('/');
                 if (idx >= 0 && idx < pageUrl.length() - 1) slug = pageUrl.substring(idx + 1);
-                if (!TextUtils.isEmpty(html)) {
-                    Matcher m = Pattern.compile("dataid=\"(\\d+)\"").matcher(html);
-                    if (m.find()) dataid = m.group(1);
+            }
+            if (TextUtils.isEmpty(slug)) return fallback(id);
+
+            // userlink 是站点时效性令牌：首页只下发无效的 '0'，历史固定值会被标记过期
+            // （2026-10-19 实证：固定值 401"访问令牌已过期"）=> 每次抓播放页取当次下发的值
+            // 抓页同时兜底解析 dataid（id 未带的情况）
+            String pageHtml = null;
+            try {
+                pageHtml = fetch(host + "/play/" + slug);
+            } catch (Exception ignored) {
+            }
+            if (!TextUtils.isEmpty(pageHtml)) {
+                Matcher um = Pattern.compile("userlink:'([^']+)'").matcher(pageHtml);
+                if (um.find()) {
+                    String u = um.group(1);
+                    if (!"0".equals(u) && u.matches("[A-Za-z0-9+/=]{16,}")) userlink = u;
+                }
+                if (TextUtils.isEmpty(dataid)) {
+                    Matcher dm = Pattern.compile("dataid=\"(\\d+)\"").matcher(pageHtml);
+                    if (dm.find()) dataid = dm.group(1);
                 }
             }
-            if (TextUtils.isEmpty(dataid) || TextUtils.isEmpty(slug)) return fallback(id);
+            if (TextUtils.isEmpty(dataid)) return fallback(id);
 
             // 签名调 /video/play 接口取真实播放地址（算法逆向自站点 wasm）
             String t = String.valueOf(System.currentTimeMillis());
@@ -508,22 +510,29 @@ public class Bttw extends Spider {
         }
     }
 
-    /** 取不到直链时返回 parse=1 让壳子嗅探（保持原行为） */
+    /** 取不到直链时返回 parse=1 让壳子嗅探（保持原行为）：只给规范播放页链接，不带 Referer/Origin */
     private String fallback(String id) {
+        String url = playPageUrl(id);
         try {
-            String url = id.startsWith("http") ? id : host + id;
             JSONObject f = new JSONObject();
             f.put("parse", 1);
             f.put("url", url);
             JSONObject header = new JSONObject();
             header.put("User-Agent", headers.get("User-Agent"));
-            header.put("Referer", url);
-            header.put("Origin", host);
             f.put("header", header);
             return f.toString();
         } catch (Exception e) {
-            return "{\"parse\":1,\"url\":\"" + id + "\"}";
+            return "{\"parse\":1,\"url\":\"" + url + "\"}";
         }
+    }
+
+    /** 归一化为播放页链接（parse=1 兜底只用它） */
+    private String playPageUrl(String id) {
+        if (id == null) return host + "/";
+        if (id.startsWith("http")) return id;
+        int at = id.indexOf('@');
+        if (at > 0) return host + "/play/" + id.substring(at + 1);
+        return id.startsWith("/") ? host + id : host + "/play/" + id;
     }
 
     // ---------- 播放签名（算法逆向自站点 wasm，36/36 用例 + 现场双视频验证） ----------
