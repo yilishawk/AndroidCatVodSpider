@@ -500,7 +500,6 @@ public class Bttw extends Spider {
             result.put("url", playUrl);
             JSONObject header = new JSONObject();
             header.put("User-Agent", headers.get("User-Agent"));
-            header.put("Referer", host + "/");
             header.put("Origin", host);
             result.put("header", header);
             return result.toString();
