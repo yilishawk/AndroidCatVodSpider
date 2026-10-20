@@ -75,6 +75,12 @@ public class Gaze extends Spider {
     // 宁可早失败走兜底，也别拖到壳子把结果整个丢掉。
     private static final long LIST_WAIT_MS = 3000;       // 等页面自发一次 filter_movielist
     private static final long REPLAY_TIMEOUT_MS = 6000;  // 重放请求等待
+    /** 等 onPageFinished 的上限（兜底值）。
+     *  ★ 列表链路（fetchList）故意只用 PAGE_READY_LIST_MS=6s：homeContent 最坏
+     *    6(ready) + 4.5(capture) ≈ 10.5s，仍守在壳子超时以内。全给 15s 会和
+     *    FETCH_BUDGET_MS 打架，把首页又拖过超时线。 */
+    private static final long PAGE_READY_MS = 15000;
+    private static final long PAGE_READY_LIST_MS = 6000;
     /** fetchList 总预算：超了就立刻走"吃已抓响应"的兜底，绝不让壳子等到丢结果。 */
     private static final long FETCH_BUDGET_MS = 9000;
     private static final long PLAY_WAIT_MS = 90000;      // 播放抓段总等待（段播得慢，给足）
@@ -119,7 +125,9 @@ public class Gaze extends Spider {
     }
 
     /** JS 桥：注入 JS 通过 GazeBridge.onResult(String) 回传。 */
-    private static class JsBridge {
+    // 必须 public：WebView 的 addJavascriptInterface 对私有嵌套类上的
+    // @JavascriptInterface 方法，在部分 Android 版本上取不到，表现为 GazeBridge 未定义。
+    public static class JsBridge {
         volatile String result;
         volatile boolean done;
         @JavascriptInterface
@@ -209,16 +217,28 @@ public class Gaze extends Spider {
     //   所有 latch.await 都发生在【调用方线程】，绝不阻塞主线程，否则 JS 回调跑不起来。
     // ===================================================================
 
-    /** 装 hook + 加载 url。装 hook 用 onPageStarted（越早越好，赶在页面自发请求之前）。 */
-    private boolean webLoad(final String url) {
+    /**
+     * 装 hook + 加载 url，并【等到页面加载完成】才返回。
+     *
+     * 为什么必须等（真机实测 2026-10-20）：原实现 loadUrl 后立刻返回，紧接着的
+     * webBridge 就在 document 还没建好的空页面上 evaluateJavascript，Chromium 直接
+     * 静默丢弃 —— 表现就是 js 一行没跑、既不回 cap-not-injected 也不回数据，
+     * 一路干等到 bridge timeout。所以这里用第二个 latch 等 onPageFinished。
+     */
+    private boolean webLoad(final String url) { return webLoad(url, PAGE_READY_MS); }
+
+    /** @param readyMs 等 onPageFinished 的上限。列表链路给短值，保证总预算闭合。 */
+    private boolean webLoad(final String url, final long readyMs) {
         if (webHandler == null) return false;
         final boolean[] ok = new boolean[1];
+        final String[] finishedUrl = new String[1];
         final CountDownLatch latch = new CountDownLatch(1);
+        final CountDownLatch pageDone = new CountDownLatch(1);
         webHandler.post(() -> {
             synchronized (webLock) {
                 try {
                     if (webView == null) webView = createWebView();
-                    if (webView == null) { latch.countDown(); return; }
+                    if (webView == null) { latch.countDown(); pageDone.countDown(); return; }
                     webView.addJavascriptInterface(new JsBridge(), "GazeBridge");
                     webView.setWebViewClient(new WebViewClient() {
                         @Override
@@ -227,11 +247,11 @@ public class Gaze extends Spider {
                         }
                         @Override
                         public void onPageFinished(WebView view, String u) {
-                            // 真机实测（2026-10-20）：光靠 onPageStarted 注入会失败，
-                            // 表现为 waitListCapture 里 window.__gz 不存在、不报错、等到
-                            // bridge timeout。onPageFinished 时 document 一定 ready，
-                            // 这里必须再保底注入一次。CAP_JS 自带幂等（if(window.__gz) return）。
+                            // onPageFinished 时 document 一定 ready，保底再注入一次。
+                            // CAP_JS 自带幂等（if(window.__gz) return）。
                             injectCapJs(view);
+                            finishedUrl[0] = String.valueOf(u);
+                            pageDone.countDown();
                         }
                     });
                     webView.loadUrl(url);
@@ -244,12 +264,27 @@ public class Gaze extends Spider {
             }
         });
         try { latch.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-        return ok[0];
+        if (!ok[0]) return false;
+        // 等页面 ready。CF 挑战/慢网络下给足；等不到也继续（后面 webWithCap 会兜），
+        // 但把结果打进日志，便于区分"页面没加载完"和"js 没执行"。
+        boolean finished;
+        try { finished = pageDone.await(readyMs, TimeUnit.MILLISECONDS); } catch (InterruptedException e) { finished = false; }
+        dlog("webLoad " + url + " pageFinished=" + finished + " u=" + finishedUrl[0]);
+        return true;
     }
 
     /** 注入 CAP_JS（幂等）。任何一次失败都只写日志，不抛。 */
     private static void injectCapJs(WebView view) {
-        try { view.evaluateJavascript(CAP_JS, null); } catch (Throwable t) { dlog("injectCapJs: " + t); }
+        // 回调结果打出来：真机 2026-10-20 遇到 Chromium 静默丢弃 evaluateJavascript，
+        // 只在 latch 上 countDown 是看不出所以然的，必须把 v 留下。
+        try { view.evaluateJavascript(CAP_JS, v -> dlog("injectCapJs -> " + shortv(v))); }
+        catch (Throwable t) { dlog("injectCapJs: " + t); }
+    }
+
+    private static String shortv(String v) {
+        if (v == null) return "null";
+        int n = Math.min(v.length(), 120);
+        return n + ":" + v.substring(0, n);
     }
 
     /**
@@ -319,7 +354,7 @@ public class Gaze extends Spider {
                     webView.addJavascriptInterface(b, "GazeBridge");
                     webView.evaluateJavascript(
                             "(function(){try{" + js + "}catch(e){try{GazeBridge.onResult(JSON.stringify({error:String(e)}));}catch(e2){}}})();",
-                            v -> latch.countDown());
+                            v -> { dlog("eval -> " + shortv(v)); latch.countDown(); });
                 } catch (Throwable t) { latch.countDown(); }
             }
         });
@@ -415,7 +450,7 @@ public class Gaze extends Spider {
      */
     private String fetchList(String mform, String mcountry, String genre, String years,
                              String album, String sort, String title, String page) {
-        if (!webLoad(FILTER_URL)) return "{\"error\":\"webLoad failed\"}";
+        if (!webLoad(FILTER_URL, PAGE_READY_LIST_MS)) return "{\"error\":\"webLoad failed\"}";
         final long budget = System.currentTimeMillis() + FETCH_BUDGET_MS;
         String cap = waitListCapture();
         if (System.currentTimeMillis() > budget && cap != null && cap.contains("resp")) {
@@ -686,13 +721,16 @@ public class Gaze extends Spider {
         dlog("category tid=" + tid + " page=" + page + " fallback=" + lastWasFallback
                 + " items=" + list.size() + " raw=" + head(raw));
         if (list.isEmpty()) list.add(debugVod(raw));
+        // total 不传 0：真机实测壳子会把 0 显示成 2147483647（无限翻页），
+        // 列表为空时直接给 list.size()，至少自洽。
+        int reportTotal = total > 0 ? total : list.size();
         if (lastWasFallback) {
             // 重放不可用 → 手里只有第一页数据。谎报 pageCount 会让用户翻页翻到重复内容，
             // 所以老老实实停在 1 页，并把原因写进 remarks。
-            return Result.get().vod(list).page(1, 1, 20, list.size()).string();
+            return Result.get().vod(list).page(1, 1, 20, reportTotal).string();
         }
-        int pageCount = total > 0 ? Math.max((total + 19) / 20, page) : page + (list.size() >= 20 ? 1 : 0);
-        return Result.get().vod(list).page(page, pageCount, 20, total).string();
+        int pageCount = reportTotal > 0 ? Math.max((reportTotal + 19) / 20, page) : page + (list.size() >= 20 ? 1 : 0);
+        return Result.get().vod(list).page(page, pageCount, 20, reportTotal).string();
     }
 
     @Override
