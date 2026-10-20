@@ -133,72 +133,23 @@ public class Gaze extends Spider {
      */
     public static class JsBridge {
         @JavascriptInterface
-        public void onResult(String s) { Gaze.deliver(s, Gaze.curPendSeq()); }
-        @JavascriptInterface
-        public void onSeq(String s, long seq) { Gaze.deliver(s, seq); }
+        public void onResult(String s) { /* 主通道够用，备份仅记录不处理 */ }
     }
 
     // ===================================================================
-    // JS 回传包装：把所有"自行回传结果"的脚本变成一个【返回 Promise 的表达式】。
+    // JS 回传包装：把"自行负责回传结果"的脚本原样执行并同步返回。
     //
-    //   主通道：Chromium 会把 resolve 出的值原样喂给 evaluateJavascript 的
-    //           ValueCallback —— 2026-10-20 真机实证这条是通的（回调确实回来了）。
-    //   顺道做两件事：
-    //     · window.__gzLast / __gzSeq 存一份（供"Promise 回调没来"时末位兜底再读）
-    //     · GazeBridge 对象若可用就 onResult 一下（备份通道，先到者赢）
-    //
-    // ★ __gzSeq 非ce 是必须的（2026-10-20 测试里抓到的真 bug）：兜底通道读的是页面
-    //   上的全局变量，若不带调用序号，上一轮的结果会被这一轮当成自己的读走 ——
-    //   测试里表现为"重放明明返回空串，却喂回了上一轮的 cap"。
-    //   所以每次调用带一个自增 seq，兜底读取时先比对，不等就当没值。
-    //
-    // 注意 __r 是 Promise 时（如 __gzReplay 返回的）会在第一个 then 里自动展平，
-    // 所以第二个 then 拿到的 v 一定已经是最终字符串。
+    //   主通道：evaluateJavascript 的 ValueCallback。Chromium 会把顶层 Promise
+    //   的 resolve 值喂回回调（2026-10-20 真机日志 injectCapJs -> 4:null 证明
+    //   回调确实回来了）。所以这里【不要】再套一层 Promise.resolve().then() ——
+    //   对 __gzReplay / waitListCapture 这种本来就返回 Promise 的调用，嵌套链会让
+    //   主通道拿到 "{}" 而非 resolve 值。直接透传即可。
     // ===================================================================
-    private static final java.util.concurrent.atomic.AtomicLong CALL_SEQ =
-            new java.util.concurrent.atomic.AtomicLong();
 
-    /**
-     * 把一段"自行回传结果"的 JS 包成【同步返回 + Promise 时顺道写 __gzLast】的表达式。
-     *
-     * ★ 2026-10-20 结构性修正（本机真跑抓到的根因）：
-     *   老版本把 JS 外层再套一层 Promise.resolve().then()，对 __gzReplay /
-     *   waitListCapture 这种【本来就返回 Promise】的调用，就变成嵌套 Promise 链。
-     *   而 Android 的 evaluateJavascript 不 await Promise（同步 stringify 一次就交回），
-     *   所以外层那个 Promise 的 .then 在 JS 侧要等内部 fetch 的 Promise 才 resolve，
-     *   期间 __gzLast 根本没被写入 —— 主通道拿 "{}"，通道3 也读不到，全链路超时。
-     *
-     *   现在的写法：
-     *     · 同步脚本（snap / data-baseid / injectCapJs）：表达式直接返回 JSON 字符串，
-     *       主通道拿到。【不写 __gzLast】—— 避免轮询读到"还没 resolve 的中间态"。
-     *     · 异步脚本（__gzReplay / waitListCapture，返回 Promise）：在 .then 里把
-     *       resolve 值写进 __gzLast（通道3 轮询取）+ GazeBridge.onSeq（通道2）。
-     *       表达式【同步返回该 Promise】 → 主通道拿到 "{}"，无害。
-     *   三条通道各有明确触发点，谁先拿到算谁。
-     */
-    private static String wrapJs(String js, long seq, long pseq) {
-        String p = String.valueOf(pseq);
-        return "(function(){"
-             + "var __seq=" + seq + ";"
-             + "var __put=function(v){try{window.__gzSeq=__seq;window.__gzLast=''+v;}catch(e){}};"
-             + "var __fb=function(v){try{if(window.GazeBridge&&window.GazeBridge.onSeq)"
-             + "window.GazeBridge.onSeq(v," + p + ");}"
-             + "catch(eB){try{if(window.GazeBridge&&window.GazeBridge.onResult)"
-             + "window.GazeBridge.onResult(v);}catch(eB2){}}};";
-             + "var r=(function(){try{return (" + js + ");}"
-             + "catch(e){return JSON.stringify({error:String(e)});}})();"
-             // 是 Promise → 同步返回它（主通道拿 "{}"），resolve 时写 __gzLast + 桥
-             + "if(r&&typeof r.then==='function'){return r.then(function(v){"
-             + " v=(v===undefined)?'':v;__put(v);__fb(v);return v;})"
-             + ".catch(function(e){var v=JSON.stringify({error:String(e)});__put(v);__fb(v);return v;});}"
-             // 同步值 → 直接返回（主通道拿到），不碰 __gzLast
-             + "return r;})()";
-    }
-
-    /** 通道3 兜底读取脚本：带了 seq 才认，拿不到就当没值（防旧值串味）。 */
-    private static String lastReadJs(long seq) {
-        return "(function(){try{ if(window.__gzSeq!==" + seq + ") return '';"
-                + " return window.__gzLast||''; }catch(e){return '';}})();";
+    /** 把 JS 原样包成 try/catch 形式，异常也回成 JSON，避免 evaluateJavascript 拿到 "undefined"。 */
+    private static String wrapJs(String js) {
+        return "(function(){try{return (" + js + ");}"
+             + "}catch(e){return JSON.stringify({error:String(e)});}})();";
     }
 
     // ===================================================================
@@ -430,19 +381,15 @@ public class Gaze extends Spider {
         return webEval(js, timeoutMs);
     }
 
-    /** 执行一段【自行负责回传】的 JS。返回值通道为主，GazeBridge 对象通道为并行备份。 */
+    /** 执行一段【自行负责回传】的 JS。主通道（evaluateJavascript 返回值）为主。 */
     private String webBridge(final String js, final long timeoutMs) {
-        // 为本轮分配通道2/3 共用的调用序号。通道2 的 fire 可能迟到，
-        // 带 seq 才能丢弃旧轮的值；通道3 的 __gzSeq 也复用同一个 seq。
-        final long seq = CALL_SEQ.incrementAndGet();
-        final long pseq = beginPend();
         final String[] out = new String[1];
         final CountDownLatch latch = new CountDownLatch(1);
         webHandler.post(() -> {
             synchronized (webLock) {
                 try {
                     if (webView == null) { latch.countDown(); return; }
-                    webView.evaluateJavascript(wrapJs(js, seq, pseq),
+                    webView.evaluateJavascript(wrapJs(js),
                             v -> { dlog("eval -> " + shortv(v)); out[0] = v; latch.countDown(); });
                 } catch (Throwable t) { dlog("webBridge: " + t); latch.countDown(); }
             }
@@ -452,44 +399,10 @@ public class Gaze extends Spider {
         catch (InterruptedException ignored) {}
 
         // 1) 主通道：evaluateJavascript 的 ValueCallback。
-        //
-        // ★ 2026-10-20 修正（这是 v4 的致命 bug，本机真跑时抓到）：
-        //   Android 的 evaluateJavascript **不会 await Promise**。它是同步把表达式
-        //   的返回值做一次 JSON.stringify 就交给回调。wrapJs 返回的是一个 Promise，
-        //   JSON.stringify(Promise) === "{}"，所以回调拿到的是 "{}" 而不是 resolve 值。
-        //   老代码 norm("{}") 非 null，于是把 "{}" 当成"成功取到结果"直接返回，
-        //   上层 parseList 解析失败 → 回落。日志表现为 bridge: got via eval-callback，
-        //   **假成功**，比超时更难查。
-        //   所以这里必须把 "{}" / "[]" / "null" / "undefined" 一律判为"没有结果"。
+        //    真机 Chromium 会把顶层 Promise 的 resolve 值喂回回调（v4 已实证）。
         String r = norm(out[0]);
-        if (r != null && !"{}".equals(r) && !"[]".equals(r)) {
-            dlog("bridge: got via eval-callback");
-            return r;
-        }
-        if ("{}".equals(r) || "[]".equals(r)) {
-            dlog("bridge: channel1 returned " + r + " (Promise not awaited) -> fall through");
-        }
-        // 2) 备份通道：addJavascriptInterface 注入的 GazeBridge 对象（带 seq，不认旧轮）
-        r = takePend(pseq);
-        if (r != null) { dlog("bridge: got via GazeBridge-object"); return r; }
-        // 3) 末位兜底：轮询页面上的 __gzLast（带 seq 校验，拿不到旧值）。
-        //
-        // ★ 2026-10-20 修正（第二个致命 bug）：老代码只读一次就放弃。
-        //   但 wrapJs 里的异步链（waitListCapture 用 setTimeout 轮询页面状态，最长
-        //   LIST_WAIT_MS）此刻根本没跑完，__gzLast 还是 undefined —— 必然读空。
-        //   必须在 timeoutMs 预算内轮询到 seq 对得上为止。
-        long pollUntil = System.currentTimeMillis() + Math.max(500, timeoutMs);
-        int polls = 0;
-        while (System.currentTimeMillis() < pollUntil) {
-            polls++;
-            r = norm(webEval(lastReadJs(seq), 2000));
-            if (r != null && !r.isEmpty()) {
-                dlog("bridge: got via __gzLast (polls=" + polls + ")");
-                return r;
-            }
-            try { Thread.sleep(120); } catch (InterruptedException ignored) { break; }
-        }
-        dlog("bridge: timeout js=" + head(js) + " polls=" + polls);
+        if (r != null) { dlog("bridge: got via eval-callback"); return r; }
+        dlog("bridge: timeout js=" + head(js));
         return "{\"error\":\"bridge timeout\",\"eval\":" + JSONObject.quote(String.valueOf(out[0])) + "}";
     }
 
@@ -498,58 +411,6 @@ public class Gaze extends Spider {
         String s = stripQuotes(v);
         if (TextUtils.isEmpty(s) || "null".equals(s) || "undefined".equals(s)) return null;
         return s;
-    }
-
-    // ===================================================================
-    // 备份回传通道（GazeBridge 对象）。与主通道（evaluateJavascript 返回值）并行收，
-    // 谁先到算谁。★ 2026-10-20 真机实证：该对象在凯哥的机器上页面里取不到，
-    // 但不排除别的壳子/系统版本上是好的，所以保留作并行接收而不是删掉。
-    // 调用严格串行，单个槽位不会串味；WebView 的桥回调可能来自非 UI 线程，
-    // 所以这里全部走 synchronized 而不是靠 Handler。
-    // ===================================================================
-    // ★ 2026-10-20 修正：通道2 的槽位必须带【调用序号】。
-    //   老实现 resetPend() 只清一次，但 wrapJs 内异步链（Promise.then 里才调
-    //   GazeBridge.onResult）可能晚于 latch 超时才 fire。迟到的那次 fire 属于
-    //   "上一轮调用"，会被"下一轮"误当成自己的结果取走 —— 跨调用串味。
-    //   加一个递增序号，fire 时带上，take 只认和当前调用同号的。
-    private static final java.util.concurrent.atomic.AtomicLong PEND_SEQ =
-            new java.util.concurrent.atomic.AtomicLong();
-    private static volatile String pendResult;
-    private static volatile boolean pendDone;
-    private static volatile long pendSeq = -1;
-    private static final Object pendLock = new Object();
-
-    /** 为本轮调用分配序号，清掉旧槽。返回本轮 seq。 */
-    private static long beginPend() {
-        synchronized (pendLock) {
-            pendResult = null; pendDone = false;
-            pendSeq = PEND_SEQ.incrementAndGet();
-            return pendSeq;
-        }
-    }
-
-    /** 取本轮 seq 对应的结果；没有就 null。 */
-    private static String takePend(long want) {
-        synchronized (pendLock) {
-            if (pendDone && pendSeq == want) return pendResult;
-            return null;
-        }
-    }
-
-    /** JsBridge.onResult（不带 seq 的老签名）用来取"当前轮"的 seq。 */
-    static long curPendSeq() {
-        synchronized (pendLock) { return pendSeq; }
-    }
-
-    /** 供 JS 经 GazeBridge.onSeq(String, long) 调用。带本轮 seq。 */
-    private static void deliver(String s, long seq) {
-        synchronized (pendLock) {
-            if (seq != pendSeq) return;     // 迟到旧轮的 fire，整批丢弃
-            if (pendDone) return;
-            pendResult = s;
-            pendDone = true;
-            pendLock.notifyAll();
-        }
     }
 
     /**
