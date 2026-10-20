@@ -70,9 +70,13 @@ public class Gaze extends Spider {
     private static final String UA =
             "Mozilla/5.0 (Linux; Android 12; K30) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36";
 
-    private static final long LOAD_TIMEOUT_MS = 30000;   // 页面加载 + CF 挑战
-    private static final long LIST_WAIT_MS = 6000;       // 等页面自发一次 filter_movielist
-    private static final long REPLAY_TIMEOUT_MS = 15000; // 重放请求等待
+    private static final long LOAD_TIMEOUT_MS = 30000;   // 页面加载 + CF 挑战（注释用，实际见 webLoad）
+    // 壳子对 homeContent 常见有 10s 级超时；这两个值直接决定首页能不能出，
+    // 宁可早失败走兜底，也别拖到壳子把结果整个丢掉。
+    private static final long LIST_WAIT_MS = 3000;       // 等页面自发一次 filter_movielist
+    private static final long REPLAY_TIMEOUT_MS = 6000;  // 重放请求等待
+    /** fetchList 总预算：超了就立刻走"吃已抓响应"的兜底，绝不让壳子等到丢结果。 */
+    private static final long FETCH_BUDGET_MS = 9000;
     private static final long PLAY_WAIT_MS = 90000;      // 播放抓段总等待（段播得慢，给足）
     private static final int  PLAY_MIN_SEG = 3;          // 少于这么多段视为没抓到
 
@@ -80,6 +84,9 @@ public class Gaze extends Spider {
     private Handler webHandler;
     private WebView webView;
     private final Object webLock = new Object();
+
+    /** true = 上一次 fetchList 没走重放，吃的是页面第一次自发请求的响应（第一页数据）。 */
+    private volatile boolean lastWasFallback = false;
 
     // ===================================================================
     // init：WebView 挂在【主线程 Looper】。
@@ -228,7 +235,7 @@ public class Gaze extends Spider {
                 }
             }
         });
-        try { latch.await(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        try { latch.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
         return ok[0];
     }
 
@@ -262,7 +269,7 @@ public class Gaze extends Spider {
                     webView.addJavascriptInterface(b, "GazeBridge");
                     webView.evaluateJavascript(
                             "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
-                            null);
+                            v -> latch.countDown());
                 } catch (Throwable t) { latch.countDown(); }
             }
         });
@@ -308,7 +315,7 @@ public class Gaze extends Spider {
                 + " if(Date.now()-t0>" + LIST_WAIT_MS + "){GazeBridge.onResult('');return;}"
                 + " setTimeout(tick,150);"
                 + "})();})();";
-        String raw = webBridge(js, LIST_WAIT_MS + 6000);
+        String raw = webBridge(js, LIST_WAIT_MS + 1500);
         return raw;
     }
 
@@ -339,18 +346,55 @@ public class Gaze extends Spider {
         try { return java.net.URLEncoder.encode(s, "UTF-8"); } catch (Exception e) { return s; }
     }
 
-    /** 拉一页列表。capture 用不到也没关系（重放失败会回落到 DOM/SSR 兜底）。 */
+    /**
+     * 拉一页列表。
+     *
+     * 顺序是死的：抓 cap → 试重放（翻页/筛选/搜索）→ 重放不可用就吃 cap.resp。
+     *
+     * 为什么 resp 兜底是主路径而不是备用：抓包实证（gaze_filter_api.txt）里 proof
+     * header 是两个【随机名 + 32/64hex】的键（4bebc287f6f12aeccf9894b1336fcf41 /
+     * x-gaze-6e0b905bb46323574c3277be），这形态极像一次性签名，同一组 header 第二次
+     * 发很可能被服务端拒。所以第一次自发请求的响应（cap.resp）才是可靠数据源；
+     * 重放只负责改参数（page/title/genre…），拿不到也不至于首页全空。
+     */
     private String fetchList(String mform, String mcountry, String genre, String years,
                              String album, String sort, String title, String page) {
         if (!webLoad(FILTER_URL)) return "{\"error\":\"webLoad failed\"}";
+        final long budget = System.currentTimeMillis() + FETCH_BUDGET_MS;
         String cap = waitListCapture();
-        dlog("capture: " + head(cap));
-        if (cap == null || cap.isEmpty() || "\"\"".equals(cap)) {
-            // 页面没自发请求：等久一点再试；仍不行就返回原始 SSHTML 让调用方兜底
-            String snap = stripQuotes(webEval("JSON.stringify({html:document.documentElement.outerHTML.length})", 3000));
-            return "{\"error\":\"no list capture\",snap:" + (snap == null ? "null" : snap) + "}";
+        if (System.currentTimeMillis() > budget && cap != null && cap.contains("resp")) {
+            // 预算已烧穿但抓到了响应：跳过重放，直接吃兜底
+            dlog("budget exhausted, skip replay");
+            try {
+                JSONObject c = safeJson(cap);
+                String r = c != null ? c.optString("resp", "") : "";
+                if (r != null && !r.isEmpty()) { lastWasFallback = true; return r; }
+            } catch (Exception ignored) {}
         }
-        return replayList(buildBody(mform, mcountry, genre, years, album, sort, title, page));
+        dlog("capture: " + head(cap));
+        String capturedResp = null;
+        if (cap != null && !cap.isEmpty() && !"\"\"".equals(cap)) {
+            JSONObject c = safeJson(cap);
+            if (c != null) {
+                String r = c.optString("resp", "");
+                if (r != null && !r.isEmpty()) capturedResp = r;
+            }
+        }
+        String body = buildBody(mform, mcountry, genre, years, album, sort, title, page);
+        String out = replayList(body);
+        if (out != null && !out.isEmpty() && out.contains("mlist")) {
+            lastWasFallback = false;
+            return out;
+        }
+        // 重放失败（很可能是 proof header 一次性）：回落第一页真实响应
+        if (capturedResp != null) {
+            lastWasFallback = true;
+            dlog("replay unusable, fallback to captured resp (page forced 1)");
+            return capturedResp;
+        }
+        lastWasFallback = false;
+        return "{\"error\":\"no list data\",\"detail\":\"replay empty and no captured resp\",\"cap\":"
+                + JSONObject.quote(head(cap)) + "}";
     }
 
     // ===================================================================
@@ -583,8 +627,14 @@ public class Gaze extends Spider {
             }
             total = j.optInt("total", arr != null ? arr.length() : 0);
         }
-        dlog("category tid=" + tid + " page=" + page + " items=" + list.size() + " raw=" + head(raw));
+        dlog("category tid=" + tid + " page=" + page + " fallback=" + lastWasFallback
+                + " items=" + list.size() + " raw=" + head(raw));
         if (list.isEmpty()) list.add(debugVod(raw));
+        if (lastWasFallback) {
+            // 重放不可用 → 手里只有第一页数据。谎报 pageCount 会让用户翻页翻到重复内容，
+            // 所以老老实实停在 1 页，并把原因写进 remarks。
+            return Result.get().vod(list).page(1, 1, 20, list.size()).string();
+        }
         int pageCount = total > 0 ? Math.max((total + 19) / 20, page) : page + (list.size() >= 20 ? 1 : 0);
         return Result.get().vod(list).page(page, pageCount, 20, total).string();
     }
@@ -601,8 +651,24 @@ public class Gaze extends Spider {
                 if (v != null) list.add(v);
             }
         }
+        if (lastWasFallback) {
+            // search 的 body 只有 title 一个参数变了，若重放不可用，回落的是【第一页全部
+            // 影片】而不是搜索结果 —— 拿它冒充搜索结果会误导，不如直接说失败。
+            dlog("search fallback -> report failure instead of wrong data");
+            Vod v = new Vod();
+            v.setVodId("__gaze_debug__");
+            v.setVodName("[GAZE] 搜索不可用（重放被拒，未回落假数据）");
+            v.setVodRemarks("keywords=" + key + "；raw=" + head(raw));
+            return Result.get().vod(list(v)).page(1, 1, 20, 1).string();
+        }
         if (list.isEmpty()) list.add(debugVod(raw));
         return Result.get().vod(list).page(1, 1, 20, list.size()).string();
+    }
+
+    private static List<Vod> list(Vod v) {
+        List<Vod> l = new ArrayList<>();
+        l.add(v);
+        return l;
     }
 
     public void destroy() {
@@ -638,7 +704,10 @@ public class Gaze extends Spider {
 
     private Vod parseItem(JSONObject o) {
         if (o == null) return null;
-        String id = pickStr(o, new String[]{"id", "vod_id", "mid", "movie_id", "tid"});
+        // 实证：gaze.host 播放页 URL = /play/{mid}（见 gaze_play_real.html 里的
+        // href="/play/cddda20389b70ff53287c064bc680104"，正好等于列表响应里的 mid）。
+        // 列表里的数字 id（如 2342）拼 /play/ 是 404，所以 Vod id 必须取 mid。
+        String id = pickStr(o, new String[]{"mid", "id", "vod_id", "movie_id", "tid"});
         String name = pickStr(o, new String[]{"title", "name", "vod_name", "vod_title"});
         String pic = pickStr(o, new String[]{"cover_img", "pic", "cover", "img", "vod_pic", "poster", "thumb"});
         if (TextUtils.isEmpty(id) || TextUtils.isEmpty(name)) return null;
@@ -688,22 +757,30 @@ public class Gaze extends Spider {
         return v;
     }
 
+    /**
+     * 首页分类 tab。
+     *
+     * 【边界，如实说】目前只有 "all"/"all" 这一组 (mform,mcountry) 是实证可用的
+     * （来自 gaze_filter_api.txt 里 gaze.host 页面自己发的那次请求）。其余分类项
+     * 没有 filter 页 option 值域的样本，所以 tid 先都映射到 all/all —— 效果是
+     * 这几个 tab 标题不同、内容一样，但至少有内容、不会空页。
+     * 等拿到 filter 页 <option> 值域（或抓一次真实筛选请求）再逐项填真值。
+     */
     private List<Class> buildClasses() {
         List<Class> cs = new ArrayList<>();
-        cs.add(new Class("cn", "国产剧"));
         cs.add(new Class("all", "全部"));
         cs.add(new Class("tv", "电视剧"));
         cs.add(new Class("movie", "电影"));
         cs.add(new Class("bangumi", "番剧"));
+        cs.add(new Class("variety", "综艺"));
         return cs;
     }
 
+    /**
+     * tid → (mform, mcountry)。除 all/all 外其余均未实证，见 buildClasses 注释。
+     */
     private String[] mapTid(String tid) {
         switch (TextUtils.isEmpty(tid) ? "" : tid) {
-            case "cn":      return new String[]{"all", "cn"};
-            case "tv":      return new String[]{"1", "all"};
-            case "movie":   return new String[]{"2", "all"};
-            case "bangumi": return new String[]{"bangumi", "all"};
             default:        return new String[]{"all", "all"};
         }
     }
