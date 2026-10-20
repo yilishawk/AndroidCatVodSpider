@@ -223,7 +223,15 @@ public class Gaze extends Spider {
                     webView.setWebViewClient(new WebViewClient() {
                         @Override
                         public void onPageStarted(WebView view, String u, android.graphics.Bitmap f) {
-                            try { view.evaluateJavascript(CAP_JS, null); } catch (Throwable ignored) {}
+                            injectCapJs(view);
+                        }
+                        @Override
+                        public void onPageFinished(WebView view, String u) {
+                            // 真机实测（2026-10-20）：光靠 onPageStarted 注入会失败，
+                            // 表现为 waitListCapture 里 window.__gz 不存在、不报错、等到
+                            // bridge timeout。onPageFinished 时 document 一定 ready，
+                            // 这里必须再保底注入一次。CAP_JS 自带幂等（if(window.__gz) return）。
+                            injectCapJs(view);
                         }
                     });
                     webView.loadUrl(url);
@@ -237,6 +245,33 @@ public class Gaze extends Spider {
         });
         try { latch.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
         return ok[0];
+    }
+
+    /** 注入 CAP_JS（幂等）。任何一次失败都只写日志，不抛。 */
+    private static void injectCapJs(WebView view) {
+        try { view.evaluateJavascript(CAP_JS, null); } catch (Throwable t) { dlog("injectCapJs: " + t); }
+    }
+
+    /**
+     * 显式确保 CAP_JS 已注入，再执行 js。
+     *
+     * 为什么不能只依赖 onPageStarted/onPageFinished：页面自发请求可能发生在两者之间，
+     * 也可能页面始终没跑我们的 hook。这里在执行任何采集脚本【之前】先注入一次，
+     * 至少保证 window.__gz / window.__gzSnap / window.__gzReplay 一定存在，
+     * 让「hook 没装上」从「静默等到超时」变成「可观测」。
+     */
+    private String webWithCap(final String js, final long timeoutMs) {
+        final CountDownLatch injected = new CountDownLatch(1);
+        if (webHandler != null) {
+            webHandler.post(() -> {
+                synchronized (webLock) {
+                    try { if (webView != null) injectCapJs(webView); } catch (Throwable ignored) {}
+                    injected.countDown();
+                }
+            });
+            try { injected.await(2, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        }
+        return webBridge(js, timeoutMs);
     }
 
     /** 在主线程 evaluateJavascript，返回其原始返回值（JSON 编码的字符串）。 */
@@ -256,6 +291,21 @@ public class Gaze extends Spider {
         return out[0];
     }
 
+    /** webEval 版：先确保 CAP_JS 已注入，再执行并取返回值。 */
+    private String webEvalWithCap(final String js, final long timeoutMs) {
+        final CountDownLatch injected = new CountDownLatch(1);
+        if (webHandler != null) {
+            webHandler.post(() -> {
+                synchronized (webLock) {
+                    try { if (webView != null) injectCapJs(webView); } catch (Throwable ignored) {}
+                    injected.countDown();
+                }
+            });
+            try { injected.await(2, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        }
+        return webEval(js, timeoutMs);
+    }
+
     /** 执行一段自行负责回传的 JS（内部调 GazeBridge.onResult），等桥结果。 */
     private String webBridge(final String js, final long timeoutMs) {
         final JsBridge[] holder = new JsBridge[1];
@@ -268,7 +318,7 @@ public class Gaze extends Spider {
                     holder[0] = b;
                     webView.addJavascriptInterface(b, "GazeBridge");
                     webView.evaluateJavascript(
-                            "(function(){try{" + js + "}catch(e){GazeBridge.onResult(JSON.stringify({error:String(e)}));}})();",
+                            "(function(){try{" + js + "}catch(e){try{GazeBridge.onResult(JSON.stringify({error:String(e)}));}catch(e2){}}})();",
                             v -> latch.countDown());
                 } catch (Throwable t) { latch.countDown(); }
             }
@@ -307,23 +357,29 @@ public class Gaze extends Spider {
     // 列表：/filter_movielist（抓页面自发请求的 headers，再重放改参数）
     // ===================================================================
 
-    /** 等页面自己发出至少一次 filter_movielist（拿动态 proof headers）。 */
+    /**
+     * 等页面自己发出至少一次 filter_movielist（拿动态 proof headers）。
+     *
+     * 注意 js 里对 window.__gz 做存在性检查：不存在就【立刻】回报，而不是静默轮询到
+     * 超时。真机 2026-10-20 的故障就是这个形态——hook 没装上，脚本不报错，
+     * 一路等到 bridge timeout，现场只剩一个没有信息量的字符串。
+     */
     private String waitListCapture() {
         String js = "(function(){var t0=Date.now();"
+                + "if(!window.__gz){GazeBridge.onResult(JSON.stringify({error:'cap-not-injected'}));return;}"
                 + "(function tick(){"
-                + " if(window.__gz&&window.__gz.list.length>0){GazeBridge.onResult(JSON.stringify(window.__gz.list[0]));return;}"
-                + " if(Date.now()-t0>" + LIST_WAIT_MS + "){GazeBridge.onResult('');return;}"
+                + " if(window.__gz.list.length>0){GazeBridge.onResult(JSON.stringify(window.__gz.list[0]));return;}"
+                + " if(Date.now()-t0>" + LIST_WAIT_MS + "){GazeBridge.onResult(JSON.stringify({error:'no-list-capture',n:window.__gz.list.length,media:window.__gz.media.length}));return;}"
                 + " setTimeout(tick,150);"
                 + "})();})();";
-        String raw = webBridge(js, LIST_WAIT_MS + 1500);
-        return raw;
+        return webWithCap(js, LIST_WAIT_MS + 1500);
     }
 
     /** 重放：改 form body，复用抓到的 headers。 */
     private String replayList(String formBody) {
         String js = "window.__gzReplay(" + JSONObject.quote(formBody) + ")"
                 + ".then(function(t){GazeBridge.onResult(t||'');});";
-        return webBridge(js, REPLAY_TIMEOUT_MS);
+        return webWithCap(js, REPLAY_TIMEOUT_MS);
     }
 
     private static String buildBody(String mform, String mcountry, String genre,
@@ -410,7 +466,7 @@ public class Gaze extends Spider {
         String picked = null;
         long deadline = System.currentTimeMillis() + 15000;
         while (System.currentTimeMillis() < deadline) {
-            String raw = webBridge(
+            String raw = webWithCap(
                     "(function(){var o=[];var es=document.querySelectorAll('[data-baseid]');"
                             + "for(var i=0;i<es.length;i++){var e=es[i];var b=e.getAttribute('data-baseid');"
                             + "var t=(e.innerText||e.textContent||'').trim();"
@@ -469,13 +525,13 @@ public class Gaze extends Spider {
         String url = BASE + "/play/" + playId;
         if (!webLoad(url)) return Result.error("WebView 加载失败： " + url);
         // 起点播（多处候选选择器都点一遍）
-        webEval("(function(){try{window.__gzKick&&window.__gzKick();}catch(e){}})();", 4000);
+        webEvalWithCap("(function(){try{window.__gzKick&&window.__gzKick();}catch(e){}})();", 4000);
         // 轮询抓段
         String best = null;
         int bestN = 0;
         long deadline = System.currentTimeMillis() + PLAY_WAIT_MS;
         while (System.currentTimeMillis() < deadline) {
-            String raw = webEval("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
+            String raw = webEvalWithCap("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
             String snap = stripQuotes(raw);
             if (snap != null && !snap.isEmpty()) {
                 try {
@@ -488,7 +544,7 @@ public class Gaze extends Spider {
             // 段数够就收（多等一会儿让播放器把前段都请求完）
             if (bestN >= PLAY_MIN_SEG) {
                 try { Thread.sleep(2500); } catch (InterruptedException ignored) {}
-                String raw2 = webEval("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
+                String raw2 = webEvalWithCap("(function(){try{return window.__gzSnap();}catch(e){return '';}})();", 5000);
                 String s2 = stripQuotes(raw2);
                 if (s2 != null && !s2.isEmpty()) {
                     try {
