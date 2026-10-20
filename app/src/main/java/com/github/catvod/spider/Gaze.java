@@ -124,17 +124,59 @@ public class Gaze extends Spider {
         return w;
     }
 
-    /** JS 桥：注入 JS 通过 GazeBridge.onResult(String) 回传。 */
-    // 必须 public：WebView 的 addJavascriptInterface 对私有嵌套类上的
-    // @JavascriptInterface 方法，在部分 Android 版本上取不到，表现为 GazeBridge 未定义。
+    /**
+     * JS 桥（备份通道，非必需）。
+     *
+     * 2026-10-20 真机实证：凯哥这台机器上 addJavascriptInterface 注入的对象在页面里
+     * 取不到（见 injectCapJs / webBridge 的注释）。这里保留只为"万一别的壳子可用"，
+     * 主通路已经改成 evaluateJavascript 的返回值通道，不依赖它。
+     */
     public static class JsBridge {
-        volatile String result;
-        volatile boolean done;
         @JavascriptInterface
-        public void onResult(String s) {
-            result = s;
-            done = true;
-        }
+        public void onResult(String s) { Gaze.deliver(s); }
+    }
+
+    // ===================================================================
+    // JS 回传包装：把所有"自行回传结果"的脚本变成一个【返回 Promise 的表达式】。
+    //
+    //   主通道：Chromium 会把 resolve 出的值原样喂给 evaluateJavascript 的
+    //           ValueCallback —— 2026-10-20 真机实证这条是通的（回调确实回来了）。
+    //   顺道做两件事：
+    //     · window.__gzLast / __gzSeq 存一份（供"Promise 回调没来"时末位兜底再读）
+    //     · GazeBridge 对象若可用就 onResult 一下（备份通道，先到者赢）
+    //
+    // ★ __gzSeq 非ce 是必须的（2026-10-20 测试里抓到的真 bug）：兜底通道读的是页面
+    //   上的全局变量，若不带调用序号，上一轮的结果会被这一轮当成自己的读走 ——
+    //   测试里表现为"重放明明返回空串，却喂回了上一轮的 cap"。
+    //   所以每次调用带一个自增 seq，兜底读取时先比对，不等就当没值。
+    //
+    // 注意 __r 是 Promise 时（如 __gzReplay 返回的）会在第一个 then 里自动展平，
+    // 所以第二个 then 拿到的 v 一定已经是最终字符串。
+    // ===================================================================
+    private static final java.util.concurrent.atomic.AtomicLong CALL_SEQ =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * 把一段"自行回传结果"的 JS 包成【返回 Promise 的表达式】。
+     * seq 打进页面侧，供通道3 兜底读取时校验，防止读到上一轮的旧值。
+     */
+    private static String wrapJs(String js, long seq) {
+        return "(function(){try{delete window.__gzLast;delete window.__gzSeq;}catch(e0){}"
+             + "var __seq=" + seq + ";"
+             + "var __put=function(v){try{window.__gzSeq=__seq;window.__gzLast=''+v;}catch(e){}};"
+             + "var __p=Promise.resolve().then(function(){try{return (" + js + ");"
+             + "}catch(e){return JSON.stringify({error:String(e)});}})"
+             + ".then(function(v){v=(v===undefined)?'':v;__put(v);"
+             + "try{if(window.GazeBridge&&window.GazeBridge.onResult)window.GazeBridge.onResult(v);}catch(eB){}"
+             + "return v;})"
+             + ".catch(function(e){var v=JSON.stringify({error:String(e)});__put(v);return v;});"
+             + "return __p;})()";
+    }
+
+    /** 通道3 兜底读取脚本：带了 seq 才认，拿不到就当没值（防旧值串味）。 */
+    private static String lastReadJs(long seq) {
+        return "(function(){try{ if(window.__gzSeq!==" + seq + ") return '';"
+                + " return window.__gzLast||''; }catch(e){return '';}})();";
     }
 
     // ===================================================================
@@ -273,17 +315,38 @@ public class Gaze extends Spider {
         return true;
     }
 
-    /** 注入 CAP_JS（幂等）。任何一次失败都只写日志，不抛。 */
+    /**
+     * 注入 CAP_JS（幂等）。任何一次失败都只写日志，不抛。
+     *
+     * ★ 第三轮真机日志（2026-10-20）推翻了我上一轮的读法，这里记下来别再踩：
+     *   injectCapJs -> 4:null 不是"Chromium 静默丢弃了 evaluateJavascript"，
+     *   而是"脚本跑了，返回值就是 undefined"——CAP_JS 本身是个 IIFE，没有 return，
+     *   evaluateJavascript 把 undefined 序列化成 JSON 字符串 "null"（长度正好 4）。
+     *   它反过来证明【evaluateJavascript 这条通路是好的】。
+     *   而同一轮里既没有 cap-not-injected 也没有 no-list-capture，只剩一个
+     *   bridge timeout —— 唯一的自洽解释是：waitListCapture 的 js 跑了，
+     *   但 GazeBridge.onResult(...) 抛 ReferenceError（页面里根本没有这个对象），
+     *   被 webBridge 外层 try/catch 抓住，兜底分支又去调一次 GazeBridge、再抛一次，
+     *   最后被 catch(e2){} 吞干净。所以坏的只是 addJavascriptInterface 注入的对象。
+     * 因此这里在 CAP_JS 后面拼一个诊断表达式，一次 evaluateJavascript 同时完成
+     * "装 hook" + "回报环境实情"。hasGz / hasBridge 打出来，一行定位。
+     */
     private static void injectCapJs(WebView view) {
-        // 回调结果打出来：真机 2026-10-20 遇到 Chromium 静默丢弃 evaluateJavascript，
-        // 只在 latch 上 countDown 是看不出所以然的，必须把 v 留下。
-        try { view.evaluateJavascript(CAP_JS, v -> dlog("injectCapJs -> " + shortv(v))); }
+        // 回调结果打出来：只在 latch 上 countDown 是看不出所以然的，必须把 v 留下。
+        String diag = CAP_JS + "\n;JSON.stringify({"
+                + "hasGz:(typeof window.__gz)!=='undefined',"
+                + "hasBridge:(typeof window.GazeBridge)!=='undefined',"
+                + "hasBridgeFn:!!(window.GazeBridge&&window.GazeBridge.onResult),"
+                + "hasReplay:(typeof window.__gzReplay)!=='undefined',"
+                + "hasSnap:(typeof window.__gzSnap)!=='undefined'"
+                + "});";
+        try { view.evaluateJavascript(diag, v -> dlog("injectCapJs -> " + shortv(v))); }
         catch (Throwable t) { dlog("injectCapJs: " + t); }
     }
 
     private static String shortv(String v) {
         if (v == null) return "null";
-        int n = Math.min(v.length(), 120);
+        int n = Math.min(v.length(), 300);
         return n + ":" + v.substring(0, n);
     }
 
@@ -341,41 +404,114 @@ public class Gaze extends Spider {
         return webEval(js, timeoutMs);
     }
 
-    /** 执行一段自行负责回传的 JS（内部调 GazeBridge.onResult），等桥结果。 */
+    /** 执行一段【自行负责回传】的 JS。返回值通道为主，GazeBridge 对象通道为并行备份。 */
     private String webBridge(final String js, final long timeoutMs) {
-        final JsBridge[] holder = new JsBridge[1];
+        // 复位备份通道槽位。调用是严格串行的（上一个没回来下一个不会发），
+        // 所以单个静态槽位不会串味。
+        resetPend();
+        final long seq = CALL_SEQ.incrementAndGet();
+        final String[] out = new String[1];
         final CountDownLatch latch = new CountDownLatch(1);
         webHandler.post(() -> {
             synchronized (webLock) {
                 try {
                     if (webView == null) { latch.countDown(); return; }
-                    JsBridge b = new JsBridge();
-                    holder[0] = b;
-                    webView.addJavascriptInterface(b, "GazeBridge");
-                    webView.evaluateJavascript(
-                            "(function(){try{" + js + "}catch(e){try{GazeBridge.onResult(JSON.stringify({error:String(e)}));}catch(e2){}}})();",
-                            v -> { dlog("eval -> " + shortv(v)); latch.countDown(); });
-                } catch (Throwable t) { latch.countDown(); }
+                    webView.evaluateJavascript(wrapJs(js, seq),
+                            v -> { dlog("eval -> " + shortv(v)); out[0] = v; latch.countDown(); });
+                } catch (Throwable t) { dlog("webBridge: " + t); latch.countDown(); }
             }
         });
-        try { latch.await(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-        JsBridge b = holder[0];
-        if (b == null) return "{\"error\":\"bridge not ready\"}";
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline && !b.done) {
-            try { Thread.sleep(120); } catch (InterruptedException ignored) {}
-        }
-        return b.done ? b.result : "{\"error\":\"bridge timeout\"}";
+        long deadline = System.currentTimeMillis() + timeoutMs + 3000;
+        try { latch.await(Math.max(1, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS); }
+        catch (InterruptedException ignored) {}
+
+        // 1) 主通道：evaluateJavascript 的 ValueCallback（2026-10-20 真机实证可用）
+        String r = norm(out[0]);
+        if (r != null) { dlog("bridge: got via eval-callback"); return r; }
+        // 2) 备份通道：addJavascriptInterface 注入的 GazeBridge 对象
+        r = takePend();
+        if (r != null) { dlog("bridge: got via GazeBridge-object"); return r; }
+        // 3) 末位兜底：读页面上的 __gzLast（带 seq 校验，拿不到旧值）
+        r = norm(webEval(lastReadJs(seq), 3000));
+        if (r != null) { dlog("bridge: got via __gzLast"); return r; }
+        dlog("bridge: timeout js=" + head(js));
+        return "{\"error\":\"bridge timeout\",\"eval\":" + JSONObject.quote(String.valueOf(out[0])) + "}";
     }
 
+    /** evaluateJavascript 返回值规整：剥 JSON 字符串引号；空值一律返回 null（表示没拿到）。 */
+    private static String norm(String v) {
+        String s = stripQuotes(v);
+        if (TextUtils.isEmpty(s) || "null".equals(s) || "undefined".equals(s)) return null;
+        return s;
+    }
+
+    // ===================================================================
+    // 备份回传通道（GazeBridge 对象）。与主通道（evaluateJavascript 返回值）并行收，
+    // 谁先到算谁。★ 2026-10-20 真机实证：该对象在凯哥的机器上页面里取不到，
+    // 但不排除别的壳子/系统版本上是好的，所以保留作并行接收而不是删掉。
+    // 调用严格串行，单个槽位不会串味；WebView 的桥回调可能来自非 UI 线程，
+    // 所以这里全部走 synchronized 而不是靠 Handler。
+    // ===================================================================
+    private static volatile String pendResult;
+    private static volatile boolean pendDone;
+    private static final Object pendLock = new Object();
+
+    private static void resetPend() {
+        synchronized (pendLock) { pendResult = null; pendDone = false; }
+    }
+
+    private static String takePend() {
+        synchronized (pendLock) { return pendDone ? pendResult : null; }
+    }
+
+    /** 供 JS 经 GazeBridge.onResult(String) 调用。 */
+    private static void deliver(String s) {
+        synchronized (pendLock) {
+            if (pendDone) return;      // 已有结果，后来的丢弃
+            pendResult = s;
+            pendDone = true;
+            pendLock.notifyAll();
+        }
+    }
+
+    /**
+     * 把 evaluateJavascript 回调里那份【JSON 编码字符串】解回原始串。
+     *
+     * ★ 这里必须一次遍历正解开转义，不能像老代码那样 .replace("\\n","\n")
+     *   再 .replace("\\\\","\\") 顺序收尾 —— 那样遇到原始串里的字面反斜杠
+     *   （JSON 里是 "\\\\"）会被前面的 \n 规则先啃掉一半，把 a\nb 变成 a<换行>b。
+     *   列表响应 / m3u8 文本里都可能带反斜杠，踩上就是静默数据损坏。
+     *   norm() 负责在其上判空，这里只管解码。
+     */
     private static String stripQuotes(String v) {
         if (v == null) return null;
-        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
-            return v.substring(1, v.length() - 1)
-                    .replace("\\\"", "\"").replace("\\n", "\n").replace("\\r", "\r")
-                    .replace("\\t", "\t").replace("\\\\", "\\");
+        if (v.length() < 2 || v.charAt(0) != '"' || v.charAt(v.length() - 1) != '"') return v;
+        StringBuilder sb = new StringBuilder(v.length());
+        int end = v.length() - 1;
+        for (int i = 1; i < end; i++) {
+            char c = v.charAt(i);
+            if (c != '\\') { sb.append(c); continue; }
+            if (++i >= end) break;
+            char e = v.charAt(i);
+            switch (e) {
+                case 'n':  sb.append('\n'); break;
+                case 'r':  sb.append('\r'); break;
+                case 't':  sb.append('\t'); break;
+                case 'b':  sb.append('\b'); break;
+                case 'f':  sb.append('\f'); break;
+                case '/':  sb.append('/');  break;
+                case '"':  sb.append('"');  break;
+                case '\\': sb.append('\\'); break;
+                case 'u':
+                    if (i + 4 < end) {
+                        try { sb.append((char) Integer.parseInt(v.substring(i + 1, i + 5), 16)); i += 4; }
+                        catch (Exception ignore) { sb.append('u'); }
+                    } else sb.append('u');
+                    break;
+                default: sb.append(e);
+            }
         }
-        return v;
+        return sb.toString();
     }
 
     private static void dlog(String s) {
@@ -395,25 +531,25 @@ public class Gaze extends Spider {
     /**
      * 等页面自己发出至少一次 filter_movielist（拿动态 proof headers）。
      *
-     * 注意 js 里对 window.__gz 做存在性检查：不存在就【立刻】回报，而不是静默轮询到
-     * 超时。真机 2026-10-20 的故障就是这个形态——hook 没装上，脚本不报错，
-     * 一路等到 bridge timeout，现场只剩一个没有信息量的字符串。
+     * 改成【返回 Promise】：轮询在 setTimeout 链里跑，命中/超时就 resolve，
+     * 值由 evaluateJavascript 的 ValueCallback 收回来（2026-10-20 实证可用）。
+     * 仍然先做 window.__gz 存在性检查：不存在就【立刻】resolve 错误，
+     * 而不是静默轮询到超时。
      */
     private String waitListCapture() {
-        String js = "(function(){var t0=Date.now();"
-                + "if(!window.__gz){GazeBridge.onResult(JSON.stringify({error:'cap-not-injected'}));return;}"
+        String js = "new Promise(function(res){var t0=Date.now();"
+                + "if(!window.__gz){res(JSON.stringify({error:'cap-not-injected'}));return;}"
                 + "(function tick(){"
-                + " if(window.__gz.list.length>0){GazeBridge.onResult(JSON.stringify(window.__gz.list[0]));return;}"
-                + " if(Date.now()-t0>" + LIST_WAIT_MS + "){GazeBridge.onResult(JSON.stringify({error:'no-list-capture',n:window.__gz.list.length,media:window.__gz.media.length}));return;}"
+                + " if(window.__gz.list.length>0){res(JSON.stringify(window.__gz.list[0]));return;}"
+                + " if(Date.now()-t0>" + LIST_WAIT_MS + "){res(JSON.stringify({error:'no-list-capture',n:window.__gz.list.length,media:window.__gz.media.length}));return;}"
                 + " setTimeout(tick,150);"
-                + "})();})();";
+                + "})();})";
         return webWithCap(js, LIST_WAIT_MS + 1500);
     }
 
-    /** 重放：改 form body，复用抓到的 headers。 */
+    /** 重放：改 form body，复用抓到的 headers。__gzReplay 本身就返回 Promise，直接透传。 */
     private String replayList(String formBody) {
-        String js = "window.__gzReplay(" + JSONObject.quote(formBody) + ")"
-                + ".then(function(t){GazeBridge.onResult(t||'');});";
+        String js = "window.__gzReplay(" + JSONObject.quote(formBody) + ")";
         return webWithCap(js, REPLAY_TIMEOUT_MS);
     }
 
@@ -501,12 +637,14 @@ public class Gaze extends Spider {
         String picked = null;
         long deadline = System.currentTimeMillis() + 15000;
         while (System.currentTimeMillis() < deadline) {
+            // 同步脚本：直接 return JSON，由 evaluateJavascript 的 ValueCallback 收。
+            // ★ 不再调 GazeBridge.onResult —— 2026-10-20 真机实证那个对象在页面里取不到。
             String raw = webWithCap(
                     "(function(){var o=[];var es=document.querySelectorAll('[data-baseid]');"
                             + "for(var i=0;i<es.length;i++){var e=es[i];var b=e.getAttribute('data-baseid');"
                             + "var t=(e.innerText||e.textContent||'').trim();"
                             + "if(b)o.push({n:t||('第'+(i+1)+'集'),id:b});}"
-                            + "GazeBridge.onResult(JSON.stringify(o));})();", 5000);
+                            + "return JSON.stringify(o);})();", 5000);
             picked = raw;
             if (raw != null && raw.contains("\"id\"")) break;
             try { Thread.sleep(600); } catch (InterruptedException ignored) {}
