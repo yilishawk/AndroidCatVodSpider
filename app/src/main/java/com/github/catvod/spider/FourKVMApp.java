@@ -9,6 +9,7 @@ import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.net.URLEncoder;
@@ -348,7 +349,7 @@ public class FourKVMApp extends Spider {
     }
 
     /** 网页兜底：用 FourKVM（网页版）解析同一 vid，保证即使签名未闭环也能出画面 */
-    private String webPlayerFallback(String flag, String id) {
+    private String webPlayerFallback(String flag, String id) throws JSONException {
         try {
             String vodId = id;
             int sep = id == null ? -1 : id.indexOf('$');
@@ -417,7 +418,7 @@ public class FourKVMApp extends Spider {
         return Math.max(page, 1);
     }
 
-    private JSONArray extractList(JSONObject resp) {
+    private JSONArray extractList(JSONObject resp) throws JSONException {
         for (JSONObject cand : candidates(resp)) {
             if (cand.has("list") && cand.get("list") instanceof JSONArray) return normalize(cand.getJSONArray("list"));
             if (cand.has("data") && cand.get("data") instanceof JSONArray) return normalize(cand.getJSONArray("data"));
@@ -425,7 +426,7 @@ public class FourKVMApp extends Spider {
         return new JSONArray();
     }
 
-    private JSONObject extractDetail(JSONObject resp) {
+    private JSONObject extractDetail(JSONObject resp) throws JSONException {
         for (JSONObject cand : candidates(resp)) {
             if (cand.has("list") && cand.get("list") instanceof JSONArray && cand.getJSONArray("list").length() > 0) {
                 return normalizeVod(cand.getJSONArray("list").optJSONObject(0));
@@ -511,7 +512,7 @@ public class FourKVMApp extends Spider {
         return out;
     }
 
-    private JSONArray normalize(JSONArray arr) {
+    private JSONArray normalize(JSONArray arr) throws JSONException {
         JSONArray out = new JSONArray();
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
@@ -521,7 +522,7 @@ public class FourKVMApp extends Spider {
     }
 
     /** 容错读取 vod 字段：先 vod_*，再驼峰/短名 */
-    private JSONObject normalizeVod(JSONObject o) {
+    private JSONObject normalizeVod(JSONObject o) throws JSONException {
         JSONObject r = new JSONObject();
         r.put("vod_id", firstOf(o, "vod_id", "id"));
         r.put("vod_name", firstOf(o, "vod_name", "name", "title"));
@@ -581,7 +582,7 @@ public class FourKVMApp extends Spider {
 
     // ---------- 筛选器兜底 ----------
 
-    private JSONArray extractConfigClasses(JSONObject resp) {
+    private JSONArray extractConfigClasses(JSONObject resp) throws JSONException {
         JSONArray out = new JSONArray();
         for (JSONObject cand : candidates(resp)) {
             JSONArray arr = cand.optJSONArray("classes");
@@ -602,7 +603,7 @@ public class FourKVMApp extends Spider {
         return out;
     }
 
-    private JSONArray kvOptions(String[][] kv) {
+    private JSONArray kvOptions(String[][] kv) throws JSONException {
         JSONArray arr = new JSONArray();
         for (String[] o : kv) {
             try {
@@ -616,7 +617,7 @@ public class FourKVMApp extends Spider {
         return arr;
     }
 
-    private JSONObject filterBlock(String key, String name, JSONArray value) {
+    private JSONObject filterBlock(String key, String name, JSONArray value) throws JSONException {
         try {
             JSONObject o = new JSONObject();
             o.put("key", key);
@@ -628,20 +629,20 @@ public class FourKVMApp extends Spider {
         }
     }
 
-    private JSONArray areaOptions() {
+    private JSONArray areaOptions() throws JSONException {
         return kvOptions(new String[][]{
                 {"全部地区", ""}, {"中国", "7"}, {"美国", "5"}, {"日本", "11"},
                 {"韩国", "12"}, {"英国", "30"}, {"中国香港", "14"}, {"中国台湾", "21"}
         });
     }
 
-    private JSONArray tvOptions() {
+    private JSONArray tvOptions() throws JSONException {
         return kvOptions(new String[][]{
                 {"全部类型", ""}, {"国产剧", "20"}, {"美剧", "21"}, {"韩剧", "22"}, {"日剧", "23"}, {"国漫", "26"}
         });
     }
 
-    private JSONArray typeOptions() {
+    private JSONArray typeOptions() throws JSONException {
         return kvOptions(new String[][]{
                 {"全部类型", ""}, {"剧情", "1"}, {"喜剧", "5"}, {"爱情", "6"},
                 {"科幻", "14"}, {"动作", "10"}, {"动画", "11"}, {"纪录", "20"}
