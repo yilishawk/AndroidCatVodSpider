@@ -28,7 +28,11 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * 4K影视 App API 爬虫（签名版）
  *
- * 数据源: https://4kvm.appleapic.com  端点 /app/v1/*
+ * 数据源: https://ant.xhssapp.com  端点 /app/v1/*
+ * （抓包坐实：真实 host 是 ant.xhssapp.com，不是 4kvm.appleapic.com；
+ *   之前的 404 根因就是 host 错。config 等明文接口在 4kvm.appleapic.com 也通，
+ *   但 filter/play 等加密接口只认 ant.xhssapp.com）
+ *
  * 与网页版 FourKVM.java（爬 www.4kvm.cc HTML）并存，互不影响。
  *
  * 以下算法全部逆向自 4K影视.apk：
@@ -37,30 +41,43 @@ import javax.crypto.spec.SecretKeySpec;
  *      · signPublicKeyWithTimestamp: msg = 公钥 || 分隔 || 时间戳(10位秒),
  *        sig = base64( HMAC-SHA256( key, msg ) )
  *      · GenerateKeyPair: X25519 协商 32B 会话密钥; Encrypt: AES-GCM(32B key, 12B nonce 前置)
- *  - classes2.dex 请求头字面量: X-Device-Id / X-Device-Name / X-App-Version / timestamp / nonce
- *  - classes.dex: 签名头 "X-Sign"、方法 "appendSign"、认证 "Bearer"、端点 /app/v1/*
+ *  - 抓包（C:\Users\Administrator\Desktop\4k\）坐实真实协议：
+ *      · host = ant.xhssapp.com
+ *      · /app/v1/filter 走 POST，但头里带 "X-NB-Method: GET"（真 GET 语义包在 POST 信封）
+ *      · 请求/响应体 Content-Type = application/octet-stream，是 45B 头 + raw AES-GCM 二进制包
+ *        （45B 头 = 4B magic "NM\x01\x00" + 1B len=0x20 + 40B hash 区；45B 头后是 12B nonce + 密文 + 16B tag）
+ *      · 请求头只有 X-Platform / X-Device-Id / X-Device-Name / X-App-Version / X-NB-Method / Content-Type / Host
+ *        —— **没有 X-Sign / nonce / timestamp**（签名走的是会话内加密，不是每请求 HMAC 头）
  *
  * 播放(playerContent) = 双通道：
  *  1) 签名 API /app/v1/play 取直链（若成功 parse=0）
  *  2) 失败/未闭环 → 退到网页版 FourKVM 的播放页嗅探（parse=1），保证可出画面
  *
- * ⚠ 未坐实、需抓 1 个真实报文校准的 3 个点（已集中为常量，改值即可）：
- *  1. SIGN_SOURCE_TEMPLATE —— 签名待签串的字段顺序与占位符（默认 nonce|ts|path|appid）
- *  2. SIGN_SEPARATOR       —— 公钥/时间戳拼接分隔符（默认 '|'，so 在 0x356c0 读到含 '|'/':'）
- *  3. 响应字段名          —— 列表/播放 JSON 字段，已做 vod_* 与驼峰双容错
- *  会话对称密钥：纯 Java 无 X25519 内置 API，这里用 SHA-256(密钥种子) 兜底 32B；
- *  若服务端严格校验 X-Sign 需真实设备公钥，用 frida 抓 generateKeyPair 的公钥替换 SESSION_KEY_B64。
+ * ⚠ 未闭环、需 frida 才能拿的 2 个点（已集中为常量）：
+ *  1. SESSION_KEY_B64 —— X25519 协商出的 32B 会话密钥（AES-GCM 用的 key），纯 Java 拿不到，
+ *     必须 frida 钩 Java_cryptolib_Crypto_computeSharedSecret 出参，跑一次 App 拿真实值填这里。
+ *     留空时 parseBody 只解 JSON 明文（config 等），不解密 filter/play 的 GCM 包。
+ *  2. X-NB-Method 头的精确取值（抓包是 "GET"，其它端点可能 "POST"/"PUT"，需逐端点对齐）
  */
 public class FourKVMApp extends Spider {
 
-    private static final String DEFAULT_HOST = "https://4kvm.appleapic.com";
+    private static final String DEFAULT_HOST = "https://ant.xhssapp.com";
     private static final String WEB_HOST = "https://www.4kvm.cc";
     private static final String SECRET_KEY = "mymovie_encryption_secret_2025_v1";
     private static final String SIGN_SEPARATOR = "|";
     /** 签名待签串模板：%s=nonce %ts=timestamp %path=接口 %app=appId（抓包后调整顺序） */
     private static final String SIGN_SOURCE_TEMPLATE = "%s|%ts|%path|%app";
-    /** 若知道真实设备 X25519 公钥 base64 填这里，否则留空走 SHA-256 兜底 */
+    /**
+     * X25519 会话对称密钥（base64，32B）。
+     * 抓包坐实：服务端用 AES-GCM(会话密钥, 12B nonce + 密文 + 16B tag) 加密响应体，
+     * 包外层 45B 头（4B magic 4e4d0100 + 1B len=0x20 + 40B hash 区）后是 raw GCM。
+     * 该密钥是 X25519 ECDH(私钥, 服务端公钥) 协商出的 32B，纯 Java 拿不到，
+     * 必须用 frida 钩 Java_cryptolib_Crypto_computeSharedSecret 出参拿真实值填这里。
+     * 留空时 parseBody 走 JSON 兜底，不解密。
+     */
     private static final String SESSION_KEY_B64 = "";
+    /** 加密包 45B 头的 magic，用来识别"响应是二进制加密包" */
+    private static final byte[] ENC_MAGIC = {0x4E, 0x4D, 0x01, 0x00};
 
     private String host = DEFAULT_HOST;
     private String appId = "nbmovie";
@@ -91,24 +108,25 @@ public class FourKVMApp extends Spider {
             }
         }
         baseHeaders = new HashMap<>();
-        baseHeaders.put("User-Agent", "okhttp/4.10.0");
+        // 抓包坐实的真实请求头（无 X-Sign/nonce/timestamp，签名走会话加密而非每请求 HMAC 头）
+        baseHeaders.put("User-Agent", "4K影视 Android App");
         baseHeaders.put("Accept", "application/json");
-        baseHeaders.put("Content-Type", "application/json");
-        baseHeaders.put("X-App-Id", appId);
+        baseHeaders.put("X-Platform", "android");
         baseHeaders.put("X-App-Version", appVersion);
         baseHeaders.put("X-Device-Id", deviceId);
         baseHeaders.put("X-Device-Name", deviceName);
+        baseHeaders.put("Content-Type", "application/octet-stream");
         SpiderDebug.log("[4kApp] host=" + host + " appId=" + appId + " device=" + deviceId);
     }
 
-    /** 构造一个带签名的请求头（每请求新生成 nonce + timestamp + X-Sign） */
-    private Map<String, String> signedHeaders(String path, Map<String, String> extraQuery) {
+    /**
+     * 构造请求头（抓包坐实：真实协议带 X-NB-Method 头，GET 语义包在 POST 信封里）。
+     * - 默认所有请求走 POST 信封 + X-NB-Method: GET（filter/play 等端点）
+     * - 明文接口（config/home 等）也走同一信封，响应 parseBody 自动分流（二进制 GCM / JSON）
+     */
+    private Map<String, String> nbHeaders(String path, String nbMethod, Map<String, String> extraQuery) {
         Map<String, String> h = new HashMap<>(baseHeaders);
-        long ts = System.currentTimeMillis();
-        String nonce = String.valueOf(nextNonce++);
-        h.put("timestamp", String.valueOf(ts));
-        h.put("nonce", nonce);
-        h.put("X-Sign", sign(path, nonce, ts));
+        h.put("X-NB-Method", nbMethod == null ? "GET" : nbMethod);
         return h;
     }
 
@@ -136,10 +154,11 @@ public class FourKVMApp extends Spider {
             }
         }
         String full = url.toString();
-        Map<String, String> h = signedHeaders(path, query);
+        // 抓包坐实：真实端点全走 POST 信封 + X-NB-Method: GET；参数拼在 query 里
+        Map<String, String> h = nbHeaders(path, "GET", query);
         String raw;
         try {
-            raw = OkHttp.string(full, h);
+            raw = OkHttp.post(full, "", h).getBody();
         } catch (Exception e) {
             SpiderDebug.log("[4kApp] GET " + path + " 失败: " + e.getMessage());
             return new JSONObject();
@@ -149,7 +168,8 @@ public class FourKVMApp extends Spider {
     }
 
     private JSONObject apiPost(String path, JSONObject body) throws JSONException {
-        Map<String, String> h = signedHeaders(path, null);
+        // 抓包坐实：POST 信封 + X-NB-Method: POST；body 是 JSON
+        Map<String, String> h = nbHeaders(path, "POST", null);
         String raw;
         try {
             raw = OkHttp.post(host + path, body == null ? "{}" : body.toString(), h).getBody();
@@ -161,33 +181,64 @@ public class FourKVMApp extends Spider {
         return parseBody(raw, path);
     }
 
-    /** 响应体若标记 encrypted 且 data 为 base64 → AES-GCM 解密；普通 JSON 直接返回 */
+    /**
+     * 响应体分流（抓包坐实两种形态）：
+     *  1) 二进制加密包：45B 头（magic 4e4d0100 + 1B len + 40B hash 区）+ raw AES-GCM(12B nonce+密文+16B tag)
+     *     需 SESSION_KEY_B64（X25519 会话密钥）解密，明文是 JSON
+     *  2) 明文 JSON（config/home 等）：直接 parse
+     * 识别：raw 首 4B == ENC_MAGIC(0x4e 0x4d 0x01 0x00) → 走 GCM；否则 JSON
+     */
     private JSONObject parseBody(String raw, String path) throws JSONException {
+        if (TextUtils.isEmpty(raw)) return new JSONObject();
+        // 1) 先试明文 JSON（config/home 等 200 明文接口）
         try {
-            JSONObject j = new JSONObject(raw);
-            if (j.optBoolean("encrypted", false)) {
-                String data = j.optString("data", "");
-                if (!TextUtils.isEmpty(data)) {
-                    byte[] key = sessionKey();
-                    byte[] buf = Base64.decode(data, Base64.DEFAULT);
-                    if (buf.length > 12) {
-                        byte[] nonce = new byte[12];
-                        System.arraycopy(buf, 0, nonce, 0, 12);
-                        Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-                        c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
-                        byte[] dec = c.doFinal(buf, 12, buf.length - 12);
-                        try {
-                            return new JSONObject(new String(dec, StandardCharsets.UTF_8));
-                        } catch (Exception ignore) {
-                        }
-                    }
-                }
-            }
-            return j;
-        } catch (Exception e) {
+            return new JSONObject(raw);
+        } catch (Exception ignore) {
+        }
+        // 2) 二进制 GCM 包（OkHttp 拿到的是 base64 字符串形态，先 base64 解）
+        byte[] bin = base64Loose(raw);
+        if (bin == null || bin.length < 45) {
             JSONObject o = new JSONObject();
             o.put("raw", raw);
             return o;
+        }
+        if (bin[0] != ENC_MAGIC[0] || bin[1] != ENC_MAGIC[1] || bin[2] != ENC_MAGIC[2] || bin[3] != ENC_MAGIC[3]) {
+            JSONObject o = new JSONObject();
+            o.put("raw", raw);
+            return o;
+        }
+        byte[] key = sessionKey();
+        if (key == null) {
+            SpiderDebug.log("[4kApp] " + path + " 是 GCM 包但 SESSION_KEY_B64 未填，无法解密（需 frida 取 X25519 共享密钥）");
+            JSONObject o = new JSONObject();
+            o.put("raw", raw);
+            o.put("enc_gcm", true);
+            return o;
+        }
+        // 45B 头后：12B nonce + 密文 + 16B tag
+        try {
+            byte[] nonce = new byte[12];
+            System.arraycopy(bin, 45, nonce, 0, 12);
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+            byte[] dec = c.doFinal(bin, 45 + 12, bin.length - 45 - 12 - 16);
+            return new JSONObject(new String(dec, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            SpiderDebug.log("[4kApp] " + path + " GCM 解密失败: " + e.getMessage());
+            JSONObject o = new JSONObject();
+            o.put("raw", raw);
+            o.put("enc_gcm", true);
+            return o;
+        }
+    }
+
+    /** 宽松 base64 解码（兼容 OkHttp 把二进制体按 base64 字符串返回的情况） */
+    private static byte[] base64Loose(String s) {
+        if (TextUtils.isEmpty(s)) return null;
+        try {
+            return Base64.decode(s.trim(), Base64.DEFAULT);
+        } catch (Exception e) {
+            return null;
         }
     }
 
