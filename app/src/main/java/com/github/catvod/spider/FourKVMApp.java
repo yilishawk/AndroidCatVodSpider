@@ -124,7 +124,7 @@ public class FourKVMApp extends Spider {
 
     // ---------- 统一请求（自动 gzip/SSL） ----------
 
-    private JSONObject apiGet(String path, Map<String, String> query) {
+    private JSONObject apiGet(String path, Map<String, String> query) throws JSONException {
         StringBuilder url = new StringBuilder(host).append(path);
         if (query != null && !query.isEmpty()) {
             url.append('?');
@@ -148,7 +148,7 @@ public class FourKVMApp extends Spider {
         return parseBody(raw, path);
     }
 
-    private JSONObject apiPost(String path, JSONObject body) {
+    private JSONObject apiPost(String path, JSONObject body) throws JSONException {
         Map<String, String> h = signedHeaders(path, null);
         String raw;
         try {
@@ -162,7 +162,7 @@ public class FourKVMApp extends Spider {
     }
 
     /** 响应体若标记 encrypted 且 data 为 base64 → AES-GCM 解密；普通 JSON 直接返回 */
-    private JSONObject parseBody(String raw, String path) {
+    private JSONObject parseBody(String raw, String path) throws JSONException {
         try {
             JSONObject j = new JSONObject(raw);
             if (j.optBoolean("encrypted", false)) {
@@ -348,8 +348,8 @@ public class FourKVMApp extends Spider {
         }
     }
 
-    /** 网页兜底：用 FourKVM（网页版）解析同一 vid，保证即使签名未闭环也能出画面 */
-    private String webPlayerFallback(String flag, String id) throws JSONException {
+    /** 网页兜底：用 FourKVM（网页版）解析同一 vid，保证即使签名未闭环也能出画面（内部已 try/catch 兜底，不向外抛） */
+    private String webPlayerFallback(String flag, String id) {
         try {
             String vodId = id;
             int sep = id == null ? -1 : id.indexOf('$');
@@ -396,7 +396,7 @@ public class FourKVMApp extends Spider {
         return p > 0 ? tid.substring(0, p) : tid;
     }
 
-    private int parsePage(JSONObject j, String pg) {
+    private int parsePage(JSONObject j, String pg) throws JSONException {
         for (JSONObject cand : candidates(j)) {
             if (cand.has("page") && cand.get("page") instanceof Integer) return cand.optInt("page", 1);
         }
@@ -407,7 +407,7 @@ public class FourKVMApp extends Spider {
         }
     }
 
-    private int extractPagecount(JSONObject j, int limit, int page) {
+    private int extractPagecount(JSONObject j, int limit, int page) throws JSONException {
         for (JSONObject cand : candidates(j)) {
             if (cand.has("pagecount") && cand.get("pagecount") instanceof Integer) return cand.optInt("pagecount", page);
             if (cand.has("total") && cand.has("limit") && cand.optInt("limit", 0) > 0) {
