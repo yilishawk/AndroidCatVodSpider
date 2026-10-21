@@ -236,15 +236,17 @@ public class FourKVMApp extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
         try {
-            Map<String, String> q = new HashMap<>();
-            q.put("classify", parseTid(tid));
-            q.put("page", pg == null ? "1" : pg);
+            // 按 A 方案：/app/v1/filter 改 POST + JSON body
+            // （dex 端点存在但 GET 404，倾向 method 不对；参数键沿用 classify/areas/tvclasses/page）
+            JSONObject body = new JSONObject();
+            body.put("classify", parseTid(tid));
+            body.put("page", pg == null ? "1" : pg);
             if (extend != null) {
                 for (String k : new String[]{"areas", "types", "tvclasses"}) {
-                    if (extend.containsKey(k) && !TextUtils.isEmpty(extend.get(k))) q.put(k, extend.get(k));
+                    if (extend.containsKey(k) && !TextUtils.isEmpty(extend.get(k))) body.put(k, extend.get(k));
                 }
             }
-            JSONObject resp = apiGet("/app/v1/filter", q);
+            JSONObject resp = apiPost("/app/v1/filter", body);
             JSONArray list = extractList(resp);
             int page = parsePage(resp, pg);
             int limit = list.length();
