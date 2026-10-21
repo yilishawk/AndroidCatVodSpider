@@ -31,10 +31,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Gaze（gaze.host）CatVod Spider —— WebView 中继版
+ * Gaze（gazes.host）CatVod Spider —— WebView 中继版
  * ---------------------------------------------------------------------------
- * 【实现路线（2026-10-19 实测定稿）】
- *   站点 = gaze.host，播放链四层：play 页 → GET /gaze_file_vl/pb/{片名}/{集}+gazes_v-@_info
+ * 【实现路线（2026-10-19 实测定稿；域名 2026-10-21 凯哥抓包更正为 gazes.host）】
+ *   站点 = gazes.host，播放链四层：play 页 → GET /gaze_file_vl/pb/{片名}/{集}+gazes_v-@_info
  *   → gzip/base64 解 → nihilism 自定义链 → brotli → m3u8（fMP4，段名为混淆串）。
  *   其中：
  *     · /filter_movielist 列表接口：两个 proof header 名与值都是【每次动态】的，纯服务端
@@ -63,7 +63,9 @@ import java.util.regex.Pattern;
  */
 public class Gaze extends Spider {
 
-    private static final String BASE = "https://gaze.host";
+    // ★ 2026-10-21 凯哥抓包实证的真实域名（enc.TXT）：gazes.host（带 s）。
+    //   旧版写成 gaze.host（无 s）→ 整个 webLoad/重放/播放链全开在错域，推荐页全空。
+    private static final String BASE = "https://gazes.host";
     private static final String FILTER_URL = BASE + "/filter";
     private static final String LIST_API = "/filter_movielist";
 
@@ -796,6 +798,7 @@ public class Gaze extends Spider {
         JSONObject j = safeJson(raw);
         List<Vod> list = new ArrayList<>();
         int total = 0;
+        int serverPages = 0;   // ★ 服务器响应里现成的 pages 字段（enc.TXT：gazes.host 有 "pages":72）
         if (j != null) {
             JSONArray arr = pickArray(j);
             if (arr != null) for (int i = 0; i < arr.length(); i++) {
@@ -803,9 +806,14 @@ public class Gaze extends Spider {
                 if (v != null) list.add(v);
             }
             total = j.optInt("total", arr != null ? arr.length() : 0);
+            serverPages = j.optInt("pages", 0);
         }
+        // ★ 真实页长 = 本响应 mlist 条数（enc.TXT 实测 35，旧版硬编 20 是错的）。
+        //   拿不到就用当前 list 长度兜底，避免 limit=0。
+        int realLimit = list.size() > 0 ? list.size() : 20;
         dlog("category tid=" + tid + " page=" + page + " fallback=" + lastWasFallback
-                + " items=" + list.size() + " raw=" + head(raw));
+                + " items=" + list.size() + " total=" + total + " serverPages=" + serverPages
+                + " raw=" + head(raw));
         if (list.isEmpty()) list.add(debugVod(raw));
         // total 不传 0：真机实测壳子会把 0 显示成 2147483647（无限翻页），
         // 列表为空时直接给 list.size()，至少自洽。
@@ -813,10 +821,15 @@ public class Gaze extends Spider {
         if (lastWasFallback) {
             // 重放不可用 → 手里只有第一页数据。谎报 pageCount 会让用户翻页翻到重复内容，
             // 所以老老实实停在 1 页，并把原因写进 remarks。
-            return Result.get().vod(list).page(1, 1, 20, reportTotal).string();
+            return Result.get().vod(list).page(1, 1, realLimit, reportTotal).string();
         }
-        int pageCount = reportTotal > 0 ? Math.max((reportTotal + 19) / 20, page) : page + (list.size() >= 20 ? 1 : 0);
-        return Result.get().vod(list).page(page, pageCount, 20, reportTotal).string();
+        // ★ pageCount 优先用服务器现成的 pages；没有才按 真实页长 推。
+        //   旧版按 (total+19)/20 推，但真实页长是 35（每页 35 条），20 是错的 → 分页全错。
+        int pageCount;
+        if (serverPages > 0) pageCount = Math.max(serverPages, page);
+        else if (reportTotal > 0 && realLimit > 0) pageCount = Math.max((reportTotal + realLimit - 1) / realLimit, page);
+        else pageCount = page + (list.size() >= realLimit ? 1 : 0);
+        return Result.get().vod(list).page(page, pageCount, realLimit, reportTotal).string();
     }
 
     @Override
@@ -839,10 +852,11 @@ public class Gaze extends Spider {
             v.setVodId("__gaze_debug__");
             v.setVodName("[GAZE] 搜索不可用（重放被拒，未回落假数据）");
             v.setVodRemarks("keywords=" + key + "；raw=" + head(raw));
-            return Result.get().vod(list(v)).page(1, 1, 20, 1).string();
+            return Result.get().vod(list(v)).page(1, 1, Math.max(list(v).size(), 1), 1).string();
         }
         if (list.isEmpty()) list.add(debugVod(raw));
-        return Result.get().vod(list).page(1, 1, 20, list.size()).string();
+        int sLimit = list.size() > 0 ? list.size() : 20;
+        return Result.get().vod(list).page(1, 1, sLimit, list.size()).string();
     }
 
     private static List<Vod> list(Vod v) {
@@ -866,7 +880,7 @@ public class Gaze extends Spider {
     // ===================================================================
     private JSONArray pickArray(JSONObject j) {
         if (j == null) return null;
-        // gaze.host 实测字段是 mlist
+        // gazes.host 实测字段是 mlist
         JSONArray a = j.optJSONArray("mlist");
         if (a != null) return a;
         for (String k : new String[]{"data", "list", "items", "results", "vod"}) {
@@ -884,7 +898,7 @@ public class Gaze extends Spider {
 
     private Vod parseItem(JSONObject o) {
         if (o == null) return null;
-        // 实证：gaze.host 播放页 URL = /play/{mid}（见 gaze_play_real.html 里的
+        // 实证：gazes.host 播放页 URL = /play/{mid}（见 gaze_play_real.html 里的
         // href="/play/cddda20389b70ff53287c064bc680104"，正好等于列表响应里的 mid）。
         // 列表里的数字 id（如 2342）拼 /play/ 是 404，所以 Vod id 必须取 mid。
         String id = pickStr(o, new String[]{"mid", "id", "vod_id", "movie_id", "tid"});
