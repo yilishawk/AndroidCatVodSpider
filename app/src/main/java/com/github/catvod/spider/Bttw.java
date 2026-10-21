@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
  */
 public class Bttw extends Spider {
 
-    private String host = "https://www.bttwo.life";
+    private String host = "https://www.4kvms.org";
     private Map<String, String> headers;
     private String userlink = "X1VUXUVdXQsHBg4FCgc7IUleV0Bb";
     private static final String XOR_KEY = "nbmovie2024secretkey";
