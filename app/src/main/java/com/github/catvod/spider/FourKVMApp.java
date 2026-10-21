@@ -455,8 +455,9 @@ public class FourKVMApp extends Spider {
                 pu = extractFromUrlArray(qa);
                 if (!TextUtils.isEmpty(pu)) return pu;
             } else if (qm != null) {
-                for (String qkey : qm.keySet()) {
-                    JSONObject qo = qm.optJSONObject(qkey);
+                // Android org.json 的 keySet() 是 Iterator<String>，没有 names()；用 keys() 的另一种写法
+                for (java.util.Iterator<String> it = qm.keys(); it.hasNext(); ) {
+                    JSONObject qo = qm.optJSONObject(it.next());
                     if (qo == null) continue;
                     if (qo.optBoolean("locked", false)) continue;
                     String qu = absUrl(qo.optString("url", ""));
@@ -514,7 +515,7 @@ public class FourKVMApp extends Spider {
         JSONArray out = new JSONArray();
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
-            if (o != null) out.add(normalizeVod(o));
+            if (o != null) out.put(normalizeVod(o));
         }
         return out;
     }
