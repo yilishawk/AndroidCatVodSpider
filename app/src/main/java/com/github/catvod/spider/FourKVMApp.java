@@ -16,9 +16,11 @@ import java.nio.charset.Charset;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -120,6 +122,18 @@ public class FourKVMApp extends Spider {
     private static final String DEFAULT_HOST = "https://ant.xhssapp.com";
     /** libgojni.so rodata 0x3bdd6 里的硬编码 HMAC 密钥（明文） */
     private static final String HMAC_SECRET = "mymovie_encryption_secret_2025_v1";
+    /**
+     * ⚠ 必须是纯 ASCII。
+     *
+     * App 原始 UA 是 "4K影视 Android App"（含中文「影」），但 okhttp 的
+     * Headers.checkValue() 会拒绝任何非 ASCII 头值，直接抛
+     *   IllegalArgumentException: Unexpected char 0x5f71 at 2 in User-Agent value
+     * 异常被 catch 掉后表现为"所有请求都拿不到数据"（首页/分类全空）。
+     *
+     * 实测服务端**不校验 UA**：中文 UA / 纯 ASCII / okhttp 默认 / 完全不发 UA，
+     * 返回的数据完全一致（都是 10392B）。所以这里用 ASCII 版本即可。
+     */
+    private static final String DEFAULT_UA = "4K Android App";
     private static final byte[] MAGIC = {0x4E, 0x4D, 0x01, 0x00};
     private static final int HEADER_LEN = 37;
     private static final int NONCE_LEN = 12;
@@ -138,6 +152,7 @@ public class FourKVMApp extends Spider {
     private String deviceName = "Redmi K30 5G";
     private String quality = "1080";
     private String userId = "0";
+    private String userAgent = DEFAULT_UA;
 
     private final SecureRandom random = new SecureRandom();
     private Map<String, String> baseHeaders;
@@ -159,33 +174,72 @@ public class FourKVMApp extends Spider {
     // 初始化
     // ================================================================
 
+    private boolean inited;
+    private String pendingExtend;
+
     @Override
     public void init(Context context, String extend) {
-        if (!TextUtils.isEmpty(extend)) {
-            try {
-                JSONObject cfg = new JSONObject(extend);
-                String h = cfg.optString("host", "");
-                if (!TextUtils.isEmpty(h)) host = h.replaceAll("/+$", "");
-                appVersion = cfg.optString("appVersion", appVersion);
-                String d = cfg.optString("deviceId", "");
-                if (!TextUtils.isEmpty(d)) deviceId = d;
-                String dn = cfg.optString("deviceName", "");
-                if (!TextUtils.isEmpty(dn)) deviceName = dn;
-                quality = cfg.optString("q", quality);
-                userId = cfg.optString("user_id", userId);
-            } catch (Exception e) {
-                SpiderDebug.log("[4KApp] extend 解析失败: " + e.getMessage());
-            }
+        pendingExtend = extend;
+        ensureInited();
+        SpiderDebug.log("[4KApp] init host=" + host + " ver=" + appVersion
+                + " dev=" + deviceId + " ua=" + userAgent);
+    }
+
+    /**
+     * 懒初始化：某些宿主不调 init 就直接 homeContent，
+     * 那样 baseHeaders 会是 null，导致 OkHttp.newCall(url, null) 之后
+     * encHeaders() 里 new HashMap<>(null) 抛 NPE，表现为"没有视频数据"。
+     */
+    private void ensureInited() {
+        if (inited) return;
+        inited = true;
+        applyExtend(pendingExtend);
+        buildHeaders();
+    }
+
+    private void applyExtend(String extend) {
+        if (TextUtils.isEmpty(extend)) return;
+        try {
+            JSONObject cfg = new JSONObject(extend);
+            String h = cfg.optString("host", "");
+            if (!TextUtils.isEmpty(h)) host = h.replaceAll("/+$", "");
+            appVersion = cfg.optString("appVersion", appVersion);
+            String d = cfg.optString("deviceId", "");
+            if (!TextUtils.isEmpty(d)) deviceId = d;
+            String dn = cfg.optString("deviceName", "");
+            if (!TextUtils.isEmpty(dn)) deviceName = dn;
+            quality = cfg.optString("q", quality);
+            userId = cfg.optString("user_id", userId);
+            String ua = cfg.optString("ua", "");
+            if (!TextUtils.isEmpty(ua)) userAgent = ua;
+        } catch (Exception e) {
+            SpiderDebug.log("[4KApp] extend 解析失败: " + e.getMessage());
         }
+    }
+
+    private void buildHeaders() {
         baseHeaders = new HashMap<>();
+        // ⚠ 所有头值都过 asciiOnly：okhttp 的 Headers.checkValue 拒绝非 ASCII，
+        //   一旦有中文（例如 UA、或 extend 里传了中文 deviceName）就直接抛异常，
+        //   表现为"所有请求都失败 / 没有视频数据"。
         baseHeaders.put("Accept", "application/json,application/json");
         baseHeaders.put("Accept-Charset", "UTF-8");
-        baseHeaders.put("User-Agent", "4K影视 Android App");
+        baseHeaders.put("User-Agent", asciiOnly(userAgent));
         baseHeaders.put("X-Platform", "android");
-        baseHeaders.put("X-App-Version", appVersion);
-        baseHeaders.put("X-Device-Id", deviceId);
-        baseHeaders.put("X-Device-Name", deviceName);
-        SpiderDebug.log("[4KApp] host=" + host + " ver=" + appVersion + " dev=" + deviceId);
+        baseHeaders.put("X-App-Version", asciiOnly(appVersion));
+        baseHeaders.put("X-Device-Id", asciiOnly(deviceId));
+        baseHeaders.put("X-Device-Name", asciiOnly(deviceName));
+    }
+
+    /** 把非 ASCII / 控制字符替换成下划线，保证能安全放进 HTTP 头 */
+    private static String asciiOnly(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            sb.append(c >= 0x20 && c < 0x7f ? c : '_');
+        }
+        return sb.toString();
     }
 
     // ================================================================
@@ -368,6 +422,7 @@ public class FourKVMApp extends Spider {
      * @return 解析后的 JSONObject；失败返回空 JSONObject（绝不抛异常）
      */
     private JSONObject apiEnc(String path, String plainJson, String nbMethod) {
+        ensureInited();
         for (int attempt = 0; attempt < 2; attempt++) {
             if (!ensureSession()) return new JSONObject();
             try {
@@ -416,6 +471,7 @@ public class FourKVMApp extends Spider {
 
     /** 明文 GET（config / version 等免加密接口） */
     private JSONObject apiPlain(String path) {
+        ensureInited();
         try {
             Response r = OkHttp.newCall(host + path, baseHeaders);
             try {
@@ -478,6 +534,86 @@ public class FourKVMApp extends Spider {
         try {
             result.put("class", classes);
             if (filter) result.put("filters", buildFilters());
+        } catch (Exception ignore) {
+        }
+        return result.toString();
+    }
+
+    /**
+     * 首页推荐列表。
+     *
+     * ⚠ 不实现这个方法，CatVod 首页就只有分类按钮、视频区是空的（"没有视频数据"）。
+     *   数据源 /app/v1/home：carousel_items（4 条轮播）+ home_modules（9 个模块，每个含 vods[]）
+     *   + ranking_items（12 条榜单）。这里取轮播 + 前几个模块，去重后最多 40 条。
+     */
+    @Override
+    public String homeVideoContent() {
+        JSONObject result = new JSONObject();
+        JSONArray list = new JSONArray();
+        try {
+            JSONObject resp = apiEnc("/app/v1/home", "{}", "GET");
+            JSONObject d = resp.optJSONObject("data");
+            if (d == null) d = resp;
+            Set<String> seen = new HashSet<>();
+
+            // 1) 轮播（字段名和列表项不同：movie_id / movie_name / custom_bg）
+            JSONArray carousel = d.optJSONArray("carousel_items");
+            if (carousel != null) {
+                for (int i = 0; i < carousel.length(); i++) {
+                    JSONObject o = carousel.optJSONObject(i);
+                    if (o == null) continue;
+                    String id = o.optString("movie_id", "");
+                    if (TextUtils.isEmpty(id) || seen.contains(id)) continue;
+                    seen.add(id);
+                    JSONObject v = new JSONObject();
+                    v.put("vod_id", id);
+                    v.put("vod_name", o.optString("movie_name", ""));
+                    v.put("vod_pic", o.optString("custom_bg", ""));
+                    String rating = o.optString("rating", "");
+                    String promo = o.optString("promo_text", "");
+                    if (!TextUtils.isEmpty(promo)) v.put("vod_remarks", promo);
+                    else if (!TextUtils.isEmpty(rating)) v.put("vod_remarks", "评分 " + rating);
+                    list.put(v);
+                }
+            }
+
+            // 2) 各模块的 vods（去重，封顶 40 条）
+            JSONArray modules = d.optJSONArray("home_modules");
+            if (modules != null) {
+                for (int i = 0; i < modules.length() && list.length() < 40; i++) {
+                    JSONObject m = modules.optJSONObject(i);
+                    if (m == null) continue;
+                    JSONArray vods = m.optJSONArray("vods");
+                    if (vods == null) continue;
+                    for (int k = 0; k < vods.length() && list.length() < 40; k++) {
+                        JSONObject o = vods.optJSONObject(k);
+                        if (o == null) continue;
+                        String id = o.optString("id", "");
+                        if (TextUtils.isEmpty(id) || seen.contains(id)) continue;
+                        seen.add(id);
+                        JSONObject v = toVod(o);
+                        if (v != null) list.put(v);
+                    }
+                }
+            }
+
+            // 3) 榜单兜底（万一上面都是空）
+            if (list.length() == 0) {
+                JSONArray ranking = d.optJSONArray("ranking_items");
+                if (ranking != null) {
+                    for (int i = 0; i < ranking.length(); i++) {
+                        JSONObject v = toVod(ranking.optJSONObject(i));
+                        if (v != null) list.put(v);
+                    }
+                }
+            }
+
+            SpiderDebug.log("[4KApp] 首页推荐 " + list.length() + " 条");
+        } catch (Throwable e) {
+            SpiderDebug.log("[4KApp] homeVideoContent 错误: " + e);
+        }
+        try {
+            result.put("list", list);
         } catch (Exception ignore) {
         }
         return result.toString();
@@ -765,7 +901,8 @@ public class FourKVMApp extends Spider {
                 result.put("parse", 0);
                 result.put("url", url);
                 JSONObject header = new JSONObject();
-                header.put("User-Agent", "4K影视 Android App");
+                // 给播放器用的 UA，同样保持 ASCII（部分播放器也会校验头值）
+                header.put("User-Agent", asciiOnly(userAgent));
                 header.put("Referer", host + "/");
                 result.put("header", header);
             } else {
@@ -826,23 +963,33 @@ public class FourKVMApp extends Spider {
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
             if (o == null) continue;
-            try {
-                JSONObject r = new JSONObject();
-                r.put("vod_id", o.optString("id", ""));
-                r.put("vod_name", o.optString("title", ""));
-                String pic = o.optString("poster", "");
-                if (TextUtils.isEmpty(pic)) pic = o.optString("cover", "");
-                r.put("vod_pic", pic);
-                r.put("vod_remarks", listRemarks(o));
-                r.put("vod_year", o.optString("year", ""));
-                r.put("vod_area", join(o.optJSONArray("areas"), ","));
-                String rating = o.optString("rating", "");
-                if (!TextUtils.isEmpty(rating)) r.put("vod_score", rating);
-                out.put(r);
-            } catch (Exception ignore) {
-            }
+            JSONObject r = toVod(o);
+            if (r != null) out.put(r);
         }
         return out;
+    }
+
+    /** 列表项 → CatVod vod 精简对象；id 为空返回 null */
+    private JSONObject toVod(JSONObject o) {
+        if (o == null) return null;
+        try {
+            String id = o.optString("id", "");
+            if (TextUtils.isEmpty(id)) return null;
+            JSONObject r = new JSONObject();
+            r.put("vod_id", id);
+            r.put("vod_name", o.optString("title", ""));
+            String pic = o.optString("poster", "");
+            if (TextUtils.isEmpty(pic)) pic = o.optString("cover", "");
+            r.put("vod_pic", pic);
+            r.put("vod_remarks", listRemarks(o));
+            r.put("vod_year", o.optString("year", ""));
+            r.put("vod_area", join(o.optJSONArray("areas"), ","));
+            String rating = o.optString("rating", "");
+            if (!TextUtils.isEmpty(rating)) r.put("vod_score", rating);
+            return r;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String listRemarks(JSONObject o) {
