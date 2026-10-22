@@ -187,7 +187,10 @@ public class Guazi extends Spider {
     @Override
     public String detailContent(List<String> ids) {
         JSONObject result = new JSONObject();
-        result.put("list", new JSONArray().put(ids == null ? "" : ids.get(0)));
+        try {
+            result.put("list", new JSONArray().put(ids == null || ids.isEmpty() ? "" : ids.get(0)));
+        } catch (Exception ignore) {
+        }
         return result.toString();
     }
 
@@ -195,7 +198,10 @@ public class Guazi extends Spider {
     @Override
     public String searchContent(String key, boolean quick) {
         JSONObject result = new JSONObject();
-        result.put("list", new JSONArray());
+        try {
+            result.put("list", new JSONArray());
+        } catch (Exception ignore) {
+        }
         return result.toString();
     }
 
@@ -213,7 +219,10 @@ public class Guazi extends Spider {
             plist.put(p);
         } catch (Exception ignore) {
         }
-        result.put("list", plist);
+        try {
+            result.put("list", plist);
+        } catch (Exception ignore) {
+        }
         return result.toString();
     }
 
