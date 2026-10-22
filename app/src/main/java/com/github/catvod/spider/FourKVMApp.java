@@ -518,7 +518,7 @@ public class FourKVMApp extends Spider {
         }
         // 兜底分类
         if (classes.length() == 0) {
-            String[][] std = {{"1", "电影"}, {"2", "电视剧"}, {"3", "动漫"}};
+            String[][] std = {{"2", "电视剧"},{"1", "电影"},{"3", "动漫"}};
             for (String[] s : std) {
                 try {
                     JSONObject c = new JSONObject();
@@ -903,7 +903,6 @@ public class FourKVMApp extends Spider {
                 JSONObject header = new JSONObject();
                 // 给播放器用的 UA，同样保持 ASCII（部分播放器也会校验头值）
                 header.put("User-Agent", asciiOnly(userAgent));
-                header.put("Referer", host + "/");
                 result.put("header", header);
             } else {
                 SpiderDebug.log("[4KApp] play 无可用直链(可能仅 VIP 档): " + resp);
