@@ -30,7 +30,14 @@ import okhttp3.Response;
  * 协议（2026-10-22 frida 实机验证，见 E:/rea/hg/gz_spy.txt / gz_pid_map.txt）
  * ============================================================================
  *
- * 【请求】 POST https://{apiHost}/12.2.4/9/8541/<接口>
+ * 【请求】 POST https://{apiHost}/App/<接口>
+ *   路径格式是 /App/模块/方法（dex 实锤，非版本号模式）：
+ *     App/NewDiscover/getList          ← 视频列表（分类内容，蜘蛛核心）
+ *     App/NewDiscover/getIndex         ← 首页索引
+ *     App/NewDiscover/getSubVodList   ← 子分类视频列表
+ *     App/Discover/getCategoryList    ← 分类列表
+ *     App/Discover/getRecommendList   ← 推荐
+ *     App/Discover/getRankList        ← 榜单
  *   Header: User-Agent: okhttp/3.12.0
  *           X-App-Key: 65dc336895b14f599d2a6fca
  *           X-Channel: GZ0313
@@ -64,12 +71,10 @@ public class Guazi extends Spider {
     private String masterKey; // 通过 init(extend) 注入，不可 final
     private String masterIv;
 
-    // 域名池（轮换）
+    // 域名池（dex 实锤）
     private static final String[] API_HOSTS = {
             "scapi.tdqtnuvpci.com",
             "sdapi.r4u3kw.com", "sdapi.ug2wcj.com", "sdapi.wjwyms.com",
-            "sdapi.tymnpk4.com", "sdapi.m5rwgtj.com", "sdapi.gkfun2x.com",
-            "sdapi.6ne6zmh.com",
     };
     private static final String CDN_HOST = "images.jjawa.com";
 
@@ -307,9 +312,8 @@ public class Guazi extends Spider {
     /** POST 业务接口，返回明文框架 JSON（含 AES 密文字段则就地解密） */
     private String apiPost(int pid, String body) throws Exception {
         String host = this.host != null ? this.host : pickHost();
-        // 真实路径 12.2.4/9/8541/<接口名>，瓜子接口名未在 frida 直接抓，
-        // 用 pid 语义最接近的 category 路径；部署后按实机路径校正
-        String url = "https://" + host + "/12.2.4/9/8541/category";
+        // dex 实锤：视频列表走 App/NewDiscover/getList（/App/模块/方法 模式，非版本号）
+        String url = "https://" + host + "/App/NewDiscover/getList";
 
         Request.Builder rb = new Request.Builder()
                 .url(url)
