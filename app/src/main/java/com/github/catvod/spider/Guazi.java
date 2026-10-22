@@ -133,6 +133,42 @@ public class Guazi extends Spider {
         return result.toString();
     }
 
+    /** 首页视频列表（拉 pid=1 首页/全部，取 list[] 作品） */
+    @Override
+    public String homeVideoContent() {
+        JSONObject result = new JSONObject();
+        JSONArray list = new JSONArray();
+        try {
+            String body = buildCatBody(PID_HOME, 1, 40);
+            String json = apiPost(PID_HOME, body);
+            JSONObject data = decryptIfNeeded(json);
+            JSONArray cats = data.optJSONArray("list");
+            if (cats != null) {
+                for (int i = 0; i < cats.length() && list.length() < 40; i++) {
+                    JSONObject cat = cats.optJSONObject(i);
+                    if (cat == null) continue;
+                    JSONArray vods = cat.optJSONArray("list");
+                    if (vods == null) continue;
+                    String typeName = cat.optString("type", "");
+                    for (int k = 0; k < vods.length() && list.length() < 40; k++) {
+                        JSONObject v = vods.optJSONObject(k);
+                        if (v == null) continue;
+                        JSONObject vod = toVod(v, typeName);
+                        if (vod != null) list.put(vod);
+                    }
+                }
+            }
+            SpiderDebug.log("[Guazi] 首页视频 " + list.length() + " 条");
+        } catch (Throwable e) {
+            SpiderDebug.log("[Guazi] homeVideoContent 失败: " + e);
+        }
+        try {
+            result.put("list", list);
+        } catch (Exception ignore) {
+        }
+        return result.toString();
+    }
+
     /** 分类列表（电影/国产剧/综艺/短剧/榜单），tid = pid 字符串 */
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
@@ -143,7 +179,6 @@ public class Guazi extends Spider {
         try {
             String json = apiPost(pid, body);
             JSONObject data = decryptIfNeeded(json);
-            // 解析 分类->list[] 作品
             JSONArray cats = data.optJSONArray("list");
             if (cats != null) {
                 for (int i = 0; i < cats.length(); i++) {
@@ -155,32 +190,42 @@ public class Guazi extends Spider {
                     for (int k = 0; k < vods.length(); k++) {
                         JSONObject v = vods.optJSONObject(k);
                         if (v == null) continue;
-                        JSONObject vod = new JSONObject();
-                        vod.put("vod_id", v.optString("vod_id", ""));
-                        vod.put("vod_name", v.optString("c_name", ""));
-                        vod.put("vod_pic", v.optString("c_pic", ""));
-                        vod.put("vod_remarks", v.optString("new_continue", ""));
-                        vod.put("vod_content", v.optString("cf_name", ""));
-                        vod.put("vod_year", "");
-                        vod.put("vod_actor", "");
-                        vod.put("type_name", typeName);
-                        // 评分
-                        String score = v.optString("vod_douban_score", "");
-                        if (!score.isEmpty()) {
-                            vod.put("vod_score", score);
-                        }
-                        list.put(vod);
+                        JSONObject vod = toVod(v, typeName);
+                        if (vod != null) list.put(vod);
                     }
                 }
             }
             result.put("list", list);
-            // 分页信息
             result.put("page", parsePg(pg));
-            result.put("pagecount", 99); // 瓜子无总页数，留 99
-        } catch (Exception e) {
+            result.put("pagecount", 99);
+        } catch (Throwable e) {
             SpiderDebug.log("[Guazi] categoryContent pid=" + pid + " 失败: " + e);
         }
         return result.toString();
+    }
+
+    /** 单个作品 -> Vod JSON（字段映射 c_name/cf_name/c_pic...） */
+    private static JSONObject toVod(JSONObject v, String typeName) {
+        if (v == null) return null;
+        try {
+            String id = v.optString("vod_id", "");
+            String name = v.optString("c_name", "");
+            if (id.isEmpty() && name.isEmpty()) return null;
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", id);
+            vod.put("vod_name", name);
+            vod.put("vod_pic", v.optString("c_pic", ""));
+            vod.put("vod_remarks", v.optString("new_continue", ""));
+            vod.put("vod_content", v.optString("cf_name", ""));
+            vod.put("vod_year", "");
+            vod.put("vod_actor", "");
+            if (typeName != null && !typeName.isEmpty()) vod.put("type_name", typeName);
+            String score = v.optString("vod_douban_score", "");
+            if (!score.isEmpty()) vod.put("vod_score", score);
+            return vod;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 详情（瓜子无独立详情接口，回 vod 本身；点播地址由 playerContent 解析） */
