@@ -11,10 +11,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 import javax.crypto.Cipher;
@@ -48,7 +46,7 @@ import okhttp3.Response;
  *   密钥  : 会话级 key/iv（16 字节），服务端每次响应下发；
  *            ★ 诚实边界：能解「分类大包」的主 key 由 App Cipher.init 注入，
  *              frida 只挂 doFinal 没抓到 init 的 key 字节。
- *            下方 MASTER_KEY/MASTER_IV 为占位，部署后需用 frida 挂
+ *            下方 masterKey/masterIv 为占位，部署后需用 frida 挂
  *            Cipher.init 抓一次真实主 key 填入（或走手机侧实时解）。
  *
  * 【pid 大类】(frida 实机点出来)
@@ -63,8 +61,8 @@ public class Guazi extends Spider {
     private static final String CHANNEL = "GZ0313";
 
     /** 会话主 key/iv（16 字节，base64 或 ASCII）。部署需替换为 frida 抓 Cipher.init 的真实值。 */
-    private static final String MASTER_KEY = null; // TODO: 实机抓 Cipher.init 填入
-    private static final String MASTER_IV  = null; // TODO: 同上
+    private String masterKey; // 通过 init(extend) 注入，不可 final
+    private String masterIv;
 
     // 域名池（轮换）
     private static final String[] API_HOSTS = {
@@ -94,8 +92,8 @@ public class Guazi extends Spider {
         if (extend != null && !extend.isEmpty()) {
             try {
                 JSONObject o = new JSONObject(extend);
-                if (o.has("masterKey")) MASTER_KEY = o.getString("masterKey");
-                if (o.has("masterIv"))  MASTER_IV = o.getString("masterIv");
+                if (o.has("masterKey")) masterKey = o.getString("masterKey");
+                if (o.has("masterIv"))  masterIv = o.getString("masterIv");
             } catch (Exception ignore) {
             }
         }
@@ -278,9 +276,9 @@ public class Guazi extends Spider {
         try {
             JSONObject obj = new JSONObject(json);
             String enc = obj.optString("enc", "");
-            if (!enc.isEmpty() && MASTER_KEY != null && MASTER_IV != null) {
+            if (!enc.isEmpty() && masterKey != null && masterIv != null) {
                 byte[] ct = Base64.decode(enc, Base64.DEFAULT);
-                byte[] pt = aesDecrypt(ct, MASTER_KEY, MASTER_IV);
+                byte[] pt = aesDecrypt(ct, masterKey, masterIv);
                 return new JSONObject(new String(pt, StandardCharsets.UTF_8));
             }
             // 有些结构 key/iv 内嵌
