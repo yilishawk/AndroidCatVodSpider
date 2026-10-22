@@ -139,6 +139,14 @@ public class FourKVMApp extends Spider {
     private static final int NONCE_LEN = 12;
     private static final int TAG_BITS = 128;
     private static final int PAGE_SIZE = 20;
+    /**
+     * 剧集快捷分类的 tid 前缀。
+     * 例如 tid="tv20" → classify=2（电视剧）+ tvclasses=20（国产剧）。
+     * 用前缀是为了和 classify 的 "1"/"2"/"3" 绝对不冲突。
+     */
+    private static final String TV_PREFIX = "tv";
+    /** 要屏蔽的类型 / 标签关键词：筛选选项里出现就删掉，影片命中就不展示 */
+    private static final String[] BLOCK_WORDS = {"情色", "色情", "成人", "情欲", "三级"};
     /** 会话有效期（服务端 session_expire_time 约 30 分钟，这里保守取 10 分钟主动重握手） */
     private static final long SESSION_TTL_MS = 10 * 60 * 1000L;
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -494,6 +502,14 @@ public class FourKVMApp extends Spider {
     @Override
     public String homeContent(boolean filter) {
         JSONArray classes = new JSONArray();
+        // 「国产剧」作为快捷入口放第一位（tid=tv20 → classify=2 + tvclasses=20）
+        try {
+            JSONObject c = new JSONObject();
+            c.put("type_id", TV_PREFIX + "20");
+            c.put("type_name", "国产剧");
+            classes.put(c);
+        } catch (Exception ignore) {
+        }
         try {
             JSONObject cfg = apiPlain("/app/v1/config");
             JSONObject cdata = cfg.optJSONObject("data");
@@ -516,9 +532,9 @@ public class FourKVMApp extends Spider {
         } catch (Throwable e) {
             SpiderDebug.log("[4KApp] homeContent 分类失败: " + e);
         }
-        // 兜底分类
-        if (classes.length() == 0) {
-            String[][] std = {{"2", "电视剧"},{"1", "电影"},{"3", "动漫"}};
+        // 兜底分类（classes 至少已有「国产剧」，只有 config 完全失败时才补全）
+        if (classes.length() <= 1) {
+            String[][] std = {{"1", "电影"}, {"2", "电视剧"}, {"3", "动漫"}};
             for (String[] s : std) {
                 try {
                     JSONObject c = new JSONObject();
@@ -564,6 +580,7 @@ public class FourKVMApp extends Spider {
                     if (o == null) continue;
                     String id = o.optString("movie_id", "");
                     if (TextUtils.isEmpty(id) || seen.contains(id)) continue;
+                    if (isBlockedVod(o)) continue;
                     seen.add(id);
                     JSONObject v = new JSONObject();
                     v.put("vod_id", id);
@@ -657,13 +674,21 @@ public class FourKVMApp extends Spider {
             anime.put(block("types", "类型", types));
             anime.put(block("tags", "标签", tags));
             filters.put("3", anime);
+
+            // 国产剧快捷入口（tv20）：剧集已固定，不再给「剧集」筛选
+            JSONArray cn = new JSONArray();
+            cn.put(block("areas", "地区", areas));
+            cn.put(block("years", "年份", years));
+            cn.put(block("types", "类型", types));
+            cn.put(block("tags", "标签", tags));
+            filters.put(TV_PREFIX + "20", cn);
         } catch (Exception e) {
             SpiderDebug.log("[4KApp] 构造筛选器失败: " + e);
         }
         return filters;
     }
 
-    /** [{"id":5,"name":"美国"}] → [{"n":"美国","v":"5"}]，并补一个「全部」 */
+    /** [{"id":5,"name":"美国"}] → [{"n":"美国","v":"5"}]，并补一个「全部」；命中屏蔽词的直接丢掉 */
     private JSONArray kv(JSONArray src) {
         JSONArray out = new JSONArray();
         try {
@@ -678,6 +703,7 @@ public class FourKVMApp extends Spider {
                 String name = o.optString("name", "");
                 String id = o.optString("id", "");
                 if (TextUtils.isEmpty(name) || TextUtils.isEmpty(id)) continue;
+                if (isBlocked(name)) continue;
                 JSONObject j = new JSONObject();
                 j.put("n", name);
                 j.put("v", id);
@@ -686,6 +712,43 @@ public class FourKVMApp extends Spider {
         } catch (Exception ignore) {
         }
         return out;
+    }
+
+    /** 命中屏蔽词？（模糊：用于标题、筛选项名称） */
+    private static boolean isBlocked(String s) {
+        if (TextUtils.isEmpty(s)) return false;
+        for (String w : BLOCK_WORDS) {
+            if (s.contains(w)) return true;
+        }
+        return false;
+    }
+
+    /** 数组里是否有元素**正好等于**屏蔽词（精确：用于 types / tags，避免《成人礼》被误伤） */
+    private static boolean hasBlockedItem(JSONArray arr) {
+        if (arr == null) return false;
+        for (int i = 0; i < arr.length(); i++) {
+            String s = arr.optString(i, "");
+            for (String w : BLOCK_WORDS) {
+                if (w.equals(s)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 影片本身是否该屏蔽。
+     * 标题用模糊匹配（标题里出现"情色"基本就是那类片），
+     * 类型 / 标签用精确匹配（否则《成人礼》《三级警戒》这种正常片名会被误杀）。
+     */
+    private boolean isBlockedVod(JSONObject o) {
+        if (o == null) return false;
+        if (isBlocked(o.optString("title", ""))) return true;
+        if (isBlocked(o.optString("vod_name", ""))) return true;
+        if (isBlocked(o.optString("movie_name", ""))) return true;   // 轮播项用这个字段
+        if (hasBlockedItem(o.optJSONArray("types"))) return true;
+        if (hasBlockedItem(o.optJSONArray("tags"))) return true;
+        if (hasBlockedItem(o.optJSONArray("tv_classes"))) return true;
+        return false;
     }
 
     private JSONObject block(String key, String name, JSONArray value) throws Exception {
@@ -702,14 +765,24 @@ public class FourKVMApp extends Spider {
         int offset = (page - 1) * PAGE_SIZE;
         JSONObject result = new JSONObject();
         try {
+            // tid 可能是 "1"/"2"/"3"（classify），也可能是 "tv20"（classify=2 + tvclasses=20）
+            String classify = TextUtils.isEmpty(tid) ? "1" : tid;
+            String fixedTvclass = null;
+            if (classify.startsWith(TV_PREFIX)) {
+                fixedTvclass = classify.substring(TV_PREFIX.length());
+                classify = "2";
+            }
             JSONObject body = new JSONObject();
-            body.put("classify", TextUtils.isEmpty(tid) ? "1" : tid);
+            body.put("classify", classify);
             body.put("offset", String.valueOf(offset));
             body.put("limit", String.valueOf(PAGE_SIZE));
+            if (!TextUtils.isEmpty(fixedTvclass)) body.put("tvclasses", fixedTvclass);
             // 筛选条件（键名与接口一致，空值不发）
             if (extend != null) {
                 for (String k : new String[]{"areas", "years", "types", "tags", "tvclasses"}) {
                     String v = extend.get(k);
+                    // tv 前缀的分类已经固定了剧集，不允许被 extend 覆盖
+                    if ("tvclasses".equals(k) && !TextUtils.isEmpty(fixedTvclass)) continue;
                     if (!TextUtils.isEmpty(v)) body.put(k, v);
                 }
             }
@@ -753,6 +826,13 @@ public class FourKVMApp extends Spider {
             JSONObject info = d.optJSONObject("vod_info");
             if (info == null) {
                 SpiderDebug.log("[4KApp] detail 无 vod_info: " + resp);
+                result.put("list", list);
+                return result.toString();
+            }
+            // 命中屏蔽词（情色/色情/成人…）的片子不返回
+            if (isBlockedVod(info)) {
+                SpiderDebug.log("[4KApp] 详情命中屏蔽词，已过滤: " + info.optString("title", "") + " / "
+                        + join(info.optJSONArray("types"), ","));
                 result.put("list", list);
                 return result.toString();
             }
@@ -900,8 +980,8 @@ public class FourKVMApp extends Spider {
             if (!TextUtils.isEmpty(url)) {
                 result.put("parse", 0);
                 result.put("url", url);
+                // 直链直接推给壳子，不带 Referer（CDN 不需要，带了反而可能被某些播放器拦）
                 JSONObject header = new JSONObject();
-                // 给播放器用的 UA，同样保持 ASCII（部分播放器也会校验头值）
                 header.put("User-Agent", asciiOnly(userAgent));
                 result.put("header", header);
             } else {
@@ -968,9 +1048,10 @@ public class FourKVMApp extends Spider {
         return out;
     }
 
-    /** 列表项 → CatVod vod 精简对象；id 为空返回 null */
+    /** 列表项 → CatVod vod 精简对象；id 为空或命中屏蔽词返回 null */
     private JSONObject toVod(JSONObject o) {
         if (o == null) return null;
+        if (isBlockedVod(o)) return null;
         try {
             String id = o.optString("id", "");
             if (TextUtils.isEmpty(id)) return null;
