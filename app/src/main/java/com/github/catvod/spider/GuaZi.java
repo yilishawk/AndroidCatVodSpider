@@ -74,17 +74,25 @@ public class GuaZi extends Spider {
 
     private static final int PAGE_SIZE = 30;
 
-    /** 国产剧置顶 */
+    /**
+     * 分类表：{tid, 显示名, 锁定地区}
+     * <p>
+     * ⚠️ 分类参数是 tid（不是 pid！pid 服务端完全忽略）。
+     * tid 取值来自 indexPid 的 t_id：1=电影 2=连续剧 3=综艺 4=动漫 64=短剧。
+     * 国产剧与海外剧 t_id 同为 2，只能靠 area 区分 → 国产剧 = tid=2 + area=大陆。
+     * 漫剧/儿童 t_id=0，且 pid 无效，无法单独筛选，故不列。
+     */
     private static final String[][] CATES = {
-            {"4", "国产剧"},
-            {"3", "电影"},
-            {"9", "海外剧"},
-            {"5", "动漫"},
-            {"6", "综艺"},
-            {"2", "短剧"},
-            {"15", "漫剧"},
-            {"10", "儿童"},
+            {"2_大陆", "国产剧", "大陆"},
+            {"1", "电影", ""},
+            {"2", "电视剧", ""},
+            {"4", "动漫", ""},
+            {"3", "综艺", ""},
+            {"64", "短剧", ""},
     };
+
+    /** 需要从筛选项里剔除的子分类（成人/同性内容） */
+    private static final String[] BLOCK_CLASS = {"情色", "同性"};
 
     /** 成人内容过滤 */
     private static final String[] ADULT_WORDS = {
@@ -260,21 +268,83 @@ public class GuaZi extends Spider {
 
     private JSONObject buildFilters() {
         JSONObject out = new JSONObject();
-        Map<String, String> p = new HashMap<>();
-        p.put("pid", "4");
-        Object d = api("/App/IndexList/indexScreen", p);
+        // indexScreen 会忽略 pid，一次调用即可拿到全量筛选项
+        Object d = api("/App/IndexList/indexScreen", new HashMap<String, String>());
         if (!(d instanceof JSONObject)) return out;
         JSONObject src = (JSONObject) d;
         try {
-            JSONArray dims = new JSONArray();
-            dims.put(dim(src, "area", "地区"));
-            dims.put(dim(src, "year", "年份"));
-            dims.put(dim(src, "column", "类型"));
-            dims.put(dim(src, "sort", "排序"));
-            for (String[] c : CATES) out.put(c[0], new JSONArray(dims.toString()));
+            for (String[] c : CATES) {
+                String tid = c[0];
+                String base = tid.contains("_") ? tid.substring(0, tid.indexOf('_')) : tid;
+                boolean lockedArea = !c[2].isEmpty();
+                JSONArray dims = new JSONArray();
+                JSONObject cls = classDim(src, base);
+                if (cls != null) dims.put(cls);
+                if (!lockedArea) dims.put(dim(src, "area", "地区"));
+                dims.put(dim(src, "year", "年份"));
+                dims.put(sortDim());
+                out.put(tid, dims);
+            }
         } catch (Exception ignored) {
         }
         return out;
+    }
+
+    /** 从 indexScreen.column 里取出该 tid 对应 column 的 class 子分类（剔除成人分类） */
+    private JSONObject classDim(JSONObject src, String tid) {
+        JSONArray cols = src.optJSONArray("column");
+        if (cols == null) return null;
+        for (int i = 0; i < cols.length(); i++) {
+            JSONObject col = cols.optJSONObject(i);
+            if (col == null || !tid.equals(col.optString("value"))) continue;
+            JSONArray subs = col.optJSONArray("class");
+            if (subs == null || subs.length() <= 1) return null;
+            JSONObject o = new JSONObject();
+            JSONArray vals = new JSONArray();
+            try {
+                o.put("key", "class");
+                o.put("name", "类型");
+                for (int k = 0; k < subs.length(); k++) {
+                    JSONObject s = subs.optJSONObject(k);
+                    if (s == null) continue;
+                    String nm = s.optString("name");
+                    if (blockedClass(nm)) continue;
+                    JSONObject v = new JSONObject();
+                    v.put("n", "0".equals(s.optString("value")) ? "全部" : nm);
+                    v.put("v", s.optString("value"));
+                    vals.put(v);
+                }
+                o.put("value", vals);
+            } catch (Exception ignored) {
+            }
+            return o;
+        }
+        return null;
+    }
+
+    private static boolean blockedClass(String name) {
+        for (String w : BLOCK_CLASS) if (name.contains(w)) return true;
+        return false;
+    }
+
+    /** 排序维度：综合/最新/最热（"高分"与"最热"同值 d_score，去重） */
+    private JSONObject sortDim() {
+        JSONObject o = new JSONObject();
+        JSONArray vals = new JSONArray();
+        try {
+            o.put("key", "sort");
+            o.put("name", "排序");
+            String[][] fixed = {{"综合", "d_id"}, {"最新", "d_addtime"}, {"最热", "d_score"}};
+            for (String[] f : fixed) {
+                JSONObject v = new JSONObject();
+                v.put("n", f[0]);
+                v.put("v", f[1]);
+                vals.put(v);
+            }
+            o.put("value", vals);
+        } catch (Exception ignored) {
+        }
+        return o;
     }
 
     private JSONObject dim(JSONObject src, String key, String name) {
@@ -289,8 +359,9 @@ public class GuaZi extends Spider {
                     JSONObject r = raw.optJSONObject(i);
                     if (r == null) continue;
                     JSONObject v = new JSONObject();
-                    v.put("n", r.optString("name"));
-                    v.put("v", r.optString("value"));
+                    String val = r.optString("value");
+                    v.put("n", "0".equals(val) ? "全部" : r.optString("name"));
+                    v.put("v", val);
                     vals.put(v);
                 }
             }
@@ -309,12 +380,19 @@ public class GuaZi extends Spider {
             page = Integer.parseInt(pg);
         } catch (Exception ignored) {
         }
+        String t = tid == null ? "" : tid;
+        String lockedArea = "";
+        if (t.contains("_")) {
+            lockedArea = t.substring(t.indexOf('_') + 1);
+            t = t.substring(0, t.indexOf('_'));
+        }
         Map<String, String> p = new HashMap<>();
-        p.put("pid", tid == null ? "" : tid);
+        p.put("tid", t);
         p.put("page", String.valueOf(page));
-        p.put("area", pick(extend, "area", "0"));
+        p.put("area", lockedArea.isEmpty() ? pick(extend, "area", "0") : lockedArea);
         p.put("year", pick(extend, "year", "0"));
-        p.put("column", pick(extend, "column", "0"));
+        String cls = pick(extend, "class", "0");
+        if (!"0".equals(cls)) p.put("class", cls);
         p.put("sort", pick(extend, "sort", "d_id"));
 
         List<Vod> vods = new ArrayList<>();
