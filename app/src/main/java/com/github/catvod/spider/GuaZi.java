@@ -1,6 +1,5 @@
 package com.github.catvod.spider;
 
-import android.content.Context;
 import android.text.TextUtils;
 import android.util.Base64;
 
@@ -95,11 +94,6 @@ public class GuaZi extends Spider {
     private static final Set<String> ADULT_TAGS = new HashSet<>(Arrays.asList(
             "同性", "耽美", "情色", "三级片"
     ));
-
-    @Override
-    public void init(Context context) {
-        super.init(context);
-    }
 
     // ==================== 网络 ====================
 
