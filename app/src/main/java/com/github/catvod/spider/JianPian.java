@@ -1,6 +1,5 @@
 package com.github.catvod.spider;
 
-import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -124,7 +123,8 @@ public class JianPian extends Spider {
     private JSONObject getJson(String path) {
         String url = BASE + path;
         try {
-            OkResult r = OkHttp.get(url, header());
+            // CatVod 的 OkHttp.get 是三参：(url, params, headers)
+            OkResult r = OkHttp.get(url, new HashMap<String, String>(), header());
             String body = r.getBody();
             if (body == null || body.trim().isEmpty()) {
                 log("空响应 code=" + r.getCode() + " " + path);
@@ -223,8 +223,13 @@ public class JianPian extends Spider {
         return false;
     }
 
+    /** 最近一次请求的**原始**条数（过滤前）。翻页判断必须用它：
+     *  成人内容被过滤后条数会少于 15，若按过滤后条数判断会误判「没有下一页」而提前截断。 */
+    private int lastRawSize = 0;
+
     /** /api/crumb/list 单条：id/title/score/path|tvimg/mask/finished/changed */
     private List<Vod> parseLongList(JSONArray arr) {
+        lastRawSize = arr == null ? 0 : arr.length();
         List<Vod> list = new ArrayList<>();
         if (arr == null) return list;
         for (int i = 0; i < arr.length(); i++) {
@@ -249,6 +254,7 @@ public class JianPian extends Spider {
 
     /** /api/crumb/shortList 单条：id/title/cover_image/mask/categories[] */
     private List<Vod> parseShortList(JSONArray arr) {
+        lastRawSize = arr == null ? 0 : arr.length();
         List<Vod> list = new ArrayList<>();
         if (arr == null) return list;
         for (int i = 0; i < arr.length(); i++) {
@@ -301,39 +307,95 @@ public class JianPian extends Spider {
 
     // ---------- Spider 生命周期 ----------
 
-    @Override
-    public String homeContent(boolean filter) throws Exception {
-        List<Class> classes = new ArrayList<>();
-        for (String[] c : CLASSES) classes.add(new Class(c[0], c[1]));
-
-        JSONObject filters = new JSONObject();
-        JSONArray longF = buildLongFilters();
-        JSONArray shortF = buildShortFilters();
-        try {
-            filters.put("2_1", longF);
-            filters.put("1", longF);
-            filters.put("2", longF);
-            filters.put("3", longF);
-            filters.put("4", longF);
-            filters.put("67", shortF);
-        } catch (Exception ignored) {
+    /** JSON 字符串转义（手拼返回体时用） */
+    private String esc(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':
+                    sb.append("\\\"");
+                    break;
+                case '\\':
+                    sb.append("\\\\");
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                case '\t':
+                    sb.append("\\t");
+                    break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
         }
+        return sb.toString();
+    }
 
-        // 首页推荐：电影热榜
-        Map<String, String> hot = new HashMap<>();
-        hot.put("sort", "hot");
-        List<Vod> vods = longVods("1", "", 1, hot);
-
-        log("homeContent classes=" + classes.size() + " filters=" + filters.length() + " vods=" + vods.size());
-        return Result.get().classes(classes).filters(filters.toString()).vod(vods).string();
+    /**
+     * 首页 list：直接从接口原始 JSON 拼 CatVod 规范的 vod 数组。
+     * 不走 Vod 对象是因为本项目 Vod 只有 setter、没有 getVodName() 之类的 getter。
+     */
+    private String homeListJson() {
+        JSONObject d = getJson("/api/crumb/list?fcate_pid=1&category_id=&area=&year=&type=&sort=hot&page=1");
+        JSONArray arr = d.optJSONArray("data");
+        StringBuilder sb = new StringBuilder("[");
+        int n = 0;
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String title = o.optString("title");
+                if (isAdult(o.optJSONArray("types")) || isAdultTitle(title)) continue;
+                String id = o.optString("id");
+                if (id.isEmpty() || "0".equals(id)) continue;
+                String p = o.optString("tvimg");
+                if (p.isEmpty() || "null".equals(p)) p = o.optString("path");
+                if (n++ > 0) sb.append(",");
+                sb.append("{\"vod_id\":\"").append(esc(id)).append("\"")
+                        .append(",\"vod_name\":\"").append(esc(title)).append("\"")
+                        .append(",\"vod_pic\":\"").append(esc(pic(p))).append("\"")
+                        .append(",\"vod_remarks\":\"").append(esc(o.optString("mask"))).append("\"}");
+            }
+        }
+        sb.append("]");
+        return sb.toString();
     }
 
     @Override
-    public String homeVideoContent() throws Exception {
-        Map<String, String> hot = new HashMap<>();
-        hot.put("sort", "hot");
-        List<Vod> vods = longVods("1", "", 1, hot);
-        return Result.get().vod(vods).string();
+    public String homeContent(boolean filter) throws Exception {
+        // 手拼返回体：本项目 Result.filters 只接受 JSONObject，且 Vod 无 getter，
+        // 直接拼字符串最稳（与 Tvyb.java 的做法一致）
+        StringBuilder sb = new StringBuilder("{\"class\":[");
+        for (int i = 0; i < CLASSES.length; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("{\"type_id\":\"").append(esc(CLASSES[i][0]))
+                    .append("\",\"type_name\":\"").append(esc(CLASSES[i][1])).append("\"}");
+        }
+        sb.append("]");
+
+        JSONObject filters = new JSONObject();
+        try {
+            JSONArray longF = buildLongFilters();
+            JSONArray shortF = buildShortFilters();
+            for (String[] c : CLASSES) {
+                JSONArray f = "67".equals(c[0]) ? shortF : longF;
+                if (f != null && f.length() > 0) filters.put(c[0], f);
+            }
+        } catch (Exception e) {
+            log("filters 组装失败: " + e.getMessage());
+        }
+        sb.append(",\"filters\":").append(filters.toString());
+
+        String list = homeListJson();
+        sb.append(",\"list\":").append(list).append("}");
+        log("homeContent classes=" + CLASSES.length + " filters=" + filters.length() + " listLen=" + list.length());
+        return sb.toString();
     }
 
     @Override
@@ -356,7 +418,7 @@ public class JianPian extends Spider {
         } else {
             vods = longVods(pid, defArea, page, extend);
         }
-        boolean more = vods.size() >= PAGE_SIZE;
+        boolean more = lastRawSize >= PAGE_SIZE;
         return Result.get().vod(vods).page(page, more ? page + 1 : page, PAGE_SIZE, PAGE_SIZE).string();
     }
 
@@ -435,7 +497,7 @@ public class JianPian extends Spider {
         if (froms.isEmpty()) return Result.error("无可用播放线路");
         vod.setVodPlayFrom(join(froms, "$$$"));
         vod.setVodPlayUrl(join(urls, "$$$"));
-        log("detail id=" + id + " lines=" + froms.size() + " name=" + vod.getVodName());
+        log("detail id=" + id + " lines=" + froms.size() + " name=" + v.optString("title"));
         return Result.get().vod(vod).string();
     }
 
@@ -491,6 +553,7 @@ public class JianPian extends Spider {
         }
         JSONObject d = getJson("/api/v2/search/videoV2?key=" + enc(key) + "&page=" + page + "&pageSize=" + SEARCH_SIZE);
         JSONArray arr = d.optJSONArray("data");
+        lastRawSize = arr == null ? 0 : arr.length();
         List<Vod> vods = new ArrayList<>();
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
@@ -519,7 +582,7 @@ public class JianPian extends Spider {
             }
         }
         log("search key=" + key + " page=" + page + " → " + vods.size());
-        boolean more = vods.size() >= SEARCH_SIZE;
+        boolean more = lastRawSize >= SEARCH_SIZE;
         return Result.get().vod(vods).page(page, more ? page + 1 : page, SEARCH_SIZE, SEARCH_SIZE).string();
     }
 
