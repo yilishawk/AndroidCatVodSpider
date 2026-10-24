@@ -241,28 +241,12 @@ public class GuaZi extends Spider {
             classes.put(o);
         }
 
-        JSONArray list = new JSONArray();
-        Map<String, String> p = new HashMap<>();
-        p.put("page", "1");
-        p.put("sort", "d_addtime");
-        Object d = api("/App/IndexList/indexList", p);
-        if (d instanceof JSONObject) {
-            JSONArray arr = ((JSONObject) d).optJSONArray("list");
-            if (arr != null) {
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject it = arr.optJSONObject(i);
-                    if (it == null || isAdult(it)) continue;
-                    list.put(toVodJson(it));
-                }
-            }
-        }
-
+        // 首页不出推荐流：list 恒为空，进源后直接落在分类页
         StringBuilder sb = new StringBuilder("{\"class\":");
         sb.append(classes.toString());
         sb.append(",\"filters\":").append(buildFilters().toString());
-        sb.append(",\"list\":").append(list.toString());
-        sb.append("}");
-        SpiderDebug.log("[瓜子] " + "homeContent list=" + list.length());
+        sb.append(",\"list\":[]}");
+        SpiderDebug.log("[瓜子] homeContent 仅分类，无推荐流");
         return sb.toString();
     }
 
