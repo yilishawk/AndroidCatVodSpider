@@ -5,7 +5,6 @@ import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 
-import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -39,18 +38,16 @@ import java.util.Map;
  *     —— 注意 detail 的 allepidetail 只填「默认站点」那一路，其余必须逐站点拉。
  *
  * 三、播放
- *     源站只给各平台播放页 URL，不提供直链，必须走第三方解析。
- *     原方案 POST juok3.top/api/player/resolve，已废弃——换成自建解析协议
- *     （逆向自 llqplayer 引擎，见《分析报告》§5，协议已在线实证）：
- *       POST https://dmku.byteamone.cn/VIDEOINFO.php
- *       Content-Type: application/x-www-form-urlencoded
- *       body: url = Base64(视频页URL)
- *       响应: Base64(JSON)；code=200 时 data.list[i].url 即播放直链
- *     —— 该协议由服务端收录库供片；未收录返回 code=100「等待收录」，
- *        此时按老规矩降级成 parse:1 交给客户端自己的解析器处理。
- *     —— 注意：VIDEOINFO 一次返回整片 list（含所有剧集），而 playerContent
- *        只能拿到播放页 URL、拿不到集号，取 list[0]；这与 juok3 时代
- *        「一个播放页 URL 出一个直链」的行为一致，不引入新的集数错位。
+ *     360kan 是纯聚合站：官方 /v1/detail 只给各平台「播放页 URL」
+ *     （优酷/爱奇艺/腾讯/芒果/乐视），不提供 m3u8 直链——已在线逐个源实测确认，
+ *     playlinksdetail[site].default_url / allepidetail[site][].url 全是第三方播放页，
+ *     无一是 .m3u8/.mp4。
+ *     所以 playerContent 一律返回 parse:1，把该播放页 URL 连同 Referer 交给
+ *     客户端自己的解析器（TVBox 等客户端普遍内置优酷/爱奇艺/腾讯解析）。
+ *     —— 曾经尝试改用 dmku.byteamone.cn/VIDEOINFO.php 自建解析，后证实那是
+ *        「公共弹幕库」的弹幕元数据接口（引擎 funcGP 里 config.api = cg.dmku），
+ *        响应只有 vod_name/vod_year/episode 等匹配字段、从不返回播放地址，
+ *        故已移除。详见《分析报告》§5.4「接口定位纠错」。
  *
  * 定制：首页不出推荐流；国产剧置顶（锁 area=大陆）；过滤伦理/成人子分类。
  */
@@ -61,13 +58,6 @@ public class Vod360 extends Spider {
     private static final String HOST = "https://www.360kan.com";
     private static final String API = "https://api.web.360kan.com";
     private static final String SEARCH_API = "https://api.so.360kan.com";
-
-    /**
-     * 自建解析接口（协议逆向自 llqplayer 引擎，详见《分析报告》§5）：
-     * POST form，url=Base64(视频页URL)；响应 Base64(JSON)，code=200 时
-     * list[i].url 为播放直链。原 juok3.top/api/player/resolve 已弃用。
-     */
-    private static final String PARSE_API = "https://dmku.byteamone.cn/VIDEOINFO.php";
 
     private static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -724,91 +714,28 @@ public class Vod360 extends Spider {
         String raw = id == null ? "" : id.trim();
         JSONObject o = new JSONObject();
 
-        String m3u8 = resolve(raw);
-        if (m3u8.isEmpty()) {
-            // 解析失败（未收录/超时/异常），降级交给客户端解析器
-            o.put("parse", 1);
-            o.put("playUrl", "");
-            o.put("url", raw);
+        // 360kan 官方 API 只给第三方播放页 URL（优酷/爱奇艺/腾讯/芒果/乐视），
+        // 不出 m3u8 直链；直链解析交给客户端解析器，这里只负责把 URL 和
+        // Referer 递过去。曾经那条 POST dmku.byteamone.cn/VIDEOINFO.php 的
+        // 自建解析已证实是弹幕元数据接口、永不返回播放地址，故移除。
+        o.put("parse", 1);
+        o.put("playUrl", "");
+        o.put("url", raw);
+        if (raw.isEmpty()) {
             o.put("header", "");
-            SpiderDebug.log("[360] play 解析失败，降级 parse:1 " + raw);
+            SpiderDebug.log("[360] play 地址为空");
         } else {
-            o.put("parse", 0);
-            o.put("playUrl", "");
-            o.put("url", m3u8);
-            // 直链在视频站 CDN 上，Referer/Origin 用播放页源站，不再是解析站
+            // 播放页在第三方站点上，Referer/Origin 用该页自己的源站
             String ref = originOf(raw);
             JSONObject h = new JSONObject();
             h.put("user-agent", UA);
             h.put("referer", ref);
             h.put("origin", ref);
             o.put("header", h.toString());
-            SpiderDebug.log("[360] play ok " + m3u8);
+            SpiderDebug.log("[360] play 交客户端解析 " + raw);
         }
         o.put("danmaku", "https://yilishawk.de5.net/danmu?url=" + enc(raw));
         return o.toString();
-    }
-
-    /**
-     * 自建解析：POST VIDEOINFO.php 拿播放直链。
-     * 协议（逆向自 llqplayer 引擎，已在线实证）：
-     *   Content-Type: application/x-www-form-urlencoded
-     *   body: url = Base64(视频页URL)
-     *   —— base64 含 + / = ，作表单值必须再 URL 编码，否则服务端解码后错位；
-     *   响应是 Base64(JSON)：{"code":200,...,"list":[{"url":"..","vip":0},..]}
-     *   code=100 为服务端未收录（"等待收录"），按失败处理走降级。
-     * 返回 "" 表示解析失败。
-     */
-    private static String resolve(String raw) {
-        if (raw.isEmpty()) return "";
-        String b64;
-        try {
-            b64 = Base64.encodeToString(raw.getBytes("UTF-8"), Base64.NO_WRAP);
-        } catch (Exception e) {
-            return "";
-        }
-        Map<String, String> h = header();
-        h.put("Content-Type", "application/x-www-form-urlencoded");
-        String body;
-        try {
-            body = "url=" + URLEncoder.encode(b64, "UTF-8");
-        } catch (Exception e) {
-            return "";
-        }
-
-        String s = request(PARSE_API, "POST", body, h);
-        if (s.isEmpty()) return "";
-        String json;
-        try {
-            json = new String(Base64.decode(s.replaceAll("\\s+", ""), Base64.NO_WRAP), "UTF-8");
-        } catch (Exception e) {
-            SpiderDebug.log("[360] 解析响应 base64 解码失败 " + e);
-            return "";
-        }
-        try {
-            JSONObject o = new JSONObject(json);
-            int code = o.optInt("code");
-            if (code != 200) {
-                // 100=等待收录；其余码按未收录处理，降级交客户端解析器
-                SpiderDebug.log("[360] 解析未收录 code=" + code + " msg=" + o.optString("msg"));
-                return "";
-            }
-            JSONArray list = o.optJSONArray("list");
-            if (list == null || list.length() == 0) {
-                SpiderDebug.log("[360] 解析 list 为空");
-                return "";
-            }
-            // list 是整片剧集直链；playerContent 拿不到集号，取第 0 条
-            String u = optStr(list.optJSONObject(0), "url");
-            if (u.isEmpty()) {
-                SpiderDebug.log("[360] 解析 list[0].url 为空");
-                return "";
-            }
-            return u;
-        } catch (Exception e) {
-            SpiderDebug.log("[360] 解析 JSON 解析失败 " + e);
-            return "";
-        }
     }
 
     /** 取 URL 的 origin（scheme://host），播放直链的 Referer 用它 */
