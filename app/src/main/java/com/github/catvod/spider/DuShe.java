@@ -519,21 +519,36 @@ public class DuShe extends Spider {
             for (int i = 0; i < sources.length(); i++) {
                 JSONObject s = sources.optJSONObject(i);
                 if (s == null) continue;
-                JSONArray eps = s.optJSONArray("list");
-                if (eps == null || eps.length() == 0) continue;
                 List<String> epList = new ArrayList<>();
-                for (int j = 0; j < eps.length(); j++) {
-                    JSONObject ep = eps.optJSONObject(j);
-                    if (ep == null) continue;
-                    JSONArray pu = ep.optJSONArray("playUrls");
-                    if (pu == null || pu.length() == 0) continue;
-                    JSONObject u = pu.optJSONObject(0);
-                    if (u == null) continue;
-                    String link = u.optString("url");
-                    if (link.isEmpty()) continue;
-                    String name = ep.optString("title");
-                    if (name.isEmpty()) name = "第" + (j + 1) + "集";
-                    epList.add(name + "$" + link);
+                JSONArray eps = s.optJSONArray("list");
+
+                if (eps != null && eps.length() > 0) {
+                    // detail 自带（默认选中那条线路才有）
+                    for (int j = 0; j < eps.length(); j++) {
+                        JSONObject ep = eps.optJSONObject(j);
+                        if (ep == null) continue;
+                        JSONArray pu = ep.optJSONArray("playUrls");
+                        if (pu == null || pu.length() == 0) continue;
+                        JSONObject u = pu.optJSONObject(0);
+                        if (u == null) continue;
+                        String link = u.optString("url");
+                        if (link.isEmpty()) continue;
+                        epList.add(epName(ep, j) + "$" + link);
+                    }
+                } else {
+                    // 其余线路是懒加载：靠 episodeVodId 单独拉
+                    String ev = s.optString("episodeVodId");
+                    if (ev.isEmpty()) continue;
+                    JSONArray arr = episodesOf(s.optString("siteId"), ev);
+                    if (arr != null) {
+                        for (int j = 0; j < arr.length(); j++) {
+                            JSONObject ep = arr.optJSONObject(j);
+                            if (ep == null) continue;
+                            String link = ep.optString("m3u8Url");
+                            if (link.isEmpty()) continue;
+                            epList.add(epName(ep, j) + "$" + link);
+                        }
+                    }
                 }
                 if (epList.isEmpty()) continue;
                 froms.add(s.optString("name"));
@@ -550,8 +565,31 @@ public class DuShe extends Spider {
         List<Vod> list = new ArrayList<>();
         list.add(v);
         SpiderDebug.log("[毒舌] detail id=" + id + " 线路=" + froms.size()
-                + " 集数=" + urls.get(0).split("#").length);
+                + " 首线路集数=" + urls.get(0).split("#").length);
         return Result.get().vod(list).string();
+    }
+
+    private static String epName(JSONObject ep, int idx) {
+        String name = ep.optString("title");
+        return name.isEmpty() ? ("第" + (idx + 1) + "集") : name;
+    }
+
+    /**
+     * 拉某条线路的完整剧集。
+     * detail 只给默认选中线路的 list，其余 17 条都是空数组（懒加载），
+     * 必须用该线路的 episodeVodId + siteId 单独请求。
+     * 实测 18/18 条线路都能拿到完整剧集，每集都带 m3u8Url。
+     */
+    private static JSONArray episodesOf(String siteId, String episodeVodId) {
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("siteId", siteId);
+        p.put("episodeVodId", episodeVodId);
+        JSONObject o = api(HOST, "/vod/episodes.capi", p);
+        if (o == null || o.optInt("code") != 200) {
+            SpiderDebug.log("[毒舌] episodes 失败 site=" + siteId + " ev=" + episodeVodId);
+            return null;
+        }
+        return o.optJSONArray("data");
     }
 
     private static String yearOf(JSONObject d) {
