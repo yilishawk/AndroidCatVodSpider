@@ -6,6 +6,7 @@ import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -360,14 +361,16 @@ public class Vod360 extends Spider {
         return out;
     }
 
-    private static JSONObject val(String n, String v) {
+    // Android 的 org.json.JSONException 是检查异常，方法签名必须声明；
+    // 唯一调用方 buildFilters() 已用 try-catch(Exception) 兜住。
+    private static JSONObject val(String n, String v) throws JSONException {
         JSONObject o = new JSONObject();
         o.put("n", n);
         o.put("v", v);
         return o;
     }
 
-    private static JSONObject field(String key, String name, JSONArray values) {
+    private static JSONObject field(String key, String name, JSONArray values) throws JSONException {
         JSONObject o = new JSONObject();
         o.put("key", key);
         o.put("name", name);
