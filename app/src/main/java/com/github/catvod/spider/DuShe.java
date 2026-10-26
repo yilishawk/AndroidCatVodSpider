@@ -4,18 +4,13 @@ import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
+import com.github.catvod.net.OkHttp;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.net.URLEncoder;
-import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,6 +21,9 @@ import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 /**
  * 毒舌电影（com.dsdyC100000V261024.T181208 v3.5.0）
@@ -38,25 +36,25 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * 二、响应体：AES-256-CBC/PKCS5 解密，key/iv 固定（libijiamihelper.so 内常量）
  *     key = ayt5wy5afwmwrpb19k9s3psx3dymyd0n
- *     iv  = b3t069ijy7piw0j
+ *     iv  = b3t069ijy7pirw0j
  *     密文长度恒为 16 的倍数，无额外包头
  *
  * 三、接口
- *     vcache.qvfic.com/vod/channel/list.capi   分类列表  channelId/sort/category/area/language/year/next
- *     vcache.qvfic.com/v2/vod/detail.capi      详情+剧集+直链  vodId
- *     vcache.qvfic.com/v5/config/appInit.capi  筛选项（channelListQuery）
- *     vlogic.qvfic.com/vod/search/query        搜索（无 .capi 后缀）channelId/k/next/userChannel
+ *     vcache.qvfic.com/vod/channel/list.capi   分类列表
+ *     vcache.qvfic.com/v2/vod/detail.capi      详情+剧集+直链
+ *     vcache.qvfic.com/v5/config/appInit.capi  筛选项
+ *     vlogic.qvfic.com/vod/search/query        搜索
+ *     vcache.qvfic.com/vod/episodes.capi       懒加载剧集
  *
  * 定制：首页不出推荐流；国产剧置顶；过滤成人（福利频道整源剔除 + 标签二次过滤）
+ *
+ * 兼容：网络层改用工程自带 OkHttp + SSLCompat，改善安卓6 TLS 兼容性
  */
 public class DuShe extends Spider {
 
     // ==================== 常量 ====================
-
     private static final String HOST = "https://vcache.qvfic.com";
     private static final String HOST_LOGIC = "https://vlogic.qvfic.com";
-    // 图片走 vres 域名（实测四个域名都返回真实 webp，且不需要 UA）。
-    // 之前用 IP 103.39.111.180:51050 也能通，但域名更抗失效。
     private static final String IMG_HOST = "https://vres.xqdhkqt.cn";
 
     private static final String SIGN_KEY = "ksggsr4tp6difdo1c3im8fqd3g";
@@ -70,10 +68,13 @@ public class DuShe extends Spider {
     private static final String DEVICE_CREATED_AT = "1792899792260";
     private static final String USER_ID = "56909655";
     private static final String CHANNEL = "c100000";
+
     private static final String UA = PKG + "/" + APP_VER
             + " Dalvik/2.1.0 (Linux; U; Android 12; Redmi K30 5G Build/SKQ1.211006.001)";
+
     private static final String X_TOKEN = "NTY5MDk2NTV8MTc5Mjg5OTgwOXw2MjE3YjgzNjNlZTIyY2Q0ODFmNjk4"
             + "NTg1NmM1YzBlMjYyM2I2ZmQwM2M2OWQzODQyM2U4OGYxNGFiYzM0ZGI3";
+
     private static final String DEVICE_INFO = "eyJicmFuZCI6IlhpYW9taSIsIm1vZGVsIjoiUmVkYWkgSzMwIDVHIiwidHlw"
             + "ZSI6InBob25lIiwicmVzb2x1dGlvblgiOiIxMDgwIiwicmVzb2x1dGlvblkiOiIyMjYxIiwib3JpZW50"
             + "YXRpb24iOiIxIiwib3NOYW1lIjoiYW5kcm9pZCIsIm9zVmVyc2lvbiI6IjEyIiwib3NMZXZlbCI6IjMx"
@@ -90,7 +91,7 @@ public class DuShe extends Spider {
 
     private static final int PAGE_SIZE = 21;
 
-    /** 分类：{type_id, 名称, 锁定地区}；国产剧置顶，福利(channelId=5, isAdult)整源剔除 */
+    /** 分类：{type_id, 名称, 锁定地区}；国产剧置顶，福利(channelId=5)整源剔除 */
     private static final String[][] CATES = {
             {"2_中国大陆", "国产剧", "中国大陆"},
             {"1", "电影", ""},
@@ -108,7 +109,7 @@ public class DuShe extends Spider {
             "成人", "三级", "無碼", "无码", "激情", "自慰", "偷拍",
     };
 
-    private static JSONObject sAppInit;   // 缓存 appInit（筛选项来源）
+    private static JSONObject sAppInit; // 缓存 appInit（筛选项来源）
 
     // ==================== 基础工具 ====================
 
@@ -176,36 +177,39 @@ public class DuShe extends Spider {
         }
     }
 
-    private static byte[] readAll(InputStream is) throws Exception {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
-        int n;
-        while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
-        is.close();
-        return bos.toByteArray();
-    }
-
+    /**
+     * 使用工程自带 OkHttp（内含 SSLCompat），改善安卓6 TLS 兼容。
+     * 接口返回 AES 密文二进制，必须读 bytes，不能用 string()。
+     */
     private static byte[] httpBytes(String url, Map<String, String> headers) {
-        HttpURLConnection conn = null;
+        Response resp = null;
         try {
-            conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(20000);
-            conn.setRequestProperty("Accept-Encoding", "identity");
-            if (headers != null) {
-                for (Map.Entry<String, String> e : headers.entrySet()) {
-                    conn.setRequestProperty(e.getKey(), e.getValue());
-                }
+            Map<String, String> h = new HashMap<>();
+            if (headers != null) h.putAll(headers);
+            if (!h.containsKey("Accept-Encoding") && !h.containsKey("accept-encoding")) {
+                h.put("Accept-Encoding", "identity");
             }
-            int code = conn.getResponseCode();
-            InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
-            if (is == null) return null;
-            return readAll(is);
+
+            resp = OkHttp.newCall(url, h);
+            int code = resp.code();
+            ResponseBody body = resp.body();
+            if (body == null) {
+                SpiderDebug.log("[毒舌] http 无 body code=" + code + " url=" + url);
+                return null;
+            }
+            byte[] data = body.bytes();
+            SpiderDebug.log("[毒舌] http code=" + code + " len=" + data.length);
+            return data;
         } catch (Exception e) {
-            SpiderDebug.log("[毒舌] http 异常 " + e);
+            SpiderDebug.log("[毒舌] http 异常: " + e.getClass().getSimpleName() + " " + e.getMessage());
             return null;
         } finally {
-            if (conn != null) conn.disconnect();
+            if (resp != null) {
+                try {
+                    resp.close();
+                } catch (Exception ignored) {
+                }
+            }
         }
     }
 
@@ -217,7 +221,8 @@ public class DuShe extends Spider {
                     new IvParameterSpec(AES_IV.getBytes("UTF-8")));
             return c.doFinal(data);
         } catch (Exception e) {
-            SpiderDebug.log("[毒舌] 解密失败 " + e);
+            SpiderDebug.log("[毒舌] 解密失败 len=" + (data == null ? 0 : data.length)
+                    + " " + e.getClass().getSimpleName() + " " + e.getMessage());
             return null;
         }
     }
@@ -232,6 +237,7 @@ public class DuShe extends Spider {
 
         String ts = String.valueOf(System.currentTimeMillis());
         String sg = sign(path, p, ts);
+
         StringBuilder url = new StringBuilder(host).append(path).append('?');
         List<String> kv = new ArrayList<>();
         for (Map.Entry<String, String> e : new TreeMap<>(p).entrySet()) {
@@ -248,8 +254,10 @@ public class DuShe extends Spider {
             SpiderDebug.log("[毒舌] " + path + " 空响应");
             return null;
         }
+
         byte[] plain = aesDec(raw);
         if (plain == null) return null;
+
         try {
             return new JSONObject(new String(plain, "UTF-8"));
         } catch (Exception e) {
@@ -268,7 +276,6 @@ public class DuShe extends Spider {
 
     private static boolean isAdultItem(JSONObject it) {
         if (it == null) return true;
-        // 福利频道
         if (it.optInt("channelId") == 5) return true;
         if (isAdult(it.optString("title"))) return true;
         JSONArray labels = it.optJSONArray("labels");
@@ -284,7 +291,6 @@ public class DuShe extends Spider {
     /**
      * 广告 / 外链位。搜索与列表都会混进来，特征是 id<=0、
      * url 指向 browser 外链、或 labels 里带 google 标记。
-     * 不过滤会在客户端显示成一条空白条目。
      */
     private static boolean isAd(JSONObject it) {
         if (it == null) return true;
@@ -333,8 +339,7 @@ public class DuShe extends Spider {
     private static JSONObject appInit() {
         if (sAppInit != null) return sAppInit;
         JSONObject o = api(HOST, "/v5/config/appInit.capi", null);
-        // 该接口响应顶层直接是 config/channelListQuery 等，没有 code 字段，
-        // 所以不能按 code==200 判断，改看关键字段是否就位
+        // 该接口响应顶层直接是 config/channelListQuery 等，没有 code 字段
         if (o != null && o.optJSONArray("channelListQuery") != null) {
             sAppInit = o;
         }
@@ -342,23 +347,23 @@ public class DuShe extends Spider {
     }
 
     /**
-     * 筛选项。CatVod 是按 type_id 取 filters 的，所以键必须是 class 里的
-     * type_id（如 "2_中国大陆"），不能直接用 channelId，否则带锁定的分类取不到。
+     * 筛选项。CatVod 按 type_id 取 filters，键必须是 class 里的 type_id
+     *（如 "2_中国大陆"），不能直接用 channelId。
      */
     private static JSONObject buildFilters() {
         JSONObject out = new JSONObject();
         JSONObject init = appInit();
         if (init == null) return out;
+
         JSONArray q = init.optJSONArray("channelListQuery");
         if (q == null) return out;
 
-        // channelId -> items，便于按 CATES 里的 type_id 反查
         Map<String, JSONArray> byCid = new LinkedHashMap<>();
         for (int i = 0; i < q.length(); i++) {
             JSONObject ch = q.optJSONObject(i);
             if (ch == null) continue;
             int cid = ch.optInt("channelId");
-            if (cid == 5) continue;  // 福利频道整源剔除
+            if (cid == 5) continue; // 福利频道整源剔除
             JSONArray items = ch.optJSONArray("items");
             if (items != null) byCid.put(String.valueOf(cid), items);
         }
@@ -369,28 +374,32 @@ public class DuShe extends Spider {
             String cid = lockArea ? tid.substring(0, tid.indexOf('_')) : tid;
             JSONArray items = byCid.get(cid);
             if (items == null) continue;
+
             try {
                 JSONArray fl = new JSONArray();
                 for (int j = 0; j < items.length(); j++) {
                     JSONObject it = items.optJSONObject(j);
                     if (it == null) continue;
                     String key = it.optString("query");
-                    // 地区被锁死的分类（国产剧）不再暴露地区筛选，避免选了不生效
+                    // 地区被锁死的分类（国产剧）不再暴露地区筛选
                     if (lockArea && "area".equals(key)) continue;
+
                     JSONArray data = it.optJSONArray("data");
                     if (data == null || data.length() == 0) continue;
+
                     JSONArray vals = new JSONArray();
                     for (int k = 0; k < data.length(); k++) {
                         JSONObject d = data.optJSONObject(k);
                         if (d == null) continue;
                         String name = d.optString("name");
-                        if (isAdult(name)) continue;   // 筛选项剔除成人子分类
+                        if (isAdult(name)) continue;
                         JSONObject v = new JSONObject();
                         v.put("n", name);
                         v.put("v", d.optString("id"));
                         vals.put(v);
                     }
                     if (vals.length() == 0) continue;
+
                     JSONObject f = new JSONObject();
                     f.put("key", key);
                     f.put("name", fname(key));
@@ -423,6 +432,7 @@ public class DuShe extends Spider {
             page = Integer.parseInt(pg);
         } catch (Exception ignored) {
         }
+
         String t = tid == null ? "" : tid;
         String lockedArea = "";
         if (t.contains("_")) {
@@ -442,11 +452,12 @@ public class DuShe extends Spider {
         List<Vod> vods = new ArrayList<>();
         int rawSize = 0;
         String next = "";
+
         JSONObject o = api(HOST, "/vod/channel/list.capi", p);
         if (o != null && o.optInt("code") == 200) {
             JSONObject d = o.optJSONObject("data");
             if (d != null) {
-                next = d.optString("next");   // 如 "page=2"，末页为空
+                next = d.optString("next");
                 JSONArray items = d.optJSONArray("items");
                 if (items != null) {
                     rawSize = items.length();
@@ -458,8 +469,8 @@ public class DuShe extends Spider {
                 }
             }
         }
-        // 翻页判断：接口直接给 next（如 "page=2"），末页为空。
-        // 过滤后的条数不能用来判断，必须用原始条数/next 字段。
+
+        // 翻页判断：必须用原始条数 / next 字段，不能用过滤后条数
         boolean more = !next.isEmpty() && rawSize > 0;
         SpiderDebug.log("[毒舌] category tid=" + tid + " pg=" + page
                 + " raw=" + rawSize + " out=" + vods.size() + " next=" + next);
@@ -492,11 +503,13 @@ public class DuShe extends Spider {
 
         Map<String, String> p = new LinkedHashMap<>();
         p.put("vodId", id);
+
         JSONObject o = api(HOST, "/v2/vod/detail.capi", p);
         if (o == null || o.optInt("code") != 200) {
             SpiderDebug.log("[毒舌] detail 失败 id=" + id);
             return "";
         }
+
         JSONObject d = o.optJSONObject("data");
         if (d == null) return "";
 
@@ -511,19 +524,18 @@ public class DuShe extends Spider {
         v.setVodActor(joinNames(d.optJSONArray("actors")));
         v.setVodDirector(joinNames(d.optJSONArray("directors")));
 
-        // 线路 + 剧集直链
         List<String> froms = new ArrayList<>();
         List<String> urls = new ArrayList<>();
+
         JSONArray sources = d.optJSONArray("playSources");
         if (sources != null) {
             for (int i = 0; i < sources.length(); i++) {
                 JSONObject s = sources.optJSONObject(i);
                 if (s == null) continue;
+
                 List<String> epList = new ArrayList<>();
                 JSONArray eps = s.optJSONArray("list");
-
                 if (eps != null && eps.length() > 0) {
-                    // detail 自带（默认选中那条线路才有）
                     for (int j = 0; j < eps.length(); j++) {
                         JSONObject ep = eps.optJSONObject(j);
                         if (ep == null) continue;
@@ -536,7 +548,6 @@ public class DuShe extends Spider {
                         epList.add(epName(ep, j) + "$" + link);
                     }
                 } else {
-                    // 其余线路是懒加载：靠 episodeVodId 单独拉
                     String ev = s.optString("episodeVodId");
                     if (ev.isEmpty()) continue;
                     JSONArray arr = episodesOf(s.optString("siteId"), ev);
@@ -550,20 +561,24 @@ public class DuShe extends Spider {
                         }
                     }
                 }
+
                 if (epList.isEmpty()) continue;
                 froms.add(s.optString("name"));
                 urls.add(join(epList, "#"));
             }
         }
+
         if (froms.isEmpty()) {
             SpiderDebug.log("[毒舌] detail 无可用线路 id=" + id);
             return "";
         }
+
         v.setVodPlayFrom(join(froms, "$$$"));
         v.setVodPlayUrl(join(urls, "$$$"));
 
         List<Vod> list = new ArrayList<>();
         list.add(v);
+
         SpiderDebug.log("[毒舌] detail id=" + id + " 线路=" + froms.size()
                 + " 首线路集数=" + urls.get(0).split("#").length);
         return Result.get().vod(list).string();
@@ -574,12 +589,7 @@ public class DuShe extends Spider {
         return name.isEmpty() ? ("第" + (idx + 1) + "集") : name;
     }
 
-    /**
-     * 拉某条线路的完整剧集。
-     * detail 只给默认选中线路的 list，其余 17 条都是空数组（懒加载），
-     * 必须用该线路的 episodeVodId + siteId 单独请求。
-     * 实测 18/18 条线路都能拿到完整剧集，每集都带 m3u8Url。
-     */
+    /** 拉某条线路的完整剧集（懒加载线路） */
     private static JSONArray episodesOf(String siteId, String episodeVodId) {
         Map<String, String> p = new LinkedHashMap<>();
         p.put("siteId", siteId);
@@ -625,8 +635,10 @@ public class DuShe extends Spider {
             SpiderDebug.log("[毒舌] search 失败 key=" + key);
             return "";
         }
+
         JSONObject d = o.optJSONObject("data");
         if (d == null) return "";
+
         JSONArray items = d.optJSONArray("items");
         List<Vod> vods = new ArrayList<>();
         if (items != null) {
@@ -635,6 +647,7 @@ public class DuShe extends Spider {
                 if (it == null || isAdultItem(it) || isAd(it)) continue;
                 String name = stripHtml(it.optString("title"));
                 if (isAdult(name)) continue;
+
                 Vod v = new Vod();
                 v.setVodId(String.valueOf(it.optInt("id")));
                 v.setVodName(name);
@@ -643,6 +656,7 @@ public class DuShe extends Spider {
                 vods.add(v);
             }
         }
+
         SpiderDebug.log("[毒舌] search key=" + key + " out=" + vods.size());
         return Result.get().vod(vods).string();
     }
@@ -660,9 +674,11 @@ public class DuShe extends Spider {
         o.put("parse", 0);
         o.put("playUrl", "");
         o.put("url", id);
+
         JSONObject h = new JSONObject();
         h.put("user-agent", UA);
         o.put("header", h.toString());
+
         SpiderDebug.log("[毒舌] play flag=" + flag + " url=" + id);
         return o.toString();
     }
