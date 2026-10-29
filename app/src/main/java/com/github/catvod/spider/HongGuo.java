@@ -137,8 +137,12 @@ public class HongGuo extends Spider {
     /** landing 一页条数（按接口 offset 分页推测，未完整验证） */
     private static final int PAGE_SIZE = 20;
 
-    /** 降级模式下 cell/change 一页攒几条（每条一次请求，别贪） */
-    private static final int FALLBACK_PAGE = 10;
+    /**
+     * 降级模式下 cell/change 一页攒几条。
+     * 这个接口一次只回 1 条，每条都是一次独立请求 —— 数量直接等于请求数。
+     * 实测高频请求会把服务端风控喂爆（连带详情/播放一起静默降级），所以压到 5。
+     */
+    private static final int FALLBACK_PAGE = 5;
 
     /** 成人向关键词：结果二次过滤 */
     private static final String[] ADULT_WORDS = {
@@ -307,18 +311,74 @@ public class HongGuo extends Spider {
         // 首选 landing（能按分类过滤）
         List<Vod> vods = categoryByLanding(cid, page);
         boolean usedLanding = vods != null;
+
         if (vods == null) {
-            // 降级：cell/change 只换一批，不分分类
-            vods = categoryByCell(page);
-            SpiderDebug.log("[红果] landing 不可用，降级 cell/change tid=" + cid + " pg=" + page);
+            // landing 不可用时的降级链。
+            // ★ 这里刻意不用「一页刷 N 次 cell/change」的老做法：那个接口一次只回 1 条，
+            //   凑 20 条要 20 次请求，实测正是这种高频把服务端风控喂爆、连带详情和播放
+            //   一起静默降级。所以第 1 页直接用 tab/v（1 次请求白拿 6 条），
+            //   后续页才用 cell/change，且只取 FALLBACK_PAGE 条。
+            if (page <= 1) {
+                vods = categoryByTab();
+                if (vods.isEmpty()) vods = categoryByCell(page);
+                SpiderDebug.log("[红果] landing 不可用，降级 tab/v tid=" + cid + " out=" + vods.size());
+            } else {
+                vods = categoryByCell(page);
+                SpiderDebug.log("[红果] landing 不可用，降级 cell/change tid=" + cid + " pg=" + page);
+            }
         }
         if (vods == null) vods = new ArrayList<>();
 
-        int total = page * PAGE_SIZE + (vods.size() >= PAGE_SIZE ? PAGE_SIZE : 0);
-        boolean more = vods.size() >= (usedLanding ? PAGE_SIZE : FALLBACK_PAGE);
+        int perPage = usedLanding ? PAGE_SIZE : FALLBACK_PAGE;
+        int total = page * perPage + (vods.size() >= perPage ? perPage : 0);
+        boolean more = vods.size() >= perPage;
         return Result.get().vod(vods)
                 .page(page, more ? page + 1 : page, vods.size(), total)
                 .string();
+    }
+
+    /**
+     * 降级方案一：从 tab/v 里白拿推荐流。
+     * tab/v 一次返回 52KB，里面 6 个「双列短剧」cell 各内嵌 1 条 video_data ——
+     * 也就是说 1 次请求就能拿 6 条，完全不用碰 cell/change。
+     * 代价：这 6 条是固定的推荐位（实测 4 次请求只出现 7 个不同 ID），翻页拿不到新内容。
+     */
+    private static List<Vod> categoryByTab() {
+        JSONObject root = parse(get("/reading/bookapi/bookmall/tab/v", null));
+        if (root == null) return new ArrayList<>();
+        List<Vod> out = new ArrayList<>();
+        try {
+            JSONArray tabs = root.getJSONObject("data").getJSONArray("tab_item");
+            for (int i = 0; i < tabs.length(); i++) {
+                JSONObject t = tabs.optJSONObject(i);
+                if (t == null || t.optInt("tab_type", -1) != 8) continue;
+                JSONArray cells = t.optJSONArray("cell_data");
+                if (cells == null || cells.length() == 0) continue;
+                JSONObject main = cells.optJSONObject(0);
+                if (main == null) continue;
+                // 顺便缓存 cell_id，省掉 ensureCellId() 那一次请求
+                String cid = main.optString("cell_id", "");
+                if (!cid.isEmpty() && !"0".equals(cid)) sCellId = cid;
+
+                JSONArray subs = main.optJSONArray("cell_data");
+                if (subs == null) continue;
+                for (int j = 0; j < subs.length(); j++) {
+                    JSONObject sub = subs.optJSONObject(j);
+                    if (sub == null) continue;
+                    JSONArray vd = sub.optJSONArray("video_data");
+                    if (vd == null) continue;
+                    for (int k = 0; k < vd.length(); k++) {
+                        JSONObject it = vd.optJSONObject(k);
+                        if (it == null) continue;
+                        Vod v = toVod(it);
+                        if (v != null) out.add(v);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[红果] tab 解析失败 " + e);
+        }
+        return out;
     }
 
     /**
@@ -396,6 +456,11 @@ public class HongGuo extends Spider {
             sCellSession = sid;
             sCellOffset = d.optString("next_offset", "0");
             if (!d.optBoolean("has_more", false)) break;
+            // 这个循环每次都是一次真实请求，节流一下，别让风控看到连发
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException ignored) {
+            }
         }
         sCellPage = page;
         SpiderDebug.log("[红果] cell 降级 pg=" + page + " out=" + out.size());
@@ -508,7 +573,10 @@ public class HongGuo extends Spider {
             String label = (title.length() > 0 && title.length() <= 12 && title.contains("第"))
                     ? title : ("第" + idx + "集");
             if (real > 0) playUrl.append('#');
-            playUrl.append(label).append('$').append(sid).append('|').append(vid);
+            // 分隔符用 '_' 而不是 '|'：CatVod 系客户端会把 URL 里的 '|' 当成
+            // 「url|header」的 header 分隔，导致播放地址被截断。
+            // series_id 和 vid 都是纯数字，用 '_' 没有歧义。
+            playUrl.append(label).append('$').append(sid).append('_').append(vid);
             real++;
         }
         if (real == 0) return "";
@@ -563,8 +631,8 @@ public class HongGuo extends Spider {
         String raw = id == null ? "" : id.trim();
         JSONObject out = new JSONObject();
 
-        // detailContent 里拼的是 "series_id|vid"
-        int bar = raw.indexOf('|');
+        // detailContent 里拼的是 "series_id_vid"（用 '_' 不用 '|'，理由见 detailContent）
+        int bar = raw.lastIndexOf('_');
         if (bar <= 0 || bar >= raw.length() - 1) {
             SpiderDebug.log("[红果] 播放参数格式不对 " + raw);
             out.put("parse", 1);
