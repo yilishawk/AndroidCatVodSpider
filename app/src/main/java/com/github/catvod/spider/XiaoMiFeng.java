@@ -572,7 +572,9 @@ public class XiaoMiFeng extends Spider {
                 String name = e.optString("name", "");
                 if (name.isEmpty()) name = "第" + (k + 1) + "集";
                 String idx = e.optString("episode_index", String.valueOf(k));
-                epList.add(name + "$" + id + "@" + idx + "@" + pidStr);
+                // 第4段是该源的 user_agent（co/qq/youku 为 "co"，其余为空），
+                // 实测 App 播放器会用这个值当 User-Agent 去拉视频，这里原样带给播放器
+                epList.add(name + "$" + id + "@" + idx + "@" + pidStr + "@" + s.optString("user_agent", ""));
             }
             if (epList.isEmpty()) continue;
             fromList.add(show);
@@ -609,18 +611,10 @@ public class XiaoMiFeng extends Spider {
             }
         }
 
-        // 服务端逐字模糊匹配，本地只留完全匹配；一个都没有时退回"包含"级，避免搜不到东西
+        // 服务端逐字模糊匹配，本地只留完全匹配；不相干的一律丢掉（凯哥要求）
         List<JSONObject> pick = new ArrayList<>();
         for (JSONObject it : cands) {
             if (exactHit(it.optString("vod_name"), key)) pick.add(it);
-        }
-        int mode = 0;
-        if (pick.isEmpty()) {
-            String k = norm(key);
-            for (JSONObject it : cands) {
-                if (norm(it.optString("vod_name")).contains(k)) pick.add(it);
-            }
-            mode = 1;
         }
 
         List<Vod> list = new ArrayList<>();
@@ -634,8 +628,7 @@ public class XiaoMiFeng extends Spider {
             v.setVodArea(it.optString("vod_area"));
             list.add(v);
         }
-        log("search " + key + " page=" + page + " 原始=" + cands.size()
-                + " 命中=" + list.size() + (mode == 1 ? "（退到包含级）" : "（完全匹配）"));
+        log("search " + key + " page=" + page + " 服务端=" + cands.size() + " 完全匹配=" + list.size());
         return Result.get().vod(list).string();
     }
 
@@ -651,10 +644,11 @@ public class XiaoMiFeng extends Spider {
             return r.string();
         }
 
-        // 占位 id: vod_id@episode_index@源id1;源id2;源id3...
+        // 占位 id: vod_id@episode_index@源id1;源id2;源id3...@user_agent
         String[] a = pid.split("@");
         if (a.length < 3 || a[2].isEmpty()) return Result.error("播放信息不完整");
         String vid = a[0], idx = a[1];
+        String ua = a.length > 3 ? a[3].trim() : "";
         String[] pids = a[2].split(";");
         String lastErr = "";
         for (String sid : pids) {
@@ -680,9 +674,11 @@ public class XiaoMiFeng extends Spider {
                         continue;
                     }
                     log("play vod=" + vid + " ep=" + idx + " 源=" + sid
-                            + " 跳转" + (real.equals(url) ? "0" : "1") + "次 → "
-                            + real.substring(0, Math.min(90, real.length())));
+                            + " 跳转" + (real.equals(url) ? "0" : "1") + "次 ua=" + (ua.isEmpty() ? "-" : ua)
+                            + " → " + real.substring(0, Math.min(90, real.length())));
                     Result r = Result.get().url(real);
+                    // 与 App 播放器一致：源声明了 user_agent 就带给播放器（co/qq/youku 为 "co"）
+                    if (!ua.isEmpty()) r.header(map("User-Agent", ua));
                     if (real.toLowerCase().contains("m3u8")) r.m3u8();
                     return r.string();
                 }
