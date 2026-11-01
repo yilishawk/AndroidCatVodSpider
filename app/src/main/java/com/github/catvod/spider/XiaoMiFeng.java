@@ -31,7 +31,7 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * 小蜜蜂影院 (com.vod.app1e80134b / com.toolboxvtwo.appleboxvtwo) CatVod 蜘蛛
  * <p>
- * 数据源: https://jiayehuizhan.com/api/vod/   （全部 POST + form，GET 一律 404）
+ * 数据源: https://jiayehuizhan.com/api/vod/  （全部 POST + form，GET 一律 404）
  * <p>
  * 接口（2026-11-01 MITM 实锤）:
  * init                 空 body              → type_list / banner_list / hot_search_list / week_list
