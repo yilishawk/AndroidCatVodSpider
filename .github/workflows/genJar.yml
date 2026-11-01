@@ -2,17 +2,36 @@ name: Spider Jar Gen CI (Simplified)
 
 on:
   push:
-    branches: 
+    branches:
       - "multiThread"
       - "Catvod"          # 新增 Catvod 分支触发
+    # 关键：本工作流自己提交的产物不再触发下一轮，切断"构建->提交->再构建"的自触发循环
+    paths-ignore:
+      - 'jar/custom_spider.jar'
+      - 'jar/custom_spider.jar.md5'
+      - 'json/index.json'
   workflow_dispatch:
+
+# 关键：同一分支的构建串行执行。避免两次构建同时往回提交，
+# 导致 GitHub Pages 报 "Deployment request failed ... due to in progress deployment"
+concurrency:
+  group: jar-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+# add-and-commit 需要写权限；不显式声明时若仓库默认是只读 token 会直接失败
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Current Repository
         uses: actions/checkout@v4
+        with:
+          # add-and-commit 需要完整历史，浅克隆偶尔会报 couldn't find remote ref
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -25,11 +44,25 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Custom Spider Jar
-        run: ./gradlew app:buildCustomSpiderJar
+        run: ./gradlew app:buildCustomSpiderJar --no-daemon
+
+      # 构建后立刻校验产物，缺文件就在这里报错，不要等到后面提交时才发现
+      - name: Verify jar and json exist
+        run: |
+          missing=0
+          for f in ./jar/custom_spider.jar ./jar/custom_spider.jar.md5 ./json/index.json; do
+            if [ -f "$f" ]; then
+              echo "OK   $f  $(wc -c < "$f") bytes"
+            else
+              echo "::error::构建后缺少 $f"
+              missing=1
+            fi
+          done
+          exit $missing
 
       # --- 提交到当前仓库 ---
       - name: Add & Commit to Current Repository
-        uses: EndBug/add-and-commit@v9.1.4
+        uses: EndBug/add-and-commit@v9
         with:
           default_author: github_actions
           message: 'update spider jar and json'
@@ -40,64 +73,46 @@ jobs:
         env:
           TARGET_PAT: ${{ secrets.TARGET_PAT }}
         run: |
-          echo "Preparing to push to target repository..."
+          set -e
+          if [ -z "$TARGET_PAT" ]; then
+            echo "::warning::TARGET_PAT 未配置，跳过推送到 js 仓库"
+            exit 0
+          fi
 
-          # 获取当前分支名，用于区分不同分支的构建产物
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           echo "Current branch: $BRANCH_NAME"
 
-          # 创建临时目录并克隆目标仓库
           mkdir -p target_repo
           cd target_repo
-          git clone https://x-access-token:${TARGET_PAT}@github.com/yilishawk/js.git .
+          git clone "https://x-access-token:${TARGET_PAT}@github.com/yilishawk/js.git" .
 
-          # 根据分支名创建或切换到对应子目录
-          # multiThread 分支的文件放到 spider/multiThread/ 下
-          # Catvod 分支的文件放到 spider/Catvod/ 下
+          # 目标仓库默认分支可能是 main 也可能是 master，动态取，不要硬编码
+          DEF_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Target default branch: $DEF_BRANCH"
+
           TARGET_DIR="spider/${BRANCH_NAME}"
           mkdir -p "$TARGET_DIR"
 
-          # 复制需要推送的文件到对应分支目录
-          cp ../jar/custom_spider.jar "$TARGET_DIR/" 2>/dev/null || echo "Warning: custom_spider.jar not found"
-          cp ../jar/custom_spider.jar.md5 "$TARGET_DIR/" 2>/dev/null || echo "Warning: md5 file not found"
-          cp ../json/index.json "$TARGET_DIR/" 2>/dev/null || echo "Warning: index.json not found"
+          cp ../jar/custom_spider.jar "$TARGET_DIR/" 2>/dev/null || echo "::warning::custom_spider.jar not found"
+          cp ../jar/custom_spider.jar.md5 "$TARGET_DIR/" 2>/dev/null || echo "::warning::md5 not found"
+          cp ../json/index.json "$TARGET_DIR/" 2>/dev/null || echo "::warning::index.json not found"
 
-          # 也可以额外在根目录放一份最新版本（带分支后缀）
-          # 取消注释下面几行可以启用
-          # cp ../jar/custom_spider.jar "./custom_spider_${BRANCH_NAME}.jar" 2>/dev/null || true
-          # cp ../jar/custom_spider.jar.md5 "./custom_spider_${BRANCH_NAME}.jar.md5" 2>/dev/null || true
-          # cp ../json/index.json "./index_${BRANCH_NAME}.json" 2>/dev/null || true
-
-          # 提交并推送
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
           git add -A
-          git commit -m "Update spider jar and json from ${BRANCH_NAME} branch" || echo "No changes to commit"
-          git push origin main || git push origin master
-        continue-on-error: true
-
-      # --- 保留原来的 Artifact 下载，加上分支标识便于区分 ---
-      - name: Find Jar path
-        id: find_jar
-        run: |
-          JAR_PATH="./jar/custom_spider.jar"
-          if [ -f "$JAR_PATH" ]; then
-            echo "JAR_PATH=$JAR_PATH" >> $GITHUB_OUTPUT
-          else
-            BUILT_JAR=$(find . -path "*/app/build/libs/custom_spider.jar" -type f -print | head -n 1)
-            if [ -n "$BUILT_JAR" ]; then
-                echo "Found built jar at: $BUILT_JAR"
-                echo "JAR_PATH=$BUILT_JAR" >> $GITHUB_OUTPUT
-            else
-                echo "::error::Jar file not found after build."
-                exit 1
-            fi
+          if git diff --cached --quiet; then
+            echo "目标仓库内容无变化，跳过提交"
+            exit 0
           fi
+
+          git commit -m "Update spider jar and json from ${BRANCH_NAME} branch"
+          git push origin "$DEF_BRANCH"
+        continue-on-error: true
 
       - name: Upload Jar Artifact for Download
         uses: actions/upload-artifact@v4
         with:
-          name: Custom-Spider-Jar-${{ github.ref_name }}   # 添加分支名到 artifact 名称
-          path: ${{ steps.find_jar.outputs.JAR_PATH }}
+          name: Custom-Spider-Jar-${{ github.ref_name }}
+          path: ./jar/custom_spider.jar
           retention-days: 7
