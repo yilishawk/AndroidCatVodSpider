@@ -45,7 +45,7 @@ import javax.crypto.spec.SecretKeySpec;
  * 响应: {"code":0,"msg":"","data":"<AES-128-CBC 密文 Base64>"}
  * 密钥: key = IV = egTS6uiHDdpVUJAc（libnmmp.so 静态爆破坐实，明文可逆）
  * <p>
- * 播放链路: vodDetail 下发的 urls[].url 恒为空，必须再调 vodParse 拿 m3u8 直链。
+ * 播放链路: vodDetail 下发的 urls[].url 恒为空， 必须再调 vodParse 拿 m3u8 直链。
  * player_source_id 取 player_source_list[].id（不是 player_code，传 code 服务端回"参数错误"）。
  * <p>
  * 线路顺序（凯哥 2026-11-01 指定）：4K蓝光 → 采集直链(jx_type=0) → 官网解析(jx_type=1)。
