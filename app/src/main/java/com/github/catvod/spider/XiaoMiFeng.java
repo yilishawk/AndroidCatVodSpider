@@ -639,7 +639,8 @@ public class XiaoMiFeng extends Spider {
         if (id == null || id.trim().isEmpty()) return Result.error("播放地址为空");
         String pid = id.trim();
         if (pid.startsWith("http")) {
-            Result r = Result.get().url(pid);
+            // 已经是直链：parse=0 直接丢给壳子播，不走解析
+            Result r = Result.get().url(pid).parse(0);
             if (pid.contains("m3u8")) r.m3u8();
             return r.string();
         }
@@ -676,7 +677,8 @@ public class XiaoMiFeng extends Spider {
                     log("play vod=" + vid + " ep=" + idx + " 源=" + sid
                             + " 跳转" + (real.equals(url) ? "0" : "1") + "次 ua=" + (ua.isEmpty() ? "-" : ua)
                             + " → " + real.substring(0, Math.min(90, real.length())));
-                    Result r = Result.get().url(real);
+                    // 真实直链 + parse=0：壳子拿到就直接起播，不再走它自己的解析
+                    Result r = Result.get().url(real).parse(0);
                     // 与 App 播放器一致：源声明了 user_agent 就带给播放器（co/qq/youku 为 "co"）
                     if (!ua.isEmpty()) r.header(map("User-Agent", ua));
                     if (real.toLowerCase().contains("m3u8")) r.m3u8();
