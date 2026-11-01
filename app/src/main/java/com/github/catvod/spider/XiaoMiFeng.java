@@ -49,7 +49,7 @@ import javax.crypto.spec.SecretKeySpec;
  * player_source_id 取 player_source_list[].id（不是 player_code，传 code 服务端回"参数错误"）。
  * <p>
  * 线路顺序（凯哥 2026-11-01 指定）：4K蓝光 → 采集直链(jx_type=0) → 官网解析(jx_type=1)。
- * 官网解析源返回的 play_url 一律先 302 到 *.sviptq.com，且该 CDN 把 m3u8 的 Content-Type
+ * 官网解析源返回的 play_url 一律先 302 到 *.sviptq.com，且该 CDN 把m3u8 的 Content-Type
  * 错标成 image/png，播放器不跟跳转就会"拿不到真实地址" —— 这里在 resolve() 里提前走完跳转。
  * <p>
  * 搜索: 服务端逐字模糊匹配（搜"庆余年"会回"陈泰庆""庆元宵"），本地按 exactHit() 只留完全匹配。
