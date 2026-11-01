@@ -13,6 +13,9 @@ import com.github.catvod.net.OkResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -44,6 +47,12 @@ import javax.crypto.spec.SecretKeySpec;
  * <p>
  * 播放链路: vodDetail 下发的 urls[].url 恒为空，必须再调 vodParse 拿 m3u8 直链。
  * player_source_id 取 player_source_list[].id（不是 player_code，传 code 服务端回"参数错误"）。
+ * <p>
+ * 线路顺序（凯哥 2026-11-01 指定）：4K蓝光 → 采集直链(jx_type=0) → 官网解析(jx_type=1)。
+ * 官网解析源返回的 play_url 一律先 302 到 *.sviptq.com，且该 CDN 把 m3u8 的 Content-Type
+ * 错标成 image/png，播放器不跟跳转就会"拿不到真实地址" —— 这里在 resolve() 里提前走完跳转。
+ * <p>
+ * 搜索: 服务端逐字模糊匹配（搜"庆余年"会回"陈泰庆""庆元宵"），本地按 exactHit() 只留完全匹配。
  * <p>
  * 站点 ext 可覆盖：{"host":"https://jiayehuizhan.com/api/vod","deviceId":"32位hex"}
  */
@@ -86,6 +95,24 @@ public class XiaoMiFeng extends Spider {
     private static final String[] BLOCK = {
             "色情", "情色", "成人片", "三级片", "伦理片", "男同", "女同", "同性", "淫", "裸体", "AV片", "福利"
     };
+
+    /**
+     * 线路排序权重（2026-11-01 实测 743 个播放源得出）：
+     * <p>
+     * jx_type=0 → 采集直链（jsm3u8 极速云 / bfzym3u8 暴风），各 CDN 直连 200，播放稳。
+     * jx_type=1 → 官网解析（co 4K蓝光 / qiyi / qq / youku / mgtv / bilibili），
+     * play_url 先 302 到 *.sviptq.com，且该 CDN 把 m3u8 的 Content-Type 错标成 image/png，
+     * 播放器不跟跳转或按类型判定就会"拿不到真实地址"。
+     * <p>
+     * 所以：4K蓝光最前（凯哥指定）→ 采集直链 → 官网解析垫底。
+     */
+    private static int lineRank(JSONObject s) {
+        String code = s.optString("player_code", "");
+        String name = s.optString("player_name", "");
+        if ("co".equals(code) || name.contains("4K") || name.contains("蓝光")) return 0;
+        if (s.optInt("jx_type", 0) == 0) return 1;
+        return 2;
+    }
 
     private String host = DEFAULT_HOST;
     private String deviceId = DEFAULT_DEVICE;
@@ -196,6 +223,82 @@ public class XiaoMiFeng extends Spider {
         } catch (Exception e) {
             return def;
         }
+    }
+
+    /**
+     * 把 302 跳转链提前走完，直接给播放器一个 200 的最终地址。
+     * <p>
+     * 官网解析源（co/qiyi/qq/youku/mgtv/bilibili）返回的 play_url 一律先 302 到 *.sviptq.com，
+     * 且该 CDN 把 m3u8 的 Content-Type 错标成 image/png —— 播放器不跟跳转或按类型判定就会
+     * 报"拿不到真实地址"。这里自己跟完跳转，并顺手校验正文确实是 #EXTM3U。
+     *
+     * @return 最终地址；正文不是播放列表（或跳转失败）时返回 ""，由调用方换下一个源
+     */
+    private String resolve(String url) {
+        String cur = url;
+        for (int hop = 0; hop < 5; hop++) {
+            HttpURLConnection c = null;
+            try {
+                URL u = new URL(cur);
+                c = (HttpURLConnection) u.openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setConnectTimeout(6000);
+                c.setReadTimeout(8000);
+                c.setRequestMethod("GET");
+                c.setRequestProperty("User-Agent", UA);
+                c.setRequestProperty("Accept", "*/*");
+                int code = c.getResponseCode();
+                if (code >= 300 && code < 400) {
+                    String loc = c.getHeaderField("Location");
+                    if (loc == null || loc.trim().isEmpty()) break;
+                    cur = new URL(u, loc.trim()).toString();
+                    continue;
+                }
+                // 落到 200：只对 m3u8 做一次正文嗅探，CDN 的 Content-Type 不可信
+                if (code == 200 && cur.toLowerCase().contains("m3u8")) {
+                    InputStream in = c.getInputStream();
+                    byte[] b = new byte[8];
+                    int n = 0;
+                    try {
+                        n = in.read(b);
+                    } finally {
+                        in.close();
+                    }
+                    if (n >= 7 && !new String(b, 0, n, "UTF-8").startsWith("#EXTM3U")) {
+                        log("resolve 正文不是播放列表: " + cur.substring(0, Math.min(70, cur.length())));
+                        return "";
+                    }
+                }
+                break;
+            } catch (Exception e) {
+                log("resolve 失败（用原地址）: " + e);
+                break;
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        return cur;
+    }
+
+    /** 去掉空白与标点，用于片名比对 */
+    private static String norm(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[\\s\\u3000·・:：!！?？,，.。'\"“”‘’\\-—_()（）\\[\\]【】《》<>~～]", "").toLowerCase();
+    }
+
+    /**
+     * 完全匹配：片名与关键词一致，或只差一个季/部/集后缀（庆余年 vs 庆余年第二季）。
+     * 服务端是逐字模糊匹配（搜"庆余年"会回"陈泰庆""庆元宵"），必须本地再筛一遍。
+     */
+    private static boolean exactHit(String name, String key) {
+        String n = norm(name), k = norm(key);
+        if (k.isEmpty()) return true;
+        if (n.equals(k)) return true;
+        if (!n.startsWith(k)) return false;
+        String rest = n.substring(k.length());
+        return rest.isEmpty()
+                || rest.matches("^(第)?[0-9一二三四五六七八九十]+(季|部|集|期)?$")
+                || rest.matches("^[ivx]+$");
     }
 
     private static boolean isAdult(JSONObject o) {
@@ -417,6 +520,8 @@ public class XiaoMiFeng extends Spider {
         Collections.sort(sources, new Comparator<JSONObject>() {
             @Override
             public int compare(JSONObject a, JSONObject b) {
+                int ra = lineRank(a), rb = lineRank(b);
+                if (ra != rb) return ra - rb;
                 return toInt(a.optString("sort", "99"), 99) - toInt(b.optString("sort", "99"), 99);
             }
         });
@@ -492,25 +597,45 @@ public class XiaoMiFeng extends Spider {
         int page = toInt(pg, 1);
         // 参数名是 keywords（复数）；传 keyword / wd 不报错但返回空列表
         JSONObject d = api("searchList", map("keywords", key, "page", String.valueOf(page)));
-        List<Vod> list = new ArrayList<>();
+        List<JSONObject> cands = new ArrayList<>();
         if (d != null) {
             JSONArray arr = d.optJSONArray("search_list");
             if (arr != null) {
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject it = arr.optJSONObject(i);
-                    if (isAdult(it)) continue;
-                    Vod v = new Vod();
-                    v.setVodId(it.optString("vod_id"));
-                    v.setVodName(it.optString("vod_name"));
-                    v.setVodPic(it.optString("vod_pic"));
-                    v.setVodRemarks(it.optString("vod_remarks"));
-                    v.setVodYear(it.optString("vod_year"));
-                    v.setVodArea(it.optString("vod_area"));
-                    list.add(v);
+                    if (it == null || isAdult(it)) continue;
+                    cands.add(it);
                 }
             }
         }
-        log("search " + key + " page=" + page + " n=" + list.size());
+
+        // 服务端逐字模糊匹配，本地只留完全匹配；一个都没有时退回"包含"级，避免搜不到东西
+        List<JSONObject> pick = new ArrayList<>();
+        for (JSONObject it : cands) {
+            if (exactHit(it.optString("vod_name"), key)) pick.add(it);
+        }
+        int mode = 0;
+        if (pick.isEmpty()) {
+            String k = norm(key);
+            for (JSONObject it : cands) {
+                if (norm(it.optString("vod_name")).contains(k)) pick.add(it);
+            }
+            mode = 1;
+        }
+
+        List<Vod> list = new ArrayList<>();
+        for (JSONObject it : pick) {
+            Vod v = new Vod();
+            v.setVodId(it.optString("vod_id"));
+            v.setVodName(it.optString("vod_name"));
+            v.setVodPic(it.optString("vod_pic"));
+            v.setVodRemarks(it.optString("vod_remarks"));
+            v.setVodYear(it.optString("vod_year"));
+            v.setVodArea(it.optString("vod_area"));
+            list.add(v);
+        }
+        log("search " + key + " page=" + page + " 原始=" + cands.size()
+                + " 命中=" + list.size() + (mode == 1 ? "（退到包含级）" : "（完全匹配）"));
         return Result.get().vod(list).string();
     }
 
@@ -547,9 +672,18 @@ public class XiaoMiFeng extends Spider {
                 }
                 String url = d.optString("play_url", "");
                 if (url.startsWith("http")) {
-                    log("play vod=" + vid + " ep=" + idx + " 源=" + sid + " → " + url.substring(0, Math.min(90, url.length())));
-                    Result r = Result.get().url(url);
-                    if (url.contains("m3u8")) r.m3u8();
+                    // 官网解析源一律 302 到 sviptq.com 且 Content-Type 被错标成 image/png，
+                    // 这里提前走完跳转，给播放器一个直连地址
+                    String real = resolve(url);
+                    if (real.isEmpty()) {
+                        lastErr = "源" + sid + "解析结果不可用";
+                        continue;
+                    }
+                    log("play vod=" + vid + " ep=" + idx + " 源=" + sid
+                            + " 跳转" + (real.equals(url) ? "0" : "1") + "次 → "
+                            + real.substring(0, Math.min(90, real.length())));
+                    Result r = Result.get().url(real);
+                    if (real.toLowerCase().contains("m3u8")) r.m3u8();
                     return r.string();
                 }
                 // 解析池空转会返回错误页，跳过换下一个源
