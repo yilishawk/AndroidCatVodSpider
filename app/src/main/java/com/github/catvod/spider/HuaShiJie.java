@@ -1,13 +1,17 @@
 package com.github.catvod.spider;
 
+import android.content.Context;
+
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.net.OkResult;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -15,7 +19,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 /**
  * 华视界影视 (huasj.mobile.com) CatVod 蜘蛛
@@ -28,7 +31,6 @@ import java.util.regex.Pattern;
  * v2.vod/androiddetail        vod_id                    → data.{...,urls:[{type,key,url}]}
  * v2.vod/androidsearch10086   wd+page                   → 列表
  * v2.main/androidhome         无参                      → 首页推荐（壳子定制不要推荐流，忽略）
- * </p>
  * <p>
  * 关键事实（实测）:
  * 1. 全部明文 GET，无签名无加密。UA 用 okhttp/5.0.0-alpha.14 复现抓包。
@@ -37,13 +39,10 @@ import java.util.regex.Pattern;
  *    统一处理: 单条当整部；多条数字 key 当分集（同一 CDN 线路）。
  * 4. androidfilter 的 data 是数组、无 total/pageinfo，只能用"本页是否满 20 条"推下一页。
  * 5. area=大陆 / year=2025 等筛选参数实测生效。
- * </p>
  * <p>
  * 定制（凯哥 2026-11-01 指定）: 首页不要推荐流（list 恒 []）；国产剧置顶并锁 area=大陆；
  * 过滤成人内容；搜索完全匹配（服务端逐字模糊，本地再筛一遍）。
- * </p>
  */
-
 public class HuaShiJie extends Spider {
 
     private static final String BASE = "https://api.huashijie.tv/api.php";
@@ -82,6 +81,7 @@ public class HuaShiJie extends Spider {
     private JSONObject typeExtendCache;
 
     // ==================== 生命周期 ====================
+
     @Override
     public void init(Context context, String extend) throws Exception {
         if (extend == null || extend.trim().isEmpty()) return;
@@ -96,6 +96,7 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 基础设施 ====================
+
     private void log(String msg) {
         try {
             SpiderDebug.log("[华视界] " + msg);
@@ -109,7 +110,7 @@ public class HuaShiJie extends Spider {
         return h;
     }
 
-    /** GET 请求并取 data 段；data 为数组时包成 {list:[]}, 为对象时原样返回；失败返回 null */
+    /** GET 请求并取 data 段；data 为数组时包成 {list:[]}，为对象时原样返回；失败返回 null */
     private JSONObject getJson(String path, Map<String, String> params) {
         try {
             OkResult res = OkHttp.get(host + path,
@@ -194,17 +195,33 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 分类 / 筛选 ====================
+
     private JSONObject typeExtend() {
         if (typeExtendCache != null) return typeExtendCache;
+        JSONObject out = new JSONObject();
         JSONObject d = getJson("/v2.vod/androidtypes", null);
         if (d == null) {
-            log("androidtypes 失败，降级为空");
-            typeExtendCache = new JSONObject();
-            return typeExtendCache;
+            log("androidtypes 失败，筛选项降级为空");
+            typeExtendCache = out;
+            return out;
         }
-        typeExtendCache = d;
-        log("androidtypes 加载完成，包含真实分类标题");
-        return typeExtendCache;
+        JSONArray arr = d.optJSONArray("list");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject t = arr.optJSONObject(i);
+                if (t == null) continue;
+                String tid = t.optString("type_id", "");
+                if (tid.isEmpty()) continue;
+                JSONObject ext = new JSONObject();
+                ext.put("classes", t.optJSONArray("classes"));
+                ext.put("areas", t.optJSONArray("areas"));
+                ext.put("years", t.optJSONArray("years"));
+                out.put(tid, ext);
+            }
+        }
+        typeExtendCache = out;
+        log("androidtypes 加载完成，共 " + out.length() + " 个分类");
+        return out;
     }
 
     private static JSONArray toVals(JSONArray src) {
@@ -229,38 +246,26 @@ public class HuaShiJie extends Spider {
     private JSONObject buildFilters() {
         JSONObject out = new JSONObject();
         JSONObject types = typeExtend();
-        JSONArray typeList = types.optJSONArray("list");
         try {
-            if (typeList == null) {
-                log("androidtypes list 为 null，使用硬编码分类");
-                for (String[] c : CATES) {
-                    JSONObject ext = new JSONObject();
-                    ext.put("classes", new JSONArray());
-                    ext.put("areas", new JSONArray());
-                    ext.put("years", new JSONArray());
-                    out.put(c[0], ext);
-                }
-                return out;
-            }
-            for (int i = 0; i < typeList.length(); i++) {
-                JSONObject t = typeList.optJSONObject(i);
-                if (t == null) continue;
-                String tid = t.optString("type_id", "");
-                if (tid.isEmpty()) continue;
-                JSONObject ext = new JSONObject();
-                ext.put("classes", t.optJSONArray("classes"));
-                ext.put("areas", t.optJSONArray("areas"));
-                ext.put("years", t.optJSONArray("years"));
+            for (String[] c : CATES) {
+                String tid = c[0];
+                boolean locked = tid.contains("_");
+                String base = locked ? tid.substring(0, tid.indexOf('_')) : tid;
+                JSONObject ext = types.optJSONObject(base);
                 JSONArray dims = new JSONArray();
-                for (String[] dn : DIM) {
-                    String key = dn[0];
-                    JSONArray src = ext.optJSONArray(key + "es");
-                    if (src == null || src.length() == 0) continue;
-                    JSONObject dim = new JSONObject();
-                    dim.put("key", key);
-                    dim.put("name", dn[1]);
-                    dim.put("value", toVals(src));
-                    dims.put(dim);
+                if (ext != null) {
+                    for (String[] dn : DIM) {
+                        String key = dn[0];
+                        // 国产剧频道已锁地区，不再给地区维度
+                        if (locked && "area".equals(key)) continue;
+                        JSONArray src = ext.optJSONArray(key + "es"); // classes / areas / years
+                        if (src == null || src.length() == 0) continue;
+                        JSONObject dim = new JSONObject();
+                        dim.put("key", key);
+                        dim.put("name", dn[1]);
+                        dim.put("value", toVals(src));
+                        dims.put(dim);
+                    }
                 }
                 out.put(tid, dims);
             }
@@ -271,40 +276,29 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 首页 ====================
+
     @Override
     public String homeContent(boolean filter) throws Exception {
+        // 凯哥定制: 首页不要推荐流，只给分类 + 筛选项。
+        // 返回体走真实 Result API: class[] 键名 type_id/type_name（壳子 Gson 按 @SerializedName 读回），
+        // filters 为 org.json JSONObject（Gson 文本出口下与 GuaZi/DuShe 手拼逐字一致，壳子已验证可显示标题）。
         JSONArray classes = new JSONArray();
-        JSONObject typesJson = typeExtend();
-        JSONArray typeList = typesJson.optJSONArray("list");
-        if (typeList != null) {
-            for (int i = 0; i < typeList.length(); i++) {
-                JSONObject t = typeList.optJSONObject(i);
-                if (t == null) continue;
-                String tid = t.optString("type_id", "");
-                String tname = t.optString("type_name", tid);
-                if (tname.isEmpty()) tname = tid;
-                JSONObject o = new JSONObject();
-                o.put("type_id", tid);
-                o.put("type_name", tname);
-                classes.put(o);
-            }
-        } else {
-            for (String[] c : CATES) {
-                JSONObject o = new JSONObject();
-                o.put("type_id", c[0]);
-                o.put("type_name", c[1]);
-                classes.put(o);
-            }
+        for (String[] c : CATES) {
+            JSONObject o = new JSONObject();
+            o.put("type_id", c[0]);
+            o.put("type_name", c[1]);
+            classes.put(o);
         }
-        // 凯哥定制: 首页不要推荐流，只给分类 + 筛选项
         JSONObject root = new JSONObject();
         root.put("class", classes);
         root.put("filters", buildFilters());
         root.put("list", new JSONArray());
+        log("homeContent class=" + classes.length() + " filters分类数=" + root.optJSONObject("filters").length());
         return root.toString();
     }
 
     // ==================== 列表 ====================
+
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend)
             throws Exception {
@@ -315,10 +309,12 @@ public class HuaShiJie extends Spider {
             forcedArea = tid.substring(tid.indexOf('_') + 1);
         }
         int page = toInt(pg, 1);
+
         Map<String, String> p = new LinkedHashMap<>();
         p.put("type_id", type);
         p.put("page", String.valueOf(page));
         if (forcedArea != null) p.put("area", forcedArea);
+
         if (extend != null) {
             for (String k : new String[]{"class", "area", "year"}) {
                 if (forcedArea != null && "area".equals(k)) continue;
@@ -326,6 +322,7 @@ public class HuaShiJie extends Spider {
                 if (v != null && !v.trim().isEmpty() && !"全部".equals(v.trim())) p.put(k, v.trim());
             }
         }
+
         JSONObject d = getJson("/v2.vod/androidfilter", p);
         List<Vod> list = new ArrayList<>();
         if (d != null) {
@@ -358,14 +355,17 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 详情 ====================
+
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return "";
         String id = ids.get(0).trim();
         JSONObject d = getJson("/v2.vod/androiddetail", map("vod_id", id));
         if (d == null) return "";
+
         String name = d.optString("name", "");
         if (isAdult(name, d.optString("className", ""))) return "";
+
         Vod v = new Vod();
         v.setVodId(d.optString("id", id));
         v.setVodName(name);
@@ -380,6 +380,7 @@ public class HuaShiJie extends Spider {
         String content = d.optString("content", "").replaceAll("<[^>]+>", "").trim();
         v.setVodContent(content);
         v.setVodRemarks(d.optString("state"));
+
         // urls[]: 电影 1 条（整部）、连续剧 N 条（集号 key，每集 m3u8）。统一当单 CDN 线路处理。
         List<String> epList = new ArrayList<>();
         JSONArray urls = d.optJSONArray("urls");
@@ -404,6 +405,7 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 搜索 ====================
+
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -431,6 +433,7 @@ public class HuaShiJie extends Spider {
         for (JSONObject it : cands) {
             if (exactHit(it.optString("name"), key)) pick.add(it);
         }
+
         List<Vod> list = new ArrayList<>();
         for (JSONObject it : pick) {
             Vod v = new Vod();
@@ -448,6 +451,7 @@ public class HuaShiJie extends Spider {
     }
 
     // ==================== 播放 ====================
+
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (id == null || id.trim().isEmpty()) return Result.error("播放地址为空");
