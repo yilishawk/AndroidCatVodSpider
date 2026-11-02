@@ -1,7 +1,5 @@
 package com.github.catvod.spider;
 
-import android.content.Context;
-
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -19,6 +17,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 华视界影视 (huasj.mobile.com) CatVod 蜘蛛
@@ -253,19 +252,18 @@ public class HuaShiJie extends Spider {
                 String base = locked ? tid.substring(0, tid.indexOf('_')) : tid;
                 JSONObject ext = types.optJSONObject(base);
                 JSONArray dims = new JSONArray();
-                if (ext != null) {
-                    for (String[] dn : DIM) {
-                        String key = dn[0];
-                        // 国产剧频道已锁地区，不再给地区维度
-                        if (locked && "area".equals(key)) continue;
-                        JSONArray src = ext.optJSONArray(key + "es"); // classes / areas / years
-                        if (src == null || src.length() == 0) continue;
-                        JSONObject dim = new JSONObject();
-                        dim.put("key", key);
-                        dim.put("name", dn[1]);
-                        dim.put("value", toVals(src));
-                        dims.put(dim);
-                    }
+                for (String[] dn : DIM) {
+                    String key = dn[0];
+                    // 国产剧频道已锁地区，不再给地区维度
+                    if (locked && "area".equals(key)) continue;
+                    if (ext == null) continue;
+                    JSONArray src = ext.optJSONArray(key + "es"); // classes / areas / years
+                    if (src == null || src.length() == 0) continue;
+                    JSONObject dim = new JSONObject();
+                    dim.put("key", key);
+                    dim.put("name", dn[1]);
+                    dim.put("value", toVals(src));
+                    dims.put(dim);
                 }
                 out.put(tid, dims);
             }
@@ -279,9 +277,6 @@ public class HuaShiJie extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        // 凯哥定制: 首页不要推荐流，只给分类 + 筛选项。
-        // 返回体走真实 Result API: class[] 键名 type_id/type_name（壳子 Gson 按 @SerializedName 读回），
-        // filters 为 org.json JSONObject（Gson 文本出口下与 GuaZi/DuShe 手拼逐字一致，壳子已验证可显示标题）。
         JSONArray classes = new JSONArray();
         for (String[] c : CATES) {
             JSONObject o = new JSONObject();
@@ -289,11 +284,11 @@ public class HuaShiJie extends Spider {
             o.put("type_name", c[1]);
             classes.put(o);
         }
+        // 凯哥定制: 首页不要推荐流，只给分类 + 筛选项
         JSONObject root = new JSONObject();
         root.put("class", classes);
         root.put("filters", buildFilters());
         root.put("list", new JSONArray());
-        log("homeContent class=" + classes.length() + " filters分类数=" + root.optJSONObject("filters").length());
         return root.toString();
     }
 
