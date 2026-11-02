@@ -15,11 +15,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 华视界影视 (huasj.mobile.com) CatVod 蜘蛛
- * 接口已实锤：https://api.huashijie.tv/api.php/v2.vod/androidtypes
- * 所有分类标题、筛选维度、年份均来自接口真实返回
- */
 public class HuaShiJie extends Spider {
 
     private static final String BASE = "https://api.huashijie.tv/api.php";
@@ -41,7 +36,6 @@ public class HuaShiJie extends Spider {
         } catch (Exception ignored) {}
     }
 
-    // ==================== 基础设施 ====================
     private void log(String msg) {
         try { SpiderDebug.log("[华视界] " + msg); } catch (Exception ignored) {}
     }
@@ -80,7 +74,13 @@ public class HuaShiJie extends Spider {
 
         JSONObject d = getJson("/v2.vod/androidtypes", null);
         typeExtendCache = d == null ? new JSONObject() : d;
-        log("androidtypes 加载完成，包含真实分类标题");
+
+        JSONArray list = typeExtendCache.optJSONArray("list");
+        if (list != null && list.length() > 0) {
+            log("✅ androidtypes 加载成功，共 " + list.length() + " 个分类");
+        } else {
+            log("⚠️ androidtypes 返回为空，使用降级");
+        }
         return typeExtendCache;
     }
 
@@ -90,6 +90,7 @@ public class HuaShiJie extends Spider {
         all.put("n", "全部");
         all.put("v", "");
         vals.put(all);
+
         if (src != null) {
             for (int i = 0; i < src.length(); i++) {
                 String v = src.optString(i, "");
@@ -108,10 +109,7 @@ public class HuaShiJie extends Spider {
         JSONObject types = typeExtend();
         JSONArray typeList = types.optJSONArray("list");
 
-        if (typeList == null) {
-            log("androidtypes list 为 null，使用降级");
-            return out;
-        }
+        if (typeList == null) return out;
 
         for (int i = 0; i < typeList.length(); i++) {
             JSONObject t = typeList.optJSONObject(i);
@@ -136,7 +134,6 @@ public class HuaShiJie extends Spider {
         return out;
     }
 
-    // ==================== 首页 ====================
     @Override
     public String homeContent(boolean filter) throws Exception {
         JSONArray classes = new JSONArray();
@@ -157,7 +154,7 @@ public class HuaShiJie extends Spider {
                 classes.put(o);
             }
         } else {
-            // fallback
+            // 降级硬编码（仅作为最后备用）
             classes.put(new JSONObject().put("type_id", "1").put("type_name", "电影"));
             classes.put(new JSONObject().put("type_id", "2").put("type_name", "连续剧"));
             classes.put(new JSONObject().put("type_id", "3").put("type_name", "综艺"));
@@ -171,7 +168,6 @@ public class HuaShiJie extends Spider {
         return root.toString();
     }
 
-    // ==================== 列表页 ====================
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend)
             throws Exception {
@@ -209,9 +205,7 @@ public class HuaShiJie extends Spider {
                     v.setVodId(it.optString("id"));
                     v.setVodName(name);
                     v.setVodPic(it.optString("pic"));
-                    String year = it.optString("year", "");
-                    v.setVodRemarks(year);
-                    v.setVodYear(year);
+                    v.setVodYear(it.optString("year"));
                     v.setVodArea(it.optString("area"));
                     list.add(v);
                 }
@@ -224,7 +218,6 @@ public class HuaShiJie extends Spider {
         return Result.get().vod(list).page(page, pageCount, PAGE_SIZE, total).string();
     }
 
-    // ==================== 详情页 ====================
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return "";
@@ -263,7 +256,6 @@ public class HuaShiJie extends Spider {
         return Result.get().vod(v).string();
     }
 
-    // ==================== 搜索 ====================
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
@@ -294,7 +286,6 @@ public class HuaShiJie extends Spider {
         return Result.get().vod(list).string();
     }
 
-    // ==================== 播放 ====================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (id == null || id.trim().isEmpty()) return Result.error("播放地址为空");
