@@ -1,5 +1,7 @@
 package com.github.catvod.spider;
 
+import android.content.Context;
+
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -17,7 +19,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 /**
  * 华视界影视 (huasj.mobile.com) CatVod 蜘蛛
