@@ -1,395 +1,311 @@
 package com.github.catvod.spider;
 
-import android.content.Context;
 import android.text.TextUtils;
-import android.util.Log;
 
+import com.github.catvod.bean.Class;
+import com.github.catvod.bean.Filter;
+import com.github.catvod.bean.Result;
+import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
 
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
+/**
+ * 华视界（huashijie.tv）CatVod Spider —— 纯 JSON API 版
+ * -------------------------------------------------------------------------
+ * 【站点性质】苹果CMS（maccms）改版站，对外暴露自定义 JSON API（非官方 maccms api.php 默认路由）。
+ *
+ * 【已实采的 API 端点（直连抓取确认）】
+ *   · 列表：/api.php/vod/get_list
+ *       参数：type_id(分类) / limit(页大小) / offset(偏移,=(页-1)*limit) /
+ *             vod_area(地区) / vod_year(年份) / vod_name(模糊搜索)
+ *       返回：{code:1, msg, info:{offset, limit, total, rows:[{vod_id,vod_name,
+ *             vod_pic,vod_actor,vod_remarks,type_id,vod_year,vod_area,...}]}}
+ *   · 详情：/api.php/vod/get_detail?vod_id={id}
+ *       返回：info 含 vod_name/vod_pic/vod_actor/vod_director/vod_class/vod_remarks/
+ *             vod_area/vod_year/vod_content/vod_play_from 以及【结构化】
+ *             vod_play_list:[{sid,from,note,player_info,urls:[{name,url}]}]
+ *   · 分类：站点无 get_type 接口，分类表来自首页导航，硬编码于 buildClasses()。
+ *
+ * 【播放地址】vod_play_list[].urls[].url 已经是最终 .m3u8 直链（多 CDN：down.jsybox.com /
+ *   play.hhuus.com / play.xluuss.com / play.ly166.com:65 / fengbao12.com 等），
+ *   无需二次解析 —— playerContent 直接 parse(0) 返回并带 Referer。
+ *
+ * 【边界（如实标注）】
+ *   ★ 搜索用的是 get_list 的 vod_name 模糊匹配（实测 "大" → 10202 条），非独立 search 端点。
+ *   ★ vod_play_list 缺失时回退解析老格式 vod_play_from / vod_play_url（$$$ 分线路、# 分集）。
+ *   ★ 播放 CDN 是否校验 Referer/CORS 需在设备上验证；此处统一带 Referer=站点根，按出画结果再调。
+ *   ★ 分类/筛选的合法取值（年份/地区枚举）来自常识与首页，站点改版或新增枚举需同步。
+ */
 public class HuaShiJie extends Spider {
 
-    private static final String TAG      = "HuaShiJie";
-    private static final String API_BASE = "https://api.huashijie.tv/api.php/";
-    private static final String UA       = "okhttp/5.0.0-alpha.14";
+    private static final String BASE = "https://huashijie.tv";
+    private static final String API = BASE + "/api.php/vod";
+    private static final String UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+    private static final int PAGE_SIZE = 24;
 
-    private OkHttpClient client;
-    private final Gson gson = new Gson();
-
-    @Override
-    public void init(Context context, String extend) throws Exception {
-        client = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .followRedirects(true)
-                .build();
-    }
-
-    // =============================================================
-    //  首页分类
-    //  GET v2.vod/androidtypes
-    //  返回 {"code":200,"msg":"success","data":[
-    //          {"type_id":1,"type_name":"电影","classes":[...],"areas":[...],"years":[...]},
-    //          ...
-    //        ]}
-    // =============================================================
-    @Override
-    public String homeContent(boolean filter) throws Exception {
-        String body = httpGet(API_BASE + "v2.vod/androidtypes");
-        Log.d(TAG, "androidtypes raw=" + body);
-
-        JsonArray classes  = new JsonArray();
-        JsonObject filters = new JsonObject();
-
-        JsonObject root = parseObject(body);
-        if (root == null || !codeOk(root)) {
-            Log.e(TAG, "androidtypes bad response");
-            return emptyHome();
-        }
-
-        JsonArray data = (root.has("data") && root.get("data").isJsonArray())
-                ? root.getAsJsonArray("data") : null;
-
-        if (data != null) {
-            for (JsonElement e : data) {
-                if (!e.isJsonObject()) continue;
-                JsonObject item = e.getAsJsonObject();
-
-                String tid  = firstNonEmpty(optStr(item, "type_id"), optStr(item, "id"));
-                String name = firstNonEmpty(optStr(item, "type_name"), optStr(item, "name"));
-                if (TextUtils.isEmpty(tid) || TextUtils.isEmpty(name)) continue;
-
-                // 跳过 type_id=35 直播（classes/areas/years 都是 [""]）
-                if ("35".equals(tid)) continue;
-
-                JsonObject cls = new JsonObject();
-                cls.addProperty("type_id",  tid);
-                cls.addProperty("type_name", name);
-                classes.add(cls);
-
-                if (filter) {
-                    JsonArray dims = buildFilterDims(item);
-                    if (dims.size() > 0) filters.add(tid, dims);
-                }
-            }
-        }
-
-        Log.d(TAG, "homeContent class=" + classes.size()
-                + ", filters=" + filters.size());
-
-        JsonObject out = new JsonObject();
-        out.add("class", classes);
-        if (filter && filters.size() > 0) out.add("filters", filters);
-        return out.toString();
-    }
-
-    /** 按真实 classes/areas/years 生成 3 个筛选维度 */
-    private JsonArray buildFilterDims(JsonObject item) {
-        JsonArray dims = new JsonArray();
-
-        JsonArray cs = safeStringArray(item, "classes");
-        if (cs.size() > 0) dims.add(filterDim("class", "剧情", cs));
-
-        JsonArray as = safeStringArray(item, "areas");
-        if (as.size() > 0) dims.add(filterDim("area", "地区", as));
-
-        JsonArray ys = safeStringArray(item, "years");
-        if (ys.size() > 0) dims.add(filterDim("year", "年份", ys));
-
-        return dims;
-    }
-
-    /** 数组里过滤空串 */
-    private JsonArray safeStringArray(JsonObject o, String key) {
-        JsonArray out = new JsonArray();
-        if (o == null || !o.has(key) || !o.get(key).isJsonArray()) return out;
-        for (JsonElement e : o.getAsJsonArray(key)) {
-            if (e == null || e.isJsonNull()) continue;
-            String v = e.getAsString();
-            if (!TextUtils.isEmpty(v)) out.add(v);
-        }
-        return out;
-    }
-
-    /** {"key":"area","name":"地区","value":[{"n":"全部","v":""},{"n":"大陆","v":"大陆"}]} */
-    private JsonObject filterDim(String key, String name, JsonArray values) {
-        JsonObject d = new JsonObject();
-        d.addProperty("key",  key);
-        d.addProperty("name", name);
-        JsonArray vs = new JsonArray();
-
-        JsonObject all = new JsonObject();
-        all.addProperty("n", "全部");
-        all.addProperty("v", "");
-        vs.add(all);
-
-        for (JsonElement e : values) {
-            JsonObject v = new JsonObject();
-            v.addProperty("n", e.getAsString());
-            v.addProperty("v", e.getAsString());
-            vs.add(v);
-        }
-        d.add("value", vs);
-        return d;
-    }
-
-    private String emptyHome() {
-        JsonObject out = new JsonObject();
-        out.add("class", new JsonArray());
-        return out.toString();
-    }
-
-    // =============================================================
-    //  分类列表 / 筛选
-    //  GET v2.vod/androidfilter?type_id=&page=&area=&year=&class=
-    // =============================================================
-    @Override
-    public String categoryContent(String tid, String pg, boolean filter,
-                                  HashMap<String, String> extend) throws Exception {
-        StringBuilder url = new StringBuilder(API_BASE)
-                .append("v2.vod/androidfilter")
-                .append("?type_id=").append(enc(tid))
-                .append("&page=").append(enc(TextUtils.isEmpty(pg) ? "1" : pg));
-
-        if (extend != null) {
-            String area = extend.get("area");
-            String year = extend.get("year");
-            String cls  = extend.get("class");
-            if (!TextUtils.isEmpty(area)) url.append("&area=").append(enc(area));
-            if (!TextUtils.isEmpty(year)) url.append("&year=").append(enc(year));
-            if (!TextUtils.isEmpty(cls))  url.append("&class=").append(enc(cls));
-        }
-
-        String body = httpGet(url.toString());
-        Log.d(TAG, "androidfilter raw=" + body);
-        return listResult(body);
-    }
-
-    // =============================================================
-    //  详情
-    //  GET v2.vod/androiddetail?vod_id=
-    //  data.urls[] = [{type,key,url(m3u8直链)}]
-    // =============================================================
-    @Override
-    public String detailContent(List<String> ids) throws Exception {
-        if (ids == null || ids.isEmpty()) return "";
-        String vodId = ids.get(0);
-
-        String body = httpGet(API_BASE + "v2.vod/androiddetail?vod_id=" + enc(vodId));
-        Log.d(TAG, "androiddetail raw=" + body);
-
-        JsonObject root = parseObject(body);
-        if (root == null || !codeOk(root)) return "";
-
-        JsonObject data = (root.has("data") && root.get("data").isJsonObject())
-                ? root.getAsJsonObject("data") : null;
-        if (data == null) return "";
-
-        JsonObject vod = new JsonObject();
-        vod.addProperty("vod_id",       optStr(data, "id"));
-        vod.addProperty("vod_name",     optStr(data, "name"));
-        vod.addProperty("vod_pic",      optStr(data, "pic"));
-        vod.addProperty("vod_year",     optStr(data, "year"));
-        vod.addProperty("vod_area",     optStr(data, "area"));
-        vod.addProperty("vod_director", optStr(data, "director"));
-        vod.addProperty("vod_actor",    optStr(data, "actor"));
-        vod.addProperty("vod_content",  optStr(data, "content"));
-        vod.addProperty("vod_remarks",  firstNonEmpty(optStr(data, "state"), optStr(data, "updateInfo")));
-
-        StringBuilder fromBuf = new StringBuilder();
-        StringBuilder urlBuf  = new StringBuilder();
-
-        JsonArray urls = (data.has("urls") && data.get("urls").isJsonArray())
-                ? data.getAsJsonArray("urls") : null;
-
-        if (urls != null) {
-            for (int i = 0; i < urls.size(); i++) {
-                JsonElement el = urls.get(i);
-                if (!el.isJsonObject()) continue;
-                JsonObject u = el.getAsJsonObject();
-                String lineName = firstNonEmpty(optStr(u, "key"), optStr(u, "type"), "线路" + (i + 1));
-                String link     = optStr(u, "url");
-                if (TextUtils.isEmpty(link)) continue;
-
-                if (fromBuf.length() > 0) fromBuf.append("$$$");
-                if (urlBuf.length() > 0)  urlBuf.append("$$$");
-
-                fromBuf.append(lineName);
-                urlBuf.append("正片").append("$").append(link);
-            }
-        }
-
-        vod.addProperty("vod_play_from", fromBuf.toString());
-        vod.addProperty("vod_play_url",  urlBuf.toString());
-
-        JsonArray list = new JsonArray();
-        list.add(vod);
-        JsonObject out = new JsonObject();
-        out.add("list", list);
-        return out.toString();
-    }
-
-    // =============================================================
-    //  搜索
-    //  GET v2.vod/androidsearch10086?wd=&page=
-    // =============================================================
-    @Override
-    public String searchContent(String key, boolean quick) throws Exception {
-        return searchContent(key, quick, "1");
-    }
-
-    @Override
-    public String searchContent(String key, boolean quick, String pg) throws Exception {
-        String body = httpGet(API_BASE + "v2.vod/androidsearch10086?wd="
-                + enc(key) + "&page=" + enc(TextUtils.isEmpty(pg) ? "1" : pg));
-        Log.d(TAG, "androidsearch raw=" + body);
-        return listResult(body);
-    }
-
-    // =============================================================
-    //  播放：详情已是明文 m3u8，直接 parse=0
-    // =============================================================
-    @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        JsonObject out = new JsonObject();
-        out.addProperty("parse", 0);
-        out.addProperty("url",   id);
-        out.addProperty("jx",    0);
-        return out.toString();
-    }
-
-    // =============================================================
-    //  工具
-    // =============================================================
-
-    private String httpGet(String url) {
-        Request req = new Request.Builder()
-                .url(url)
-                .header("User-Agent", UA)
-                .header("Accept", "*/*")
-                .get().build();
-        try (Response resp = client.newCall(req).execute()) {
-            return resp.body() == null ? "" : resp.body().string();
-        } catch (Exception e) {
-            Log.e(TAG, "httpGet fail url=" + url, e);
-            return "";
-        }
-    }
-
-    private JsonObject parseObject(String body) {
-        if (TextUtils.isEmpty(body)) return null;
-        try {
-            JsonElement el = gson.fromJson(body, JsonElement.class);
-            if (el != null && el.isJsonObject()) return el.getAsJsonObject();
-        } catch (Exception ignore) { }
-        return null;
-    }
-
-    private boolean codeOk(JsonObject root) {
-        if (root == null) return false;
-        if (!root.has("code") || root.get("code").isJsonNull()) return true;
-        try { return root.get("code").getAsInt() == 200; }
-        catch (Exception e) { return true; }
-    }
-
-    /** 兼容 顶层数组 / {data:[]} / {list:[]} / {data:{list:[]}} */
-    private JsonArray asArray(String body) {
-        if (TextUtils.isEmpty(body)) return null;
-        try {
-            JsonElement el = gson.fromJson(body, JsonElement.class);
-            return asArray(el);
-        } catch (Exception ignore) { return null; }
-    }
-
-    private JsonArray asArray(JsonElement el) {
-        if (el == null || el.isJsonNull()) return null;
-        if (el.isJsonArray()) return el.getAsJsonArray();
-        if (el.isJsonObject()) {
-            JsonObject o = el.getAsJsonObject();
-            for (String k : new String[]{"data", "list", "result", "items"}) {
-                if (!o.has(k) || o.get(k).isJsonNull()) continue;
-                JsonArray r = asArray(o.get(k));
-                if (r != null) return r;
-            }
-        }
-        return null;
-    }
-
-    /** 列表接口 -> {list:[Vod], pagecount:N} */
-    private String listResult(String body) {
-        JsonObject out = new JsonObject();
-        JsonArray listArr = new JsonArray();
-
-        JsonObject root = parseObject(body);
-        if (root != null && !codeOk(root)) {
-            out.add("list", listArr);
-            out.addProperty("pagecount", 1);
-            return out.toString();
-        }
-
-        JsonArray data = asArray(body);
-        if (data != null) {
-            for (JsonElement e : data) {
-                if (!e.isJsonObject()) continue;
-                JsonObject it = e.getAsJsonObject();
-                JsonObject v = new JsonObject();
-                v.addProperty("vod_id",      firstNonEmpty(optStr(it, "id"), optStr(it, "vod_id")));
-                v.addProperty("vod_name",    firstNonEmpty(optStr(it, "name"), optStr(it, "vod_name")));
-                v.addProperty("vod_pic",     firstNonEmpty(optStr(it, "pic"), optStr(it, "vod_pic")));
-                v.addProperty("vod_remarks", firstNonEmpty(optStr(it, "updateInfo"), optStr(it, "state"), optStr(it, "remarks")));
-                v.addProperty("vod_year",    optStr(it, "year"));
-                v.addProperty("vod_area",    optStr(it, "area"));
-                v.addProperty("type_name",   firstNonEmpty(optStr(it, "className"), optStr(it, "type_name")));
-                listArr.add(v);
-            }
-        }
-        out.add("list", listArr);
-
-        int pageCount = 1;
-        if (root != null) {
-            JsonObject d = (root.has("data") && root.get("data").isJsonObject())
-                    ? root.getAsJsonObject("data") : root;
-            if (d.has("total") && !d.get("total").isJsonNull()) {
-                try { pageCount = Math.max(1, (d.get("total").getAsInt() + 19) / 20); }
-                catch (Exception ignore) { }
-            }
-        }
-        out.addProperty("pagecount", pageCount);
-        return out.toString();
-    }
-
-    private static String optStr(JsonObject o, String key) {
-        if (o == null || !o.has(key) || o.get(key).isJsonNull()) return "";
-        try { return o.get(key).getAsString(); } catch (Exception e) { return ""; }
-    }
-
-    private static String firstNonEmpty(String... arr) {
-        for (String s : arr) if (!TextUtils.isEmpty(s)) return s;
-        return "";
+    // ===================================================================
+    // HTTP：纯 java.net（android.jar 自带 HttpURLConnection），无需第三方依赖。
+    // 该 API 不经 Cloudflare 质询、无需 cookie，带浏览器 UA + Referer 即可。
+    // ===================================================================
+    private static String get(String url) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(15000);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("User-Agent", UA);
+        conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+        conn.setRequestProperty("Referer", BASE + "/");
+        int code = conn.getResponseCode();
+        InputStream in = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
+        BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        r.close();
+        conn.disconnect();
+        return sb.toString();
     }
 
     private static String enc(String s) {
-        if (s == null) return "";
-        try { return java.net.URLEncoder.encode(s, "UTF-8"); } catch (Exception e) { return s; }
+        if (TextUtils.isEmpty(s)) return "";
+        try {
+            return URLEncoder.encode(s, "UTF-8");
+        } catch (Exception e) {
+            return s;
+        }
+    }
+
+    // ===================================================================
+    // 分类 & 筛选（站点无 get_type 接口，取自首页导航硬编码）
+    // ===================================================================
+    private static List<Class> buildClasses() {
+        List<Class> cs = new ArrayList<>();
+        cs.add(new Class("1", "电影"));
+        cs.add(new Class("2", "连续剧"));
+        cs.add(new Class("13", "国产剧"));
+        cs.add(new Class("16", "欧美剧"));
+        cs.add(new Class("15", "日韩剧"));
+        cs.add(new Class("14", "港台剧"));
+        cs.add(new Class("3", "综艺"));
+        cs.add(new Class("4", "动漫"));
+        cs.add(new Class("37", "短剧"));
+        cs.add(new Class("38", "纪录片"));
+        cs.add(new Class("6", "动作片"));
+        cs.add(new Class("7", "喜剧片"));
+        cs.add(new Class("8", "爱情片"));
+        cs.add(new Class("9", "科幻片"));
+        cs.add(new Class("10", "恐怖片"));
+        cs.add(new Class("20", "犯罪片"));
+        cs.add(new Class("12", "战争片"));
+        return cs;
+    }
+
+    private static LinkedHashMap<String, List<Filter>> buildFilters() {
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
+        List<Filter.Value> years = new ArrayList<>();
+        for (String y : new String[]{"2026", "2025", "2024", "2023", "2022", "2021", "2020", "更早"}) {
+            years.add(new Filter.Value(y));
+        }
+        List<Filter.Value> areas = new ArrayList<>();
+        for (String a : new String[]{"大陆", "香港", "台湾", "美国", "韩国", "日本", "泰国", "英国", "法国", "其他"}) {
+            areas.add(new Filter.Value(a));
+        }
+        List<Filter> common = new ArrayList<>();
+        common.add(new Filter("vod_year", "年份", years));
+        common.add(new Filter("vod_area", "地区", areas));
+        for (Class c : buildClasses()) filters.put(c.getTypeId(), common);
+        return filters;
+    }
+
+    // ===================================================================
+    // 列表行解析
+    // ===================================================================
+    private static List<Vod> parseRows(JSONArray rows) {
+        List<Vod> list = new ArrayList<>();
+        if (rows == null) return list;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject o = rows.optJSONObject(i);
+            if (o == null) continue;
+            Vod v = new Vod();
+            v.setVodId(o.optString("vod_id", "0"));
+            v.setVodName(o.optString("vod_name"));
+            v.setVodPic(o.optString("vod_pic"));
+            String remark = o.optString("vod_remarks");
+            if (TextUtils.isEmpty(remark)) remark = o.optString("vod_year");
+            v.setVodRemarks(remark);
+            list.add(v);
+        }
+        return list;
+    }
+
+    // ===================================================================
+    // CatVod 接口
+    // ===================================================================
+    @Override
+    public String homeContent(boolean filter) throws Exception {
+        List<Vod> list = new ArrayList<>();
+        try {
+            String raw = get(API + "/get_list?limit=" + PAGE_SIZE + "&offset=0");
+            JSONObject j = new JSONObject(raw);
+            if (j.optInt("code") == 1) {
+                list = parseRows(j.optJSONObject("info").optJSONArray("rows"));
+            }
+        } catch (Exception ignored) {
+            // 首页取数失败 → 仍返回分类，壳子不至于空白崩溃
+        }
+        if (filter) return Result.string(buildClasses(), list, buildFilters());
+        return Result.string(buildClasses(), list);
     }
 
     @Override
-    public void destroy() {
-        if (client != null) {
-            try { client.dispatcher().executorService().shutdown(); } catch (Exception ignore) { }
-            try { client.connectionPool().evictAll(); } catch (Exception ignore) { }
-            client = null;
+    public String categoryContent(String tid, String pg, boolean filter,
+                                  HashMap<String, String> extend) throws Exception {
+        int page = 1;
+        try {
+            page = Integer.parseInt(pg);
+        } catch (Exception ignored) {
         }
+        if (page < 1) page = 1;
+        String area = (extend != null) ? first(extend.get("vod_area")) : "";
+        String year = (extend != null) ? first(extend.get("vod_year")) : "";
+        StringBuilder url = new StringBuilder(API + "/get_list?");
+        if (!TextUtils.isEmpty(tid) && !"0".equals(tid)) {
+            url.append("type_id=").append(tid).append("&");
+        }
+        url.append("limit=").append(PAGE_SIZE).append("&offset=").append((page - 1) * PAGE_SIZE);
+        if (!TextUtils.isEmpty(area)) url.append("&vod_area=").append(enc(area));
+        if (!TextUtils.isEmpty(year)) url.append("&vod_year=").append(enc(year));
+        String raw = get(url.toString());
+        JSONObject j = new JSONObject(raw);
+        List<Vod> list = new ArrayList<>();
+        int total = 0;
+        int pageCount = page;
+        if (j.optInt("code") == 1) {
+            JSONObject info = j.optJSONObject("info");
+            list = parseRows(info.optJSONArray("rows"));
+            total = info.optInt("total", 0);
+        }
+        if (total > 0) pageCount = (int) Math.ceil((double) total / PAGE_SIZE);
+        return Result.get().vod(list).page(page, pageCount, PAGE_SIZE, total).string();
+    }
+
+    @Override
+    public String detailContent(List<String> ids) throws Exception {
+        if (ids == null || ids.isEmpty()) return Result.get().string();
+        String id = ids.get(0);
+        String raw = get(API + "/get_detail?vod_id=" + id);
+        JSONObject j = new JSONObject(raw);
+        if (j.optInt("code") != 1) return Result.get().string();
+        JSONObject info = j.optJSONObject("info");
+        Vod v = new Vod();
+        v.setVodId(info.optString("vod_id", id));
+        v.setVodName(info.optString("vod_name"));
+        v.setVodPic(info.optString("vod_pic"));
+        v.setVodRemarks(info.optString("vod_remarks"));
+        v.setVodYear(info.optString("vod_year"));
+        v.setVodArea(info.optString("vod_area"));
+        v.setVodActor(info.optString("vod_actor"));
+        v.setVodDirector(info.optString("vod_director"));
+        v.setVodContent(info.optString("vod_content"));
+        parsePlay(v, info);
+        return Result.string(v);
+    }
+
+    /**
+     * 播放列表：优先结构化 vod_play_list（note 作线路名，urls[].name/url 作选集）；
+     * 缺失时回退老格式 vod_play_from / vod_play_url。
+     */
+    private static void parsePlay(Vod v, JSONObject info) {
+        JSONArray pl = info.optJSONArray("vod_play_list");
+        if (pl != null && pl.length() > 0) {
+            List<String> froms = new ArrayList<>();
+            List<String> urls = new ArrayList<>();
+            for (int i = 0; i < pl.length(); i++) {
+                JSONObject src = pl.optJSONObject(i);
+                if (src == null) continue;
+                String from = TextUtils.isEmpty(src.optString("note")) ? src.optString("from") : src.optString("note");
+                JSONArray eps = src.optJSONArray("urls");
+                List<String> epList = new ArrayList<>();
+                if (eps != null) {
+                    for (int k = 0; k < eps.length(); k++) {
+                        JSONObject e = eps.optJSONObject(k);
+                        if (e == null) continue;
+                        String link = e.optString("url");
+                        if (TextUtils.isEmpty(link)) continue;
+                        String name = e.optString("name");
+                        if (TextUtils.isEmpty(name)) name = "第" + (k + 1) + "集";
+                        epList.add(name + "$" + link);
+                    }
+                }
+                if (epList.isEmpty()) continue;
+                froms.add(from);
+                urls.add(TextUtils.join("#", epList));
+            }
+            if (!froms.isEmpty()) {
+                v.setVodPlayFrom(TextUtils.join("$$$", froms));
+                v.setVodPlayUrl(TextUtils.join("$$$", urls));
+                return;
+            }
+        }
+        // 回退：老格式
+        String fromStr = info.optString("vod_play_from");
+        String urlStr = info.optString("vod_play_url");
+        if (!TextUtils.isEmpty(fromStr) && !TextUtils.isEmpty(urlStr)) {
+            v.setVodPlayFrom(fromStr);
+            v.setVodPlayUrl(urlStr);
+        }
+    }
+
+    @Override
+    public String searchContent(String key, boolean quick) throws Exception {
+        String raw = get(API + "/get_list?vod_name=" + enc(key) + "&limit=" + PAGE_SIZE + "&offset=0");
+        JSONObject j = new JSONObject(raw);
+        List<Vod> list = new ArrayList<>();
+        int total = 0;
+        if (j.optInt("code") == 1) {
+            JSONObject info = j.optJSONObject("info");
+            list = parseRows(info.optJSONArray("rows"));
+            total = info.optInt("total", list.size());
+        }
+        return Result.get().vod(list).page(1, 1, PAGE_SIZE, total).string();
+    }
+
+    /**
+     * 播放：id 形如 "选集名$url"（detailContent 写入），掐头取 url；
+     * 已是 http(s) 直链 → parse(0) 直接播，并带站点 Referer。
+     */
+    @Override
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        if (TextUtils.isEmpty(id)) return Result.error("播放地址为空");
+        String url = id;
+        int d = id.indexOf('$');
+        if (d >= 0 && d < id.length() - 1) url = id.substring(d + 1);
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            return Result.error("非直链地址");
+        }
+        Map<String, String> header = new HashMap<>();
+        header.put("User-Agent", UA);
+        header.put("Referer", BASE + "/");
+        return Result.get().parse(0).m3u8().url(url).header(header).string();
+    }
+
+    private static String first(String s) {
+        return TextUtils.isEmpty(s) ? "" : s;
     }
 }
