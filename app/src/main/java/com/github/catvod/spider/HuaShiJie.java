@@ -42,6 +42,8 @@ import java.util.Map;
  *       返回：{code, msg, page, pagecount, limit, total, list:[{id,name,en,pic,
  *             type_is_vip_exclusive}], url:"/index.php/vod/search/wd/..."}
  *       注：total/pagecount 恒为 0，真实条数 = list.length；该接口不分页（一次给满 limit 条）。
+ *   · 筛选枚举：/api.php/config/get_extra_var → data.vod_extend_*（实采确认）
+ *       area 16 项 / year 2026..2000(27 项) / class 12 项 / orderby(hits|score|pubdate)
  *   · 分类：站点无 get_type 接口，分类表来自首页导航，硬编码于 buildClasses()。
  *
  * 【播放地址】vod_play_list[].urls[].url 已经是最终 .m3u8 直链（多 CDN：down.jsybox.com /
@@ -54,7 +56,10 @@ import java.util.Map;
  *     该接口 total/pagecount 恒为 0，真实条数以 list.length 计，且不分页。
  *   ★ vod_play_list 缺失时回退解析老格式 vod_play_from / vod_play_url（$$$ 分线路、# 分集）。
  *   ★ 播放 CDN 是否校验 Referer/CORS 需在设备上验证；此处统一带 Referer=站点根，按出画结果再调。
- *   ★ 分类/筛选的合法取值（年份/地区枚举）来自常识与首页，站点改版或新增枚举需同步。
+ *   ★ 分类/筛选枚举来自首页导航 + /api.php/config/get_extra_var 实采；站点改版需同步。
+ *   ★ get_list 支持参数：vod_area / vod_year / vod_class / vod_letter / vod_tag /
+ *     vod_name / orderby(hits|score|pubdate，不传=按时间)。
+ *     （vod_letter 参数存在但实测服务端不过滤，故未启用；分类国产剧置顶，首页不返回推荐列表。）
  */
 public class HuaShiJie extends Spider {
 
@@ -104,39 +109,78 @@ public class HuaShiJie extends Spider {
     // ===================================================================
     private static List<Class> buildClasses() {
         List<Class> cs = new ArrayList<>();
+        // 国产剧置顶（按需求，优先展示）
+        cs.add(new Class("13", "国产剧"));
+        // 顶级频道（首页导航 /index.php/vod/type/id/{id}.html）
         cs.add(new Class("1", "电影"));
         cs.add(new Class("2", "连续剧"));
-        cs.add(new Class("13", "国产剧"));
-        cs.add(new Class("16", "欧美剧"));
-        cs.add(new Class("15", "日韩剧"));
-        cs.add(new Class("14", "港台剧"));
         cs.add(new Class("3", "综艺"));
         cs.add(new Class("4", "动漫"));
         cs.add(new Class("37", "短剧"));
         cs.add(new Class("38", "纪录片"));
+        // 电影子类（分类页筛选 subtype data-type-id）
         cs.add(new Class("6", "动作片"));
         cs.add(new Class("7", "喜剧片"));
         cs.add(new Class("8", "爱情片"));
         cs.add(new Class("9", "科幻片"));
         cs.add(new Class("10", "恐怖片"));
-        cs.add(new Class("20", "犯罪片"));
+        cs.add(new Class("11", "剧情片"));
         cs.add(new Class("12", "战争片"));
+        cs.add(new Class("20", "犯罪片"));
+        cs.add(new Class("21", "动漫片"));
+        cs.add(new Class("22", "纪录电影"));   // 电影下的纪录片子类（与顶级 38 区分命名）
+        // 剧集子类
+        cs.add(new Class("14", "港台剧"));
+        cs.add(new Class("15", "日韩剧"));
+        cs.add(new Class("16", "欧美剧"));
+        cs.add(new Class("25", "海外剧"));
+        // 综艺子类
+        cs.add(new Class("26", "大陆综艺"));
+        cs.add(new Class("27", "日韩综艺"));
+        cs.add(new Class("28", "港台综艺"));
+        cs.add(new Class("29", "欧美综艺"));
+        cs.add(new Class("30", "海外综艺"));
+        // 动漫子类
+        cs.add(new Class("31", "国产动漫"));
+        cs.add(new Class("32", "日本动漫"));
+        cs.add(new Class("33", "欧美动漫"));
+        cs.add(new Class("34", "海外动漫"));
         return cs;
     }
 
+    // 筛选枚举：实采 /api.php/config/get_extra_var 的 data.vod_extend_*
+    private static final String[] AREAS = {
+            "大陆", "香港", "台湾", "美国", "韩国", "日本", "泰国", "新加坡",
+            "马来西亚", "印度", "英国", "法国", "加拿大", "西班牙", "俄罗斯", "其它"};
+    private static final String[] CLASSES = {
+            "爱情", "动作", "喜剧", "战争", "科幻", "剧情",
+            "武侠", "冒险", "枪战", "恐怖", "微电影", "其它"};
+    /** 生成下拉项：首项"全部"(v="") + 给定枚举 */
+    private static List<Filter.Value> options(String[] vals) {
+        List<Filter.Value> vs = new ArrayList<>();
+        vs.add(new Filter.Value("全部", ""));
+        for (String v : vals) vs.add(new Filter.Value(v));
+        return vs;
+    }
+
     private static LinkedHashMap<String, List<Filter>> buildFilters() {
-        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         List<Filter.Value> years = new ArrayList<>();
-        for (String y : new String[]{"2026", "2025", "2024", "2023", "2022", "2021", "2020", "更早"}) {
-            years.add(new Filter.Value(y));
-        }
-        List<Filter.Value> areas = new ArrayList<>();
-        for (String a : new String[]{"大陆", "香港", "台湾", "美国", "韩国", "日本", "泰国", "英国", "法国", "其他"}) {
-            areas.add(new Filter.Value(a));
-        }
+        years.add(new Filter.Value("全部", ""));
+        for (int y = 2026; y >= 2000; y--) years.add(new Filter.Value(String.valueOf(y)));
+
+        List<Filter.Value> sorts = new ArrayList<>();
+        sorts.add(new Filter.Value("按时间", ""));      // 不传 orderby = 按时间
+        sorts.add(new Filter.Value("最热", "hits"));
+        sorts.add(new Filter.Value("评分", "score"));
+        sorts.add(new Filter.Value("最新发布", "pubdate"));
+
         List<Filter> common = new ArrayList<>();
         common.add(new Filter("vod_year", "年份", years));
-        common.add(new Filter("vod_area", "地区", areas));
+        common.add(new Filter("vod_area", "地区", options(AREAS)));
+        common.add(new Filter("vod_class", "剧情", options(CLASSES)));
+        common.add(new Filter("orderby", "排序", sorts));
+
+        LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         for (Class c : buildClasses()) filters.put(c.getTypeId(), common);
         return filters;
     }
@@ -167,16 +211,8 @@ public class HuaShiJie extends Spider {
     // ===================================================================
     @Override
     public String homeContent(boolean filter) throws Exception {
+        // 按需求关闭首页推荐：不请求 get_list，只返回分类与筛选
         List<Vod> list = new ArrayList<>();
-        try {
-            String raw = get(API + "/get_list?limit=" + PAGE_SIZE + "&offset=0");
-            JSONObject j = new JSONObject(raw);
-            if (j.optInt("code") == 1) {
-                list = parseRows(j.optJSONObject("info").optJSONArray("rows"));
-            }
-        } catch (Exception ignored) {
-            // 首页取数失败 → 仍返回分类，壳子不至于空白崩溃
-        }
         if (filter) return Result.string(buildClasses(), list, buildFilters());
         return Result.string(buildClasses(), list);
     }
@@ -190,8 +226,10 @@ public class HuaShiJie extends Spider {
         } catch (Exception ignored) {
         }
         if (page < 1) page = 1;
-        String area = (extend != null) ? first(extend.get("vod_area")) : "";
-        String year = (extend != null) ? first(extend.get("vod_year")) : "";
+        String area = ext(extend, "vod_area");
+        String year = ext(extend, "vod_year");
+        String cls = ext(extend, "vod_class");
+        String orderby = ext(extend, "orderby");
         StringBuilder url = new StringBuilder(API + "/get_list?");
         if (!TextUtils.isEmpty(tid) && !"0".equals(tid)) {
             url.append("type_id=").append(tid).append("&");
@@ -199,6 +237,8 @@ public class HuaShiJie extends Spider {
         url.append("limit=").append(PAGE_SIZE).append("&offset=").append((page - 1) * PAGE_SIZE);
         if (!TextUtils.isEmpty(area)) url.append("&vod_area=").append(enc(area));
         if (!TextUtils.isEmpty(year)) url.append("&vod_year=").append(enc(year));
+        if (!TextUtils.isEmpty(cls)) url.append("&vod_class=").append(enc(cls));
+        if (!TextUtils.isEmpty(orderby)) url.append("&orderby=").append(enc(orderby));
         String raw = get(url.toString());
         JSONObject j = new JSONObject(raw);
         List<Vod> list = new ArrayList<>();
@@ -324,7 +364,9 @@ public class HuaShiJie extends Spider {
         return Result.get().parse(0).m3u8().url(url).header(header).string();
     }
 
-    private static String first(String s) {
-        return TextUtils.isEmpty(s) ? "" : s;
+    private static String ext(HashMap<String, String> m, String k) {
+        if (m == null) return "";
+        String v = m.get(k);
+        return v == null ? "" : v.trim();
     }
 }
