@@ -82,7 +82,10 @@ public class HuaShiJie extends Spider {
     }
 
     private static String get(String url) {
-        return OkHttp.string(url, HEADERS, 15000);
+        // 2 参重载（url, header）在 App 侧和 jar 侧都存在，跨版本安全；
+        // 超时用 client 的默认值（App 侧由 OkHttp.client() 统一配置）。
+        // 异常在内部被吞掉并返回 ""，与原先 HttpURLConnection 实现的行为一致。
+        return OkHttp.string(url, HEADERS);
     }
 
     private static String enc(String s) {
