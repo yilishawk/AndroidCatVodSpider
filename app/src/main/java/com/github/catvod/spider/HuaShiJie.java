@@ -7,15 +7,11 @@ import com.github.catvod.bean.Filter;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkHttp;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -72,27 +68,21 @@ public class HuaShiJie extends Spider {
     private static final int PAGE_SIZE = 24;
 
     // ===================================================================
-    // HTTP：纯 java.net（android.jar 自带 HttpURLConnection），无需第三方依赖。
+    // HTTP：走 catvod 的 OkHttp（com.github.catvod.net.OkHttp）。
+    // 它的 client() 挂了 TraceInterceptor，请求会自动进调试日志：完整 URL、
+    // 状态码、耗时、响应体都能在日志页看到，爬虫里不用再手动打。
     // 该 API 不经 Cloudflare 质询、无需 cookie，带浏览器 UA + Referer 即可。
     // ===================================================================
-    private static String get(String url) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(15000);
-        conn.setInstanceFollowRedirects(true);
-        conn.setRequestProperty("User-Agent", UA);
-        conn.setRequestProperty("Accept", "application/json, text/plain, */*");
-        conn.setRequestProperty("Referer", BASE + "/");
-        int code = conn.getResponseCode();
-        InputStream in = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
-        BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
-        StringBuilder sb = new StringBuilder();
-        String line;
-        while ((line = r.readLine()) != null) sb.append(line).append('\n');
-        r.close();
-        conn.disconnect();
-        return sb.toString();
+    private static final Map<String, String> HEADERS = new HashMap<>();
+
+    static {
+        HEADERS.put("User-Agent", UA);
+        HEADERS.put("Accept", "application/json, text/plain, */*");
+        HEADERS.put("Referer", BASE + "/");
+    }
+
+    private static String get(String url) {
+        return OkHttp.string(url, HEADERS, 15000);
     }
 
     private static String enc(String s) {
