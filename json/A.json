@@ -136,31 +136,11 @@
       "quickSearch": 1,
       "filterable": 1
     },
-
-                       {
-            "key": "全看影视py",
-            "name": "全看py",
-            "type": 3,
-            "api": "https://bitbucket.org/yilishawk/js/raw/master/PY/全看影视.py",
-            "searchable": 1,
-            "changeable": 1,
-            "quickSearch": 1,
-            "filterable": 1
-        },
         {
       "key": "凡客",
       "name": "凡客",
       "type": 3,
       "api": "csp_FKTV",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-            {
-      "key": "360",
-      "name": "360影视",
-      "type": 3,
-      "api": "https://bitbucket.org/yilishawk/js/raw/master/PY/360影视.py",
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
@@ -236,26 +216,6 @@
       "quickSearch": 1,
       "filterable": 1
     },
-                {
-            "key": "星芽短剧",
-            "name": "星芽｜短剧",
-            "type": 3,
-            "api": "https://bitbucket.org/yilishawk/js/raw/master/PY/星芽短剧.py",
-            "searchable": 1,
-            "changeable": 1,
-            "quickSearch": 1,
-            "filterable": 1
-        },
-                        {
-            "key": "红果短剧",
-            "name": "红果｜短剧",
-            "type": 3,
-            "api": "https://bitbucket.org/yilishawk/js/raw/master/PY/红果短剧.py",
-            "searchable": 1,
-            "changeable": 1,
-            "quickSearch": 1,
-            "filterable": 1
-        },
                                                                           
     {"key":"csp_短剧","name":"短剧","type":1,"api":"https://loveyoudj.com//api.php/provide/vod","searchable":1,"quickSearch":1}, 
     {
