@@ -1,5 +1,7 @@
 package com.github.catvod.spider;
 
+import android.util.Base64;
+
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.crawler.Spider;
@@ -10,7 +12,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URLEncoder;
+import java.security.KeyFactory;
 import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -18,7 +25,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import javax.crypto.Cipher;
 import javax.crypto.Mac;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
@@ -43,12 +52,47 @@ public class FanQieJiang extends Spider {
     private static final String BASE = "https://fankei.cc";
     private static final String SIGN_KEY = "Rg0qTuu2BltwOIdVnzNVJy9sCbiOD9P90uO0aDDbGa4";
     private static final String INSTALL_ID = "e7df8ca3-25eb-40fa-8d5e-d5a131f4d261";
-    private static final String APP_VER = "1.1.25";
-    private static final String APP_VC = "103";
+    private static final String APP_VER = "1.2.0";
+    private static final String APP_VC = "105";
     private static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36";
     private static final String FIELDS = "vod_id,vod_name,vod_sub,vod_pic,vod_actor,vod_director,vod_score,"
             + "vod_remarks,vod_blurb,vod_year,vod_tag,vod_class,vod_area,type_id,type_id_1";
     private static final int LIMIT = 21;
+
+    // ==================== 瓜子源（"Temporary" 线路）====================
+    // 2026-11-05 新增：App 1.2.0 的详情里出现 from=guazi / show=Temporary 的线路，
+    // play_url 形如 `guazi|vod_d_id=49979&vurl_id=4788797&domain_type=8&resolution=1080&type=play`，
+    // 不是 URL，playback/resolve 对它直接返回 422「播放器没有配置解析参数」。
+    // 实测这条线路就是瓜子影视(api.anctjd.com)的资源，用 vod_d_id + vurl_id 调
+    // /App/Resource/VurlDetail/showOne 能直接拿到 1080p m3u8（已验证）。
+    private static final String GZ_BASE = "https://api.anctjd.com";
+    private static final String GZ_AES_KEY = "RhgUpnAK2agqxPjX";
+    private static final String GZ_AES_IV = "sljblQdVvGrVeHKr";
+    private static final String GZ_SALT = "*&zvdvdvddbfikkkumtmdwqppp?|4Y!s!2br";
+    private static final String GZ_PKG = "com.l247ce5e1b.p8b3173c28.xef737a9da20261022";
+    private static final String GZ_TOKEN = "25c6b32e6d6fcb7953a4c4f3e55aac92.abfa0d3364328876cea5957ec741f7e17fe1529"
+            + "7b6f47b14e291170d02bfbb2a5bfa29003988eb364deecca57e3e30e68110483515e6b8d"
+            + "c14c8039e0808647300718ba9c0a0b041a5e4a5fd5e775e28b28616c6300a0c92c746f2f"
+            + "59d33ac49bc703976535e600b26494d78d4bd4526cf1d5590385f5f7ef6e01d1850974aa"
+            + "220eb5178c89e61c24411af9b9a19435e.380ff1868615686ec8a7236bfa03f837b5cb4a"
+            + "28f591aee22905de4e94fbe8e4";
+    private static final String GZ_PUB_HEX = "30819f300d06092a864886f70d010101050003818d0030818902818100d4339fbfcbcb0f"
+            + "b1691dd7f4504bae17db9f44530c455c51391e503ae4caabc673ecd09aa8491a23483cb9"
+            + "421c2f44e95a0fa4f04501ca318d8e019e929d079426c0a14c414847da94930aecdff315"
+            + "50cc63b2fe894ba39efe3b9c9722464e05660e1079e4469f5ec0f44906158ff4175ecc51"
+            + "e9ec11e44da42f9db20000f8c90203010001";
+    private static final String GZ_PRIV_B64 = "MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGAe6hKrWLi1zQmjTT1ozbE4QdF"
+            + "eJGNxubxld6GrFGximxfMsMB6BpJhpcTouAqywAFppiKetUBBbXwYsYU1wNr648XVmPmCMCy"
+            + "4rY8vdliFnbMUj086DU6Z+/oXBdWU3/b1G0DN3E9wULRSwcKZT3wj/cCI1vsCm3gj2R5SqkA"
+            + "9Y0CAwEAAQKBgAJH+4CxV0/zBVcLiBCHvSANm0l7HetybTh/j2p0Y1sTXro4ALwAaCTUeqdB"
+            + "jWiLSo9lNwDHFyq8zX90+gNxa7c5EqcWV9FmlVXr8VhfBzcZo1nXeNdXFT7tQ2yah/odtdcx"
+            + "+vRMSGJd1t/5k5bDd9wAvYdIDblMAg+wiKKZ5KcdAkEA1cCakEN4NexkF5tHPRrR6XOY/XHf"
+            + "kqXxEhMqmNbB9U34saTJnLWIHC8IXys6Qmzz30TtzCjuOqKRRy+FMM4TdwJBAJQZFPjsGC+R"
+            + "qcG5UvVMiMPhnwe/bXEehShK86yJK/g/UiKrO87h3aEu5gcJqBygTq3BBBoH2md3pr/W+hUM"
+            + "WBsCQQChfhTIrdDinKi6lRxrdBnn0Ohjg2cwuqK5zzU9p/N+S9x7Ck8wUI53DKm8jUJE8WAG"
+            + "7WLj/oCOWEh+ic6NIwTdAkEAj0X8nhx6AXsgCYRql1klbqtVmL8+95KZK7PnLWG/IfjQUy3p"
+            + "PGoSaZ7fdquG8bq8oyf5+dzjE/oTXcByS+6XRQJAP/5ciy1bL3NhUhsaOVy55MHXnPjdcTX0"
+            + "FaLi+ybXZIfIQ2P4rb19mVq1feMbCXhz+L1rG8oat5lYKfpe8k83ZA==";
 
     /** 顶层分类: 国产剧置顶 */
     private static final String[][] CATES = {
@@ -466,6 +510,153 @@ public class FanQieJiang extends Spider {
         return Result.get().vod(list).string();
     }
 
+    // ==================== 瓜子源工具（"Temporary" 线路）====================
+
+    private static String gzHexUpper(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) {
+            sb.append(Character.forDigit((x >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(x & 0xF, 16));
+        }
+        return sb.toString().toUpperCase();
+    }
+
+    private static byte[] gzUnhex(String s) {
+        int n = s.length() / 2;
+        byte[] b = new byte[n];
+        for (int i = 0; i < n; i++) b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
+        return b;
+    }
+
+    private static String gzMd5Upper(String s) throws Exception {
+        return gzHexUpper(MessageDigest.getInstance("MD5").digest(s.getBytes("UTF-8")));
+    }
+
+    private static String gzAesEnc(String plain) throws Exception {
+        Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(GZ_AES_KEY.getBytes("UTF-8"), "AES"),
+                new IvParameterSpec(GZ_AES_IV.getBytes("UTF-8")));
+        return gzHexUpper(c.doFinal(plain.getBytes("UTF-8")));
+    }
+
+    private static String gzAesDec(String hexCt, String key, String iv) throws Exception {
+        Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key.getBytes("UTF-8"), "AES"),
+                new IvParameterSpec(iv.getBytes("UTF-8")));
+        return new String(c.doFinal(gzUnhex(hexCt)), "UTF-8");
+    }
+
+    private static String gzRsaEnc(String plain) throws Exception {
+        PublicKey pk = KeyFactory.getInstance("RSA")
+                .generatePublic(new X509EncodedKeySpec(gzUnhex(GZ_PUB_HEX)));
+        Cipher c = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        c.init(Cipher.ENCRYPT_MODE, pk);
+        return Base64.encodeToString(c.doFinal(plain.getBytes("UTF-8")), Base64.NO_WRAP);
+    }
+
+    private static String gzRsaDec(String b64Ct) throws Exception {
+        PrivateKey pk = KeyFactory.getInstance("RSA")
+                .generatePrivate(new PKCS8EncodedKeySpec(Base64.decode(GZ_PRIV_B64, Base64.NO_WRAP)));
+        Cipher c = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        c.init(Cipher.DECRYPT_MODE, pk);
+        return new String(c.doFinal(Base64.decode(b64Ct, Base64.NO_WRAP)), "UTF-8");
+    }
+
+    private static Map<String, String> gzHeader() {
+        Map<String, String> h = new HashMap<>();
+        h.put("code", "GZ0313");
+        h.put("lang", "zh_cn");
+        h.put("Version", "2610013");
+        h.put("Ver", "3.0.6.2");
+        h.put("api-ver", "3.0.6.2");
+        h.put("PackageName", GZ_PKG);
+        h.put("Referer", GZ_BASE);
+        h.put("User-Agent", "okhttp/3.12.0");
+        h.put("Content-Type", "application/x-www-form-urlencoded");
+        return h;
+    }
+
+    /** 瓜子统一请求: 加密入参 -> 签名 -> POST -> 解响应 */
+    private static JSONObject gzApi(String path, Map<String, String> biz) {
+        try {
+            JSONObject bizJson = new JSONObject();
+            if (biz != null) {
+                for (Map.Entry<String, String> e : biz.entrySet()) bizJson.put(e.getKey(), e.getValue());
+            }
+            String requestKey = gzAesEnc(bizJson.toString());
+
+            JSONObject keyInfo = new JSONObject();
+            keyInfo.put("iv", GZ_AES_IV);
+            keyInfo.put("key", GZ_AES_KEY);
+            String keys = gzRsaEnc(keyInfo.toString());
+
+            LinkedHashMap<String, String> kv = new LinkedHashMap<>();
+            kv.put("token_id", "");
+            kv.put("token", GZ_TOKEN);
+            kv.put("phone_type", "1");
+            kv.put("request_key", requestKey);
+            kv.put("app_id", "1");
+            kv.put("time", String.valueOf(System.currentTimeMillis() / 1000));
+            kv.put("keys", keys);
+
+            StringBuilder sign = new StringBuilder();
+            for (Map.Entry<String, String> e : kv.entrySet()) {
+                if (sign.length() > 0) sign.append(',');
+                sign.append(e.getKey()).append('=').append(e.getValue());
+            }
+            kv.put("signature", gzMd5Upper(sign.toString() + GZ_SALT));
+
+            OkResult r = OkHttp.post(GZ_BASE + path, kv, gzHeader());
+            String body = r.getBody();
+            if (body == null || body.trim().isEmpty()) {
+                SpiderDebug.log("[番茄酱] 瓜子 " + path + " 空响应 http=" + r.getCode());
+                return null;
+            }
+            JSONObject js = new JSONObject(body);
+            if (js.optInt("code") != 200) {
+                SpiderDebug.log("[番茄酱] 瓜子 " + path + " code=" + js.optInt("code")
+                        + " msg=" + js.optString("msg"));
+                return null;
+            }
+            JSONObject data = js.optJSONObject("data");
+            if (data == null) return null;
+
+            JSONObject info = new JSONObject(gzRsaDec(data.optString("keys")));
+            String plain = gzAesDec(data.optString("response_key"),
+                    info.getString("key"), info.getString("iv")).trim();
+            if (plain.startsWith("{")) return new JSONObject(plain);
+            return null;
+        } catch (Exception e) {
+            SpiderDebug.log("[番茄酱] 瓜子 " + path + " 异常 " + e);
+            return null;
+        }
+    }
+
+    /** 从 `a=1&b=2` 里取参数值 */
+    private static String qsParam(String qs, String key) {
+        if (qs == null || qs.isEmpty()) return "";
+        for (String seg : qs.split("&")) {
+            int i = seg.indexOf('=');
+            if (i > 0 && key.equals(seg.substring(0, i))) return seg.substring(i + 1);
+        }
+        return "";
+    }
+
+    /** 瓜子播放: vod_d_id + vurl_id -> m3u8 直链 */
+    private static String gzPlay(String vodDId, String vurlId) {
+        if (vodDId.isEmpty() || vurlId.isEmpty()) return "";
+        Map<String, String> q = new HashMap<>();
+        q.put("vod_d_id", vodDId);
+        q.put("vurl_id", vurlId);
+        q.put("domain_type", "8");
+        q.put("resolution", "1080");
+        q.put("type", "play");
+        JSONObject d = gzApi("/App/Resource/VurlDetail/showOne", q);
+        String url = d == null ? "" : d.optString("url");
+        SpiderDebug.log("[番茄酱] 瓜子播放 " + vodDId + "/" + vurlId + " -> " + url);
+        return url;
+    }
+
     // ==================== 播放 ====================
 
     @Override
@@ -477,6 +668,21 @@ public class FanQieJiang extends Spider {
             src = playUrl.substring(0, i);
             playUrl = playUrl.substring(i + 1);
         }
+
+        // 瓜子源（线路名 "Temporary"）：play_url 是 `guazi|vod_d_id=..&vurl_id=..`，
+        // 不是 URL，playback/resolve 对它返回 422「播放器没有配置解析参数」，
+        // 必须自己走瓜子接口解析。
+        if ("guazi".equals(src) || playUrl.startsWith("guazi|")) {
+            String qs = playUrl.startsWith("guazi|")
+                    ? playUrl.substring("guazi|".length()) : playUrl;
+            String real = gzPlay(qsParam(qs, "vod_d_id"), qsParam(qs, "vurl_id"));
+            if (!real.isEmpty()) {
+                SpiderDebug.log("[番茄酱] Temporary(瓜子) -> " + real);
+                return Result.get().url(real).string();
+            }
+            SpiderDebug.log("[番茄酱] Temporary(瓜子) 解析失败，尝试服务端解析");
+        }
+
         if (!src.isEmpty() && !playUrl.isEmpty()) {
             Map<String, String> p = new LinkedHashMap<>();
             p.put("key", src);
@@ -493,7 +699,14 @@ public class FanQieJiang extends Spider {
                 }
             }
         }
-        // 解析失败时退回原地址(部分源本身就是 m3u8 直链)
+        // 解析失败时的兜底：
+        //  · http 直链可以直接交给播放器（部分源本身就是 m3u8，resolve 返回 422）
+        //  · 非 http 的伪地址（czzy:8858:1 / JD-xxx / ApBhhk-1-1）丢给播放器只会报
+        //    "格式不支持"，不如返回空让壳子明确提示播放失败、由用户换线路
+        if (!playUrl.startsWith("http")) {
+            SpiderDebug.log("[番茄酱] " + src + " 解析失败且非直链: " + playUrl);
+            return Result.get().url("").string();
+        }
         return Result.get().url(playUrl).string();
     }
 }
