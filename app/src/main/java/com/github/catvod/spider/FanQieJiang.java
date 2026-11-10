@@ -20,6 +20,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -609,7 +610,16 @@ public class FanQieJiang extends Spider {
                     // 用 "源|地址" 编码, playerContent 里拆开
                     ep.append(nm).append('$').append(src).append('|').append(u);
                 }
-                if (ep.length() == 0) continue;
+                if (ep.length() == 0) {
+                    // 整组都是 hold：当前会员组没有 4K / 云搜权限，App 里点了也是 403。
+                    // 但不能整组丢掉——否则用户看到的就是「线路不全」。用 hold 占位
+                    // 明确列出来，点了会播放失败，至少线路数和 App 一致。
+                    if (eps.length() > 0) {
+                        ep.append("需VIP").append('$').append(src).append("|hold");
+                    } else {
+                        continue;
+                    }
+                }
                 if (from.length() > 0) {
                     from.append("$$$");
                     url.append("$$$");
@@ -815,6 +825,32 @@ public class FanQieJiang extends Spider {
 
     // ==================== 播放 ====================
 
+    /** resolve 响应里的 header 可能是 JSONObject 也可能是 JSON 字符串，统一成 Map。
+     *  空值（如点播的 Referer:""）必须保留，用来覆盖壳子自己塞的 Referer。 */
+    private static Map<String, String> parseHeader(JSONObject j) {
+        Map<String, String> out = new HashMap<>();
+        try {
+            Object ho = j.opt("header");
+            JSONObject hj = null;
+            if (ho instanceof JSONObject) {
+                hj = (JSONObject) ho;
+            } else if (ho instanceof String) {
+                String s = (String) ho;
+                if (s.startsWith("{")) hj = new JSONObject(s);
+            }
+            if (hj != null) {
+                Iterator<String> it = hj.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    out.put(k, hj.optString(k, ""));
+                }
+            }
+        } catch (Exception e) {
+            SpiderDebug.log("[番茄酱] parseHeader " + e);
+        }
+        return out;
+    }
+
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String src = "";
@@ -869,13 +905,18 @@ public class FanQieJiang extends Spider {
             JSONObject j = call("POST", "/playback/resolve", p);
             if (j != null) {
                 // 优先 origin（未包装直链，少一跳）；url 是 collect 的 play.mp4 跳板。
-                // 两者都绝不能带 Referer：实测带任意 Referer 跳板直接 403，不带则 206。
-                // 因此这里只给 url，不塞 header。
                 String real = j.optString("origin", "");
                 if (real.isEmpty()) real = j.optString("url", "");
                 if (!real.isEmpty()) {
-                    SpiderDebug.log("[番茄酱] play " + src + " -> " + real);
-                    return Result.get().url(real).string();
+                    // ⚠ 必须把服务端返回的 header 原样交给播放器，否则 CDN 直接 403：
+                    //  · 点播：iPhone UA + Referer:""（空串。实测带任何 Referer 都 403，
+                    //    壳子若自动塞 Referer 就会挂，这里显式置空覆盖掉）
+                    //  · 直播：Mac UA + Referer:http://<直播CDN域名>/（必须带，缺了 403）
+                    Map<String, String> hd = parseHeader(j);
+                    SpiderDebug.log("[番茄酱] play " + src + " -> " + real + " hdr=" + hd);
+                    Result r = Result.get().url(real);
+                    if (!hd.isEmpty()) r = r.header(hd);
+                    return r.string();
                 }
             }
         }
