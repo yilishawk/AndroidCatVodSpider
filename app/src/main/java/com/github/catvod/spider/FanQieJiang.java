@@ -46,14 +46,36 @@ import javax.crypto.spec.SecretKeySpec;
  * msg = METHOD \n PATH \n QUERY \n SHA256(BODY) \n TS \n NONCE \n INSTALL_ID
  * sig = hex(HMAC_SHA256("Rg0qTuu2BltwOIdVnzNVJy9sCbiOD9P90uO0aDDbGa4", msg))
  * PATH 为去掉 /request 前缀的路径, QUERY 为空时保留空段
+ * <p>
+ * 2026-11-10 适配 1.2.3+108（App 升级后旧版蜘蛛播不了的四个原因）：
+ * 1) 版本头过旧 -> 426；改为从 /request/app/releases/latest 动态同步。
+ * 2) 播放解析新增会员态校验 -> 401 请先注册会员；请求头补 token。
+ * 3) 详情 url 从完整 URL 变成 `sid|分集id` 伪 ID / hold；还原成 /p/_?sid=..&ep=..。
+ * 4) resolve 的 key 用 JP 会 422；改借 shanju 解析器，并优先返回 origin 直链。
+ * ⚠ 播放地址不能带 Referer（collect 跳板带 Referer 即 403），故 playerContent 不设 header。
  */
 public class FanQieJiang extends Spider {
 
     private static final String BASE = "https://fankei.cc";
     private static final String SIGN_KEY = "Rg0qTuu2BltwOIdVnzNVJy9sCbiOD9P90uO0aDDbGa4";
     private static final String INSTALL_ID = "e7df8ca3-25eb-40fa-8d5e-d5a131f4d261";
-    private static final String APP_VER = "1.2.0";
-    private static final String APP_VC = "105";
+    // 兜底版本；运行时 syncVersion() 从 /request/app/releases/latest 动态覆盖。
+    // 1.2.x 之前写死版本号，App 一升级就被 426「请在系统设置里升级到最新版本」拦下，
+    // 这正是「App 一更新视频就无法播放」的第一个原因。
+    private static final String APP_VER = "1.2.3";
+    private static final String APP_VC = "108";
+    // 2026-11-10 实测：1.2.3 起 /request/playback/resolve 强制校验注册会员态，
+    // 不带 token 一律 401「请先注册会员」；带上后才会进入解析逻辑。
+    // 此 JWT 来自 2026-10-23 抓包（user_id=1815 / user_name=mimang / group_id=2），
+    // exp=2027-10-23。group_id=2 是普通会员，没有 4K / 云搜权限，故 url=hold 的线路仍不可播。
+    private static final String USER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            + "eyJpc3MiOiJBcHBUbyIsImlhdCI6MTc5MjczMjIzNSwiZXhwIjoxODI0MjY4MjM1LCJuYmYiOjE3OTI3MzIyMzUsInN1YiI6IkFwcFRvIiwianRpIjoiYmQwNTQ4MmM0YzVjZmUyZmQ5NzEyNGQxY2QxMzBkNzciLCJkYXRhIjp7InVzZXJfaWQiOjE4MTUsInVzZXJfY2hlY2siOiIwZDY3YmQ5NDUxZWUwZThhNjEyYmE5OGE4NWVhNjRmMiIsInVzZXJfbmFtZSI6Im1pbWFuZyJ9fQ."
+            + "FpAGc9OvAF-42cQHKtWEPgBZlC8ZhGYXjJ4wTAYbcKA";
+    // 1.2.3 详情的 JP 线路 url 变成 `126705|1062479` 这种「闪剧剧集 sid | 分集 id」伪 ID，
+    // 其余线路多为 hold（无权限占位）。把伪 ID 还原成 /p/_?sid=..&ep=.. 后，
+    // 借 shanju 的解析器（get_parsing 里唯一配了 force 的）换出真实直链。
+    private static final String VPLAY_HOST = "https://sj.fanqiecn.com/p/_";
+    private static final String RESOLVE_KEY = "shanju";
     private static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36";
     private static final String FIELDS = "vod_id,vod_name,vod_sub,vod_pic,vod_actor,vod_director,vod_score,"
             + "vod_remarks,vod_blurb,vod_year,vod_tag,vod_class,vod_area,type_id,type_id_1";
@@ -102,6 +124,8 @@ public class FanQieJiang extends Spider {
             {"3", "动漫"},
             {"4", "综艺"},
             {"5", "短剧"},
+            {"44", "少儿"},   // 1.2.3 服务端 get_type 新增的第 6 类；实测 type=44 有 22 条数据
+            {"live", "电视直播"}, // 独立接口 /live/recommend（不在 get_type 里），24 个频道：央视12/卫视11/其他1
     };
 
     private static final String YEAR = "2026,2025,2024,2023,2022,2021,2020,2019,2018,2017,2016,2015";
@@ -160,6 +184,21 @@ public class FanQieJiang extends Spider {
         return sb.toString();
     }
 
+    private static boolean isDigits(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if (!Character.isDigit(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    /** `126705:1` -> true（1.2.3 的 vplay 伪 ID：sid:集序号） */
+    private static boolean isVplayId(String s) {
+        if (s == null) return false;
+        int i = s.indexOf(':');
+        return i > 0 && isDigits(s.substring(0, i)) && isDigits(s.substring(i + 1));
+    }
+
     private static String hex(byte[] b) {
         StringBuilder sb = new StringBuilder();
         for (byte x : b) {
@@ -189,6 +228,38 @@ public class FanQieJiang extends Spider {
         }
     }
 
+    // 运行时版本号：6 小时同步一次，失败就继续用兜底值，不阻塞正常请求
+    private static volatile String appVer = APP_VER;
+    private static volatile String appVc = APP_VC;
+    private static volatile long verSyncAt = 0L;
+
+    /** 从免签的 releases/latest 拿当前服务端认可的版本头，避免下次 App 升级再被 426 拦掉 */
+    private static void syncVersion() {
+        long now = System.currentTimeMillis();
+        if (now - verSyncAt < 6L * 60 * 60 * 1000) return;
+        verSyncAt = now;                      // 失败也先别每次请求都重试
+        try {
+            OkResult r = OkHttp.get(BASE + "/request/app/releases/latest",
+                    new HashMap<String, String>(), new HashMap<String, String>());
+            String body = r.getBody();
+            if (body == null || body.isEmpty()) return;
+            JSONObject outer = new JSONObject(body);
+            String data = outer.optString("data", "");
+            if (!data.startsWith("{")) return;
+            JSONObject cfg = new JSONObject(data).optJSONObject("android_update_config");
+            if (cfg == null) return;
+            String v = cfg.optString("version", "");
+            int vc = cfg.optInt("version_code", 0);
+            if (v.isEmpty() || vc <= 0) return;
+            int plus = v.indexOf('+');
+            appVer = plus > 0 ? v.substring(0, plus) : v;
+            appVc = String.valueOf(vc);
+            SpiderDebug.log("[番茄酱] 版本同步 -> " + appVer + "/" + appVc);
+        } catch (Exception e) {
+            SpiderDebug.log("[番茄酱] 版本同步失败，沿用 " + appVer + "/" + appVc + " : " + e);
+        }
+    }
+
     private Map<String, String> headers(String method, String path, String query, String body) {
         String ts = String.valueOf(System.currentTimeMillis() / 1000);
         String nonce = UUID.randomUUID().toString().replace("-", "");
@@ -199,17 +270,25 @@ public class FanQieJiang extends Spider {
         h.put("Accept", "application/json, */*");
         h.put("Referer", "https://collect.fanqiecn.com/");
         h.put("X-App-Platform", "android");
-        h.put("X-App-Version", APP_VER);
-        h.put("X-App-Version-Code", APP_VC);
+        h.put("X-App-Version", appVer);
+        h.put("X-App-Version-Code", appVc);
         h.put("X-Install-Id", INSTALL_ID);
         h.put("X-Request-Timestamp", ts);
         h.put("X-Request-Nonce", nonce);
         h.put("X-Request-Signature", hmac(msg));
+        // 1.2.3 新增：会员态。头名大小写 / Authorization / query 都能被识别，
+        // 这里按抓包原样用小写 token。
+        h.put("token", USER_TOKEN);
         return h;
     }
 
-    /** 发请求, 返回解包后的 JSONObject (自动展开 data 字符串) */
+    /** 发请求, 返回解包后的 JSONObject (自动展开 data 字符串)
+     *  ⚠ 服务端对严格校验签名的接口（playback/resolve、station/jx/*）用
+     *  「按 key 字母序排序后的 query」做 canonical。本类所有这类调用的参数都
+     *  恰好按 key,label,play_url,player_from 的字母序放入，改动时别打乱顺序。
+     */
     private JSONObject call(String method, String path, Map<String, String> params) {
+        syncVersion();
         String query = buildQuery(params);
         String url = BASE + "/request" + path + (query.isEmpty() ? "" : "?" + query);
         Map<String, String> h = headers(method, path, query, "");
@@ -343,6 +422,7 @@ public class FanQieJiang extends Spider {
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend)
             throws Exception {
+        if ("live".equals(tid)) return liveContent(pg);
         String type = tid;
         String forcedClass = null;
         if (tid.contains("_")) {
@@ -397,12 +477,81 @@ public class FanQieJiang extends Spider {
         return Result.get().vod(list).page(page, pageCount, LIMIT, total).string();
     }
 
+    /**
+     * 电视直播列表。走独立接口 /live/recommend（不在 app/config 的 get_type 里，
+     * 免签，带不带签名都 200），data 同样是转义 JSON，call() 已展开。
+     * 全量只有 24 个频道：央视 12 / 卫视 11 / 其他 1；group 直接当备注显示。
+     * vod_id 加 `lv_` 前缀，避免和点播的纯数字 vod_id 撞车（详情要靠前缀分流）。
+     */
+    private String liveContent(String pg) {
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("limit", "500");
+        JSONObject d = call("GET", "/live/recommend", p);
+        List<Vod> list = new ArrayList<>();
+        if (d != null) {
+            JSONArray arr = d.optJSONArray("items");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject it = arr.optJSONObject(i);
+                    if (it == null) continue;
+                    String cid = it.optString("id");
+                    if (cid.isEmpty()) continue;
+                    Vod v = new Vod();
+                    v.setVodId("lv_" + cid);
+                    v.setVodName(it.optString("name"));
+                    v.setVodPic(it.optString("cover"));
+                    v.setVodRemarks(it.optString("group"));
+                    list.add(v);
+                }
+            }
+        }
+        SpiderDebug.log("[番茄酱] live n=" + list.size());
+        return Result.get().vod(list).page(1, 1, list.size(), list.size()).string();
+    }
+
+    /**
+     * 直播频道详情。列表里 sources[].url 全是空串，播放地址必须实时解析：
+     * 编成 `LV|sid`，由 playerContent 还原成 https://sj.fanqiecn.com/p/_?sid=<sid>。
+     * 实测 /p/_ 这个固定占位就能出源，不需要 App 请求里那个动态随机 token。
+     */
+    private String liveDetail(String sid) {
+        String name = "直播 " + sid, group = "电视直播", cover = "";
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("limit", "500");
+        JSONObject d = call("GET", "/live/recommend", p);
+        if (d != null) {
+            JSONArray arr = d.optJSONArray("items");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject it = arr.optJSONObject(i);
+                    if (it != null && sid.equals(it.optString("id"))) {
+                        name = it.optString("name", name);
+                        group = it.optString("group", group);
+                        cover = it.optString("cover", "");
+                        break;
+                    }
+                }
+            }
+        }
+        Vod v = new Vod();
+        v.setVodId("lv_" + sid);
+        v.setVodName(name);
+        v.setVodPic(cover);
+        v.setVodRemarks(group);
+        v.setVodContent("电视直播频道 · " + group);
+        v.setVodPlayFrom("电视直播");
+        v.setVodPlayUrl("直播$" + RESOLVE_KEY + "|LV|" + sid);
+        SpiderDebug.log("[番茄酱] liveDetail sid=" + sid + " name=" + name);
+        return Result.get().vod(v).string();
+    }
+
     // ==================== 详情 ====================
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
         if (ids == null || ids.isEmpty()) return "";
         String id = ids.get(0);
+        if (id.startsWith("lv_")) return liveDetail(id.substring(3));
         Map<String, String> p = new LinkedHashMap<>();
         p.put("id", id);
         p.put("__platform", "Android");
@@ -447,8 +596,15 @@ public class FanQieJiang extends Spider {
                     JSONObject e = eps.optJSONObject(k);
                     if (e == null) continue;
                     String u = e.optString("url", "");
-                    if (u.isEmpty()) continue;
+                    // 1.2.3: hold 是当前会员组无 4K 权限的占位，展示出来点了也只会 403，直接剔除
+                    if (u.isEmpty() || "hold".equals(u)) continue;
                     String nm = e.optString("name", "第" + (k + 1) + "集");
+                    // JP 线路的 `sid|分集id`（如 126705|1062479）不是可播地址，
+                    // 编成 `JP|sid:集序号`，由 playerContent 还原成 /p/_?sid=..&ep=..
+                    int bar = u.indexOf('|');
+                    if (bar > 0 && isDigits(u.substring(0, bar))) {
+                        u = u.substring(0, bar) + ":" + (k + 1);
+                    }
                     if (ep.length() > 0) ep.append('#');
                     // 用 "源|地址" 编码, playerContent 里拆开
                     ep.append(nm).append('$').append(src).append('|').append(u);
@@ -683,6 +839,27 @@ public class FanQieJiang extends Spider {
             SpiderDebug.log("[番茄酱] Temporary(瓜子) 解析失败，尝试服务端解析");
         }
 
+        // 直播频道：play_url 是 `LV|<sid>`，还原成闪剧 /p/_?sid=<sid>，和点播共用同一套
+        // resolve（key 借 shanju）。实测 /p/_ 占位就能出源：线路1 = CCTV 官方 CDN，
+        // 线路2 = 米咕 m3u8；App 请求里那个长随机 token 不是必需的。
+        if (playUrl.startsWith("LV|")) {
+            playUrl = VPLAY_HOST + "?sid=" + playUrl.substring(3);
+            src = RESOLVE_KEY;
+            SpiderDebug.log("[番茄酱] live -> " + playUrl);
+        }
+
+        // 1.2.3 新链路：JP 线路给的是 `sid:集序号` 伪 ID，要还原成闪剧 /p/_ 地址；
+        // resolve 的 key 必须借 shanju / shanju_bfzy（get_parsing 里 JP 没配解析参数，
+        // 直接用 JP 会 422「播放器没有配置解析参数」）。line 参数服务端忽略。
+        boolean wasVplay = isVplayId(playUrl);
+        if (wasVplay) {
+            int c = playUrl.indexOf(':');
+            playUrl = VPLAY_HOST + "?sid=" + playUrl.substring(0, c)
+                    + "&ep=" + playUrl.substring(c + 1) + "&line=" + RESOLVE_KEY;
+            src = RESOLVE_KEY;
+            SpiderDebug.log("[番茄酱] vplay -> " + playUrl);
+        }
+
         if (!src.isEmpty() && !playUrl.isEmpty()) {
             Map<String, String> p = new LinkedHashMap<>();
             p.put("key", src);
@@ -691,8 +868,11 @@ public class FanQieJiang extends Spider {
             p.put("player_from", src);
             JSONObject j = call("POST", "/playback/resolve", p);
             if (j != null) {
-                String real = j.optString("url", "");
-                if (real.isEmpty()) real = j.optString("origin", "");
+                // 优先 origin（未包装直链，少一跳）；url 是 collect 的 play.mp4 跳板。
+                // 两者都绝不能带 Referer：实测带任意 Referer 跳板直接 403，不带则 206。
+                // 因此这里只给 url，不塞 header。
+                String real = j.optString("origin", "");
+                if (real.isEmpty()) real = j.optString("url", "");
                 if (!real.isEmpty()) {
                     SpiderDebug.log("[番茄酱] play " + src + " -> " + real);
                     return Result.get().url(real).string();
@@ -703,7 +883,8 @@ public class FanQieJiang extends Spider {
         //  · http 直链可以直接交给播放器（部分源本身就是 m3u8，resolve 返回 422）
         //  · 非 http 的伪地址（czzy:8858:1 / JD-xxx / ApBhhk-1-1）丢给播放器只会报
         //    "格式不支持"，不如返回空让壳子明确提示播放失败、由用户换线路
-        if (!playUrl.startsWith("http")) {
+        if (wasVplay || !playUrl.startsWith("http")) {
+            // vplay 还原出来的 /p/_ 是解析页不是视频，别喂给播放器
             SpiderDebug.log("[番茄酱] " + src + " 解析失败且非直链: " + playUrl);
             return Result.get().url("").string();
         }
