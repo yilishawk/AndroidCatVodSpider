@@ -53,7 +53,8 @@ import javax.crypto.spec.SecretKeySpec;
  * 2) 播放解析新增会员态校验 -> 401 请先注册会员；请求头补 token。
  * 3) 详情 url 从完整 URL 变成 `sid|分集id` 伪 ID / hold；还原成 /p/_?sid=..&ep=..。
  * 4) resolve 的 key 用 JP 会 422；改借 shanju 解析器，并优先返回 origin 直链。
- * ⚠ 播放地址不能带 Referer（collect 跳板带 Referer 即 403），故 playerContent 不设 header。
+ * ⚠ 播放必须原样透传 resolve 返回的 header：点播是「iPhone UA + Referer 空串」，
+ *   直播是「Mac UA + 该 CDN 域名的 Referer」，缺或错一律 403。
  */
 public class FanQieJiang extends Spider {
 
@@ -599,7 +600,14 @@ public class FanQieJiang extends Spider {
                     String u = e.optString("url", "");
                     // 1.2.3: hold 是当前会员组无 4K 权限的占位，展示出来点了也只会 403，直接剔除
                     if (u.isEmpty() || "hold".equals(u)) continue;
-                    String nm = e.optString("name", "第" + (k + 1) + "集");
+                    // 集名兜底，两种情况都要管：
+                    //  · JP 线路的 name 只有纯数字（"1"/"2"/…），直接显示就是「1、2、3」，
+                    //    补成「第1集」才好认；
+                    //  · 少数线路 name 是「存在但值为空串」，optString 的默认值只在 key
+                    //    不存在时生效 → 拿到 ""，vod_play_url 就成了 `$地址`，
+                    //    CatVod 解析不出集名会把整条丢掉，表现为「一集都没有」。
+                    String nm = e.optString("name", "").trim();
+                    if (nm.isEmpty() || isDigits(nm)) nm = "第" + (k + 1) + "集";
                     // JP 线路的 `sid|分集id`（如 126705|1062479）不是可播地址，
                     // 编成 `JP|sid:集序号`，由 playerContent 还原成 /p/_?sid=..&ep=..
                     int bar = u.indexOf('|');
@@ -610,16 +618,8 @@ public class FanQieJiang extends Spider {
                     // 用 "源|地址" 编码, playerContent 里拆开
                     ep.append(nm).append('$').append(src).append('|').append(u);
                 }
-                if (ep.length() == 0) {
-                    // 整组都是 hold：当前会员组没有 4K / 云搜权限，App 里点了也是 403。
-                    // 但不能整组丢掉——否则用户看到的就是「线路不全」。用 hold 占位
-                    // 明确列出来，点了会播放失败，至少线路数和 App 一致。
-                    if (eps.length() > 0) {
-                        ep.append("需VIP").append('$').append(src).append("|hold");
-                    } else {
-                        continue;
-                    }
-                }
+                // 整组都是 hold：当前会员组没权限，点了也只会 403，凯哥要求直接不要
+                if (ep.length() == 0) continue;
                 if (from.length() > 0) {
                     from.append("$$$");
                     url.append("$$$");
