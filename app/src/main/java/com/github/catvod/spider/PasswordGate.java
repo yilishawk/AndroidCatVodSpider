@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 public class PasswordGate {
 
     // 密码只存 SHA-256 哈希，不直接存明文，防止反编译直接看到密码原文。
-    private static final String PASSWORD_HASH = sha256("123456789");
+    private static final String PASSWORD_HASH = sha256("9");
 
     private static volatile boolean unlocked = false;
 
