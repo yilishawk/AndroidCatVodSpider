@@ -21,7 +21,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v4
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v5
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
  * 【为什么必须用 WebView，而不是纯 HTTP】
@@ -38,13 +38,22 @@ import java.util.concurrent.TimeUnit;
  *      → m3u8。m3u8 里的分片名是**混淆串**（如 !_0D55nU~2~R~...），
  *      真实地址 file.icve.com.cn/rc/xx/yyy/{32hex}.m4s 只存在于 worker 的映射表里。
  *
- * 【本版能做到 / 做不到（如实标注）】
- *   能做到：首页/分类第 1 页列表、详情页真实集数、剧名与封面。
- *   做不到：翻页、按分类筛选、搜索（proof header 绑 body，改不了）；
- *           把播放地址交给外部播放器（分片名混淆 + 解密层在 wasm 里，未逆出）。
+ * 【v5 修正（针对「所有分类列表一样 / 播放点了不能播」）】
+ *   · 分类：/filter?mform=<值> 的 **URL 参数会驱动首屏 POST body**，且因为是页面自己
+ *     发的请求，proof header 天然合法。实测：mform=1 → 电影 1322 条，mform=2 → 电视剧
+ *     902 条，mform=bangumi → 番剧 318 条，mform=chinese_cartoon → 国漫 75 条。
+ *     v4 的 categoryContent 完全没用 tid，全站都拿「全部」第 1 页 ⇒ 所有 tab 一样。
+ *   · 播放：m3u8 明文能拿到（页面已解密），但分片名是 **per-segment 混淆串**
+ *     （如 !_0D55nU~2~R~...），真实地址 file.icve.com.cn/rc/{a}/{b}/{32HEX}.m4s
+ *     只在 hls.js 的自定义 loader 内部现算，长度与明文不等长、逐字符映射破不出来。
+ *     ⇒ 外部播放器即使拿到 m3u8 也放不了。v5 改为 parse=1 + 播放页 URL，
+ *       让壳子用 WebView 打开站点自己的播放器（页面本身实测能播）。
  *
- *   播放这一步故意返回明确错误而不是假链接：给假链接只会让播放器黑屏，
- *   让人误以为是播放器问题。要看片请用站点的网页模式（配置里带 homePage）。
+ * 【本版能做到 / 做不到（如实标注）】
+ *   能做到：首页/分类第 1 页列表（各分类已区分）、详情页真实集数、剧名与封面、
+ *           点播放时用网页模式打开站点播放页。
+ *   做不到：翻页、搜索（proof header 绑 body，改参数会被 419）；
+ *           把播放地址交给外部原生播放器（分片名混淆，未逆出 loader 的映射）。
  *
  * 【接口约定（已对照 webhtv-android6 源码核过）】
  *   · 类名必须是 com.github.catvod.spider.<api 去掉 csp_>；api=csp_Gaze → Gaze
@@ -71,6 +80,11 @@ public class Gaze extends Spider {
     private Handler main;
     private WebView wv;
     private final Object lock = new Object();
+
+    /** 单条缓存：同一个 tid 连续被调（壳子常连着问 page=1、page=2）时不重复加载页面。
+     *  只留最近一个分类，切 tab 必然重新抓，避免拿到别的分类的旧数据。 */
+    private String lastTid;
+    private String lastRaw;
 
     // ===================================================================
     // init
@@ -315,10 +329,13 @@ public class Gaze extends Spider {
     }
 
     // ===================================================================
-    // 列表：/filter 页 → 点 CAP → 页面自己发 filter_movielist → 抓响应
+    // 列表：/filter[?mform=..] 页 → 点 CAP → 页面自己发 filter_movielist → 抓响应
+    //   query 形如 "?mform=1"；空串表示「全部」。
+    //   不同 query 是不同文档，window.__gz 会被重建，所以不会串到上一个分类的数据。
     // ===================================================================
-    private String fetchListFirstPage() {
-        if (!load(base + "/filter", PAGE_READY_MS)) return null;
+    private String fetchList(String query) {
+        String url = base + "/filter" + (query == null ? "" : query);
+        if (!load(url, PAGE_READY_MS)) return null;
         long deadline = System.currentTimeMillis() + LIST_BUDGET_MS;
         int round = 0;
         while (System.currentTimeMillis() < deadline) {
@@ -327,14 +344,23 @@ public class Gaze extends Spider {
             String cap = ev("window.__gzCap?window.__gzCap():'no-hook'", 2000);
             String list = ev("window.__gzList?window.__gzList():''", 2500);
             if (list != null && list.indexOf("mlist") >= 0) {
-                dlog("list ok round=" + round + " cap=" + cap + " len=" + list.length());
+                dlog("list ok " + query + " round=" + round + " cap=" + cap + " len=" + list.length());
                 return list;
             }
-            if (round == 1) dlog("list wait cap=" + cap);
+            if (round == 1) dlog("list wait " + query + " cap=" + cap);
             sleep(900);
         }
-        dlog("list timeout");
+        dlog("list timeout " + query);
         return null;
+    }
+
+    /** tid → 站点 filter 页的 query。只映射实测过的取值，没验证过的一律不瞎编。 */
+    private static String mformOf(String tid) {
+        if ("movie".equals(tid)) return "?mform=1";
+        if ("tv".equals(tid)) return "?mform=2";
+        if ("bangumi".equals(tid)) return "?mform=bangumi";
+        if ("cartoon".equals(tid)) return "?mform=chinese_cartoon";
+        return ""; // all：不带参数
     }
 
     // ===================================================================
@@ -345,7 +371,9 @@ public class Gaze extends Spider {
         JSONObject out = new JSONObject();
         try {
             out.put("class", buildClasses());
-            String raw = fetchListFirstPage();
+            String raw = fetchList("");
+            lastTid = "all";
+            lastRaw = raw;
             out.put("list", parseList(raw));
             dlog("home items=" + out.optJSONArray("list").length());
         } catch (Throwable t) {
@@ -362,8 +390,28 @@ public class Gaze extends Spider {
     public String categoryContent(String tid, String pg, boolean filter,
                                   HashMap<String, String> extend) throws Exception {
         JSONObject out = new JSONObject();
+        String t = (tid == null || tid.isEmpty()) ? "all" : tid;
         try {
-            String raw = fetchListFirstPage();
+            int page = parseInt(pg, 1);
+            if (page > 1) {
+                // proof header 与请求体绑定，改 page 会被 419 拒；与其把第 1 页重复给出去，
+                // 不如直接告诉壳子没有更多。
+                out.put("page", page);
+                out.put("pagecount", 1);
+                out.put("limit", 20);
+                out.put("total", 0);
+                out.put("list", new JSONArray());
+                return out.toString();
+            }
+            String raw;
+            if (t.equals(lastTid) && lastRaw != null) {
+                raw = lastRaw;
+                dlog("category hit cache tid=" + t);
+            } else {
+                raw = fetchList(mformOf(t));
+                lastTid = t;
+                lastRaw = raw;
+            }
             JSONArray list = parseList(raw);
             int total = 0;
             if (raw != null) {
@@ -371,15 +419,13 @@ public class Gaze extends Spider {
                 if (j != null) total = j.optInt("total", 0);
             }
             out.put("page", 1);
-            // proof header 绑 body，改 page 参数会被 419 拒；所以只有第 1 页。
-            // 这里老实写 pagecount=1，避免用户翻到重复内容。
             out.put("pagecount", 1);
             out.put("limit", 20);
             out.put("total", total > 0 ? total : list.length());
             out.put("list", list);
-            dlog("category tid=" + tid + " pg=" + pg + " items=" + list.length() + " total=" + total);
-        } catch (Throwable t) {
-            dlog("category err " + t);
+            dlog("category tid=" + t + " q=" + mformOf(t) + " items=" + list.length() + " total=" + total);
+        } catch (Throwable e) {
+            dlog("category err " + e);
             try {
                 out.put("page", 1);
                 out.put("pagecount", 1);
@@ -410,8 +456,10 @@ public class Gaze extends Spider {
 
     private JSONArray buildClasses() throws Exception {
         JSONArray cls = new JSONArray();
-        String[][] tabs = {{"all", "全部"}, {"tv", "电视剧"}, {"movie", "电影"},
-                {"bangumi", "番剧"}, {"variety", "综艺"}};
+        // 这 5 个 tid 都有实测数据支撑；v4 里的「综艺」没有验证过取值，已去掉，
+        // 免得又一个 tab 拿到「全部」的列表。
+        String[][] tabs = {{"all", "全部"}, {"movie", "电影"}, {"tv", "电视剧"},
+                {"bangumi", "番剧"}, {"cartoon", "国漫"}};
         for (String[] t : tabs) {
             JSONObject c = new JSONObject();
             c.put("type_id", t[0]);
@@ -567,21 +615,32 @@ public class Gaze extends Spider {
 
     // ===================================================================
     // playerContent
-    //   播放链最后一层在页面 wasm 里：分片名混淆 + 解密，取不到可播地址。
-    //   这里返回明确原因，不返回假链接。
+    //   为什么不能直接给 m3u8：
+    //     页面的 m3u8 明文能拿到（blob），但分片 URI 是 per-segment 混淆串，
+    //     真实地址（file.icve.com.cn/rc/{a}/{b}/{32HEX}.m4s）由 hls.js 的自定义
+    //     loader 现算。实测：混淆串长度与明文路径不等长（79~83 vs 46~47），
+    //     逐字符映射不成立，外部播放器拿到 m3u8 只会 404。
+    //   所以返回 parse=1 + 播放页 URL：壳子会走 ParseJob 的 type=0（WebView），
+    //   打开站点自己的播放器。页面自身实测能播（readyState=4、currentTime 正常推进）。
+    //   注意：ParseJob 里最终 URL = parse.getUrl() + result.getUrl()，
+    //   因此 url 放播放页、playUrl 必须留空，否则会拼成 .../play/x.../play/x。
     // ===================================================================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         JSONObject out = new JSONObject();
-        out.put("parse", 0);
-        out.put("url", "");
-        out.put("header", new JSONObject());
         String mid = id == null ? "" : id;
+        int ep = -1;
         int bar = mid.indexOf('|');
-        if (bar > 0) mid = mid.substring(0, bar);
-        out.put("msg", "GAZE 的播放地址由页面 wasm 解密、分片名混淆，无法交给外部播放器。"
-                + "请在站点配置里加 homePage（网页模式）观看，或直接打开 " + base + "/play/" + mid);
-        dlog("player blocked id=" + id);
+        if (bar > 0) {
+            ep = parseInt(mid.substring(bar + 1), -1);
+            mid = mid.substring(0, bar);
+        }
+        String page = base + "/play/" + mid;
+        out.put("parse", 1);
+        out.put("url", page);
+        out.put("playUrl", "");
+        out.put("header", new JSONObject());
+        dlog("player -> web parse " + page + " ep=" + ep);
         return out.toString();
     }
 
