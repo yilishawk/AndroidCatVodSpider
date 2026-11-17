@@ -29,7 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v6
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v7
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
  * 【为什么必须用 WebView，而不是纯 HTTP】
@@ -60,21 +60,32 @@ import java.util.concurrent.TimeUnit;
  *     页面仍负责最重的解密链（gzip/base64/AES-CBC/Brotli 都在页面里跑），
  *     本类只 hook URL.createObjectURL 把解好密的 m3u8 明文捞出来。
  *
- * 【重要：站点有两批分片，只有一批能外放】
- *   · .m4s 那批是**裸 fMP4**（前 8 字节 = size + styp/sidx，实测可 Range 取到），
- *     还原出直链后外部播放器能直接播。
- *   · .png 那批是**伪装的加密分片**：文件是 1x1 PNG 外壳（IHDR 后仅 16 字节 IDAT），
- *     其后跟 729KB 高熵数据，全文找不到 ftyp/moof/styp 任何 box ⇒ 只有页面自己的
- *     worker 能解。这种就算把 URL 还原对了，外部播放器也是黑屏。
- *   ⇒ 所以在交出直链前先取 16 字节探一下（looksPlainMp4），不是裸 fMP4 就退回
- *     网页播放模式，绝不把死链丢给播放器。
+ * 【v7：分片容器搞清楚了——两批都是明文，一批要剥壳】
+ *   · .m4s 那批 = **裸 fMP4**（前 8 字节 = size + styp/sidx）→ 直链直接播。
+ *   · .png 那批 = **PNG 外壳 + 纯 MPEG-TS + IEND**，**没有加密**：
+ *       offset 0..7    PNG 签名
+ *       offset 8..32   IHDR（1x1）
+ *       offset 33..60  IDAT（16 字节，只装一张 1x1 图）
+ *       offset 61..    3880 个 188 字节 TS 包（0x47 全部命中，0 错位）
+ *       末尾 12 字节   IEND
+ *     实测 PID 分布：0(PAT)×2、4096(PMT)×2、256 视频×2786、257 音频×1089、17(SDT)×1
+ *     ⇒ 剥掉头 61 字节和尾 12 字节就是标准 TS，播放器直接吃。
+ *   （v6 曾把这批误判成"加密"，是因为只搜了 ftyp/moof/styp，没往 TS 上想。）
+ *
+ * 【v7 播放路径】
+ *   页面仍负责最重的解密链（gzip/base64/AES-CBC/Brotli 都在页面里跑），
+ *   本类只 hook URL.createObjectURL 把 m3u8 明文捞出来，然后：
+ *     · 裸 fMP4 → m3u8 里写真实直链（零代理，最快）
+ *     · TS      → m3u8 里写 http://127.0.0.1:port/s/{token}/{i}.ts
+ *                 本地服务回源拉整段、剥壳、按 video/mp2t 返回
+ *   两种都是 parse=0，直接交给 ExoPlayer。
  *
  * 【本版能做到 / 做不到（如实标注）】
  *   能做到：首页/分类第 1 页列表（各分类已区分）、详情页真实集数、剧名与封面、
- *           裸 fMP4 那批分片给出可直链播放的 m3u8。
- *   做不到：翻页、搜索（proof header 绑 body，改参数会被 419）；
- *           加密分片（.png 那批）的外放——需要页面 worker 的解密密钥，未逆。
- *   风险点：替换表若被站点换掉，decodeSegment 会返回 null，自动退回网页播放模式。
+ *           两批分片都能给出可播的 m3u8（fMP4 直链 / TS 剥壳代理）。
+ *   做不到：翻页、搜索（proof header 绑 body，改参数会被 419）。
+ *   风险点：替换表若被站点换掉，decodeSegment 会返回 null，自动退回网页播放模式；
+ *           TS 代理不支持 Range（剥壳后长度变了），seek 会整段重下，不影响能播。
  *
  * 【接口约定（已对照 webhtv-android6 源码核过）】
  *   · 类名必须是 com.github.catvod.spider.<api 去掉 csp_>；api=csp_Gaze → Gaze
@@ -177,7 +188,7 @@ public class Gaze extends Spider {
             "  if(oc) window.URL.createObjectURL=function(o){" +
             "    try{" +
             "     if(o&&typeof o.size==='number'){" +
-            "      var keep=function(t){ try{ if(t&&t.indexOf('#EXTM3U')>=0) g.blobs.push(t); }catch(e){} };" +
+            "      var keep=function(t){ try{ if(t&&t.indexOf('#EXTM3U')>=0){ g.blobs.push(t); if(g.blobs.length>4) g.blobs.shift(); } }catch(e){} };" +
             "      if(typeof o.text==='function'){ o.text().then(keep).catch(function(){}); }" +
             "      else if(window.FileReader){ var fr=new FileReader(); fr.onload=function(){ keep(String(fr.result||'')); }; fr.readAsText(o); }" +
             "     }" +
@@ -207,7 +218,14 @@ public class Gaze extends Spider {
             "  var m=document.querySelector('meta[property=\"og:image\"]');" +
             "  return JSON.stringify({t:document.title||'',p:m?m.content:''}); };" +
             " window.__gzClear=function(){ g.blobs.length=0; return 1; };" +
+            " window.__gzCount=function(){ return g.blobs.length; };" +
             " window.__gzM3u8=function(){ return g.blobs.length? g.blobs[g.blobs.length-1] : ''; };" +
+            // 诊断用：一条字符串就能区分「hook 没抓到」和「抓到了但我清空了」
+            " window.__gzDiag=function(){" +
+            "  var v=document.querySelector('video');" +
+            "  return JSON.stringify({hook:1,n:g.blobs.length," +
+            "   v:v?{rs:v.readyState,t:Math.round(v.currentTime||0),src:(v.currentSrc||'').slice(0,40)}:null," +
+            "   href:(location.href||'').slice(-48)}); };" +
             "})();";
 
     // ===================================================================
@@ -735,37 +753,71 @@ public class Gaze extends Spider {
         return null;
     }
 
-    /**
-     * 探一下这个分片是不是「裸 fMP4」。     *   · 站点有两批分片：一批是正常 fMP4（.m4s，前 8 字节是 size+styp/sidx），
-     *     另一批伪装成 .png，PNG 头后面跟的是加密数据（实测 729KB 里找不到任何
-     *     ftyp/moof/styp box），那种只能由页面自己的 worker 解密，外部播放器放不了。
-     *   · 所以先取 16 字节确认，确认不了就退回网页模式，别把死链丢给播放器。
-     * 连不上 / 超时一律当「不是裸 fMP4」，宁可退网页也别黑屏。
-     */
-    private static boolean looksPlainMp4(String url) {
+    // ===================================================================
+    // 分片容器探测
+    //   站点两批分片，**都是明文**，只是容器不同（2026-11-17 实测）：
+    //     · .m4s → 裸 fMP4：前 8 字节 = size + "styp"/"sidx"
+    //     · .png → PNG 外壳 + 纯 MPEG-TS + IEND：
+    //         offset 0..7    PNG 签名
+    //         offset 8..32   IHDR（1x1）
+    //         offset 33..60  IDAT（16 字节，只装一张 1x1 图）
+    //         offset 61..    3880 个 188 字节 TS 包（0x47 全部命中，0 错位）
+    //         末尾 12 字节   IEND
+    //       TS 证据：PID 0(PAT)×2、PID 4096(PMT)×2、PID 256 视频×2786、
+    //               PID 257 音频×1089、PID 17(SDT)×1
+    //   ⇒ .png 那批**不用解密，剥壳就行**，剥完就是标准 TS，播放器直接吃。
+    // ===================================================================
+    private static final int SEG_UNKNOWN = 0;
+    private static final int SEG_FMP4 = 1;
+    private static final int SEG_TS_RAW = 2;
+    private static final int SEG_TS_PNG = 3;
+
+    /** 返回 {类型, 头部要跳过的字节数}；探测不出来返回 null。 */
+    private static int[] probeSeg(String url) {
         java.net.HttpURLConnection c = null;
         java.io.InputStream in = null;
         try {
             c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-            c.setConnectTimeout(4000);
-            c.setReadTimeout(5000);
-            c.setRequestProperty("Range", "bytes=0-15");
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(8000);
+            c.setRequestProperty("Range", "bytes=0-511");
             c.setRequestProperty("User-Agent", UA);
-            if (c.getResponseCode() / 100 != 2) return false;
+            if (c.getResponseCode() / 100 != 2) return null;
             in = c.getInputStream();
-            byte[] b = new byte[16];
+            byte[] b = new byte[512];
             int n = 0;
-            while (n < 16) {
-                int r = in.read(b, n, 16 - n);
+            while (n < 512) {
+                int r = in.read(b, n, 512 - n);
                 if (r <= 0) break;
                 n += r;
             }
-            if (n < 8) return false;
+            if (n < 8) return null;
+
+            boolean png = (b[0] & 0xFF) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G';
+            if (png) {
+                // 在头部附近找 TS 同步点：0x47 且隔 188、376 还是 0x47
+                int lim = Math.min(n - 1, 256);
+                for (int o = 8; o < lim; o++) {
+                    if ((b[o] & 0xFF) != 0x47) continue;
+                    if (o + 188 < n && (b[o + 188] & 0xFF) != 0x47) continue;
+                    if (o + 376 < n && (b[o + 376] & 0xFF) != 0x47) continue;
+                    return new int[]{SEG_TS_PNG, o};
+                }
+                String box = new String(b, 4, 4, "ISO-8859-1");
+                if ("styp".equals(box) || "ftyp".equals(box)) return new int[]{SEG_FMP4, 0};
+                return null;
+            }
             String box = new String(b, 4, 4, "ISO-8859-1");
-            return "styp".equals(box) || "ftyp".equals(box)
-                    || "sidx".equals(box) || "moof".equals(box);
+            if ("styp".equals(box) || "ftyp".equals(box)
+                    || "sidx".equals(box) || "moof".equals(box)) {
+                return new int[]{SEG_FMP4, 0};
+            }
+            if ((b[0] & 0xFF) == 0x47 && n > 188 && (b[188] & 0xFF) == 0x47) {
+                return new int[]{SEG_TS_RAW, 0};
+            }
+            return null;
         } catch (Throwable t) {
-            return false;
+            return null;
         } finally {
             try {
                 if (in != null) in.close();
@@ -778,50 +830,119 @@ public class Gaze extends Spider {
         }
     }
 
+    /** PNG 尾部那 12 字节 IEND（length=0 + "IEND" + crc）。 */
+    private static boolean isIend(byte[] b, int o) {
+        return b[o] == 0 && b[o + 1] == 0 && b[o + 2] == 0 && b[o + 3] == 0
+                && b[o + 4] == 'I' && b[o + 5] == 'E' && b[o + 6] == 'N' && b[o + 7] == 'D';
+    }
+
+    /** 把混淆 m3u8 改写成走本地代理的版本，同时把真实直链按序存进 SEGS。 */
+    private static String rewriteToProxy(String m3u8, String token, int port, int[] stat) {
+        String src = m3u8.replace('\u00A0', ' ').replace("\uFEFF", "");
+        String[] lines = src.split("\r?\n");
+        StringBuilder sb = new StringBuilder(m3u8.length() + 8192);
+        List<String> urls = new java.util.ArrayList<String>();
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.isEmpty() || t.charAt(0) == '#') {
+                sb.append(t).append('\n');
+                continue;
+            }
+            String u = decodeSegment(t);
+            if (u == null) {
+                sb.append(t).append('\n');
+                stat[1]++;
+                continue;
+            }
+            urls.add(u);
+            sb.append("http://127.0.0.1:").append(port).append("/s/").append(token)
+                    .append('/').append(urls.size() - 1).append(".ts\n");
+            stat[0]++;
+        }
+        SEGS.put(token, urls.toArray(new String[0]));
+        return sb.toString();
+    }
+
     // ===================================================================
-    // 本地 m3u8 服务
-    //   播放器只认 URL，不认字符串，所以起一个 127.0.0.1 的只读小服务，
-    //   把改写好的 m3u8 挂出去。分片本身是 file.icve.com.cn 的绝对 https 直链，
-    //   不需要经过本服务代理。
+    // 本地服务（m3u8 + 分片剥壳代理）
+    //   播放器只认 URL，不认字符串，所以起一个 127.0.0.1 的只读小服务：
+    //     /{token}.m3u8      改写好的播放列表
+    //     /s/{token}/{i}.ts  分片：拉源站 → 剥掉 PNG 外壳 → 按 TS 返回
+    //   裸 fMP4 那批不需要代理，m3u8 里直接写真实直链。
     // ===================================================================
     private static final Map<String, String> DOCS = new ConcurrentHashMap<String, String>();
+    private static final Map<String, String[]> SEGS = new ConcurrentHashMap<String, String[]>();
+    private static final Map<String, Integer> SEG_SKIP = new ConcurrentHashMap<String, Integer>();
+    private static volatile java.util.concurrent.ExecutorService segPool;
     private static volatile ServerSocket srvSocket;
     private static volatile int srvPort = -1;
 
     private static synchronized int ensureServer() {
         if (srvPort > 0) return srvPort;
         try {
-            ServerSocket ss = new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"));
+            ServerSocket ss = new ServerSocket(0, 32, InetAddress.getByName("127.0.0.1"));
             srvSocket = ss;
             srvPort = ss.getLocalPort();
+            // 分片要回源拉 700KB+，单线程会让起播卡住，给 4 个线程
+            segPool = java.util.concurrent.Executors.newFixedThreadPool(4,
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override
+                        public Thread newThread(Runnable r) {
+                            Thread th = new Thread(r, "gaze-seg");
+                            th.setDaemon(true);
+                            return th;
+                        }
+                    });
             Thread t = new Thread(new Runnable() {
                 @Override
                 public void run() {
                     while (true) {
                         ServerSocket cur = srvSocket;
                         if (cur == null || cur.isClosed()) break;
-                        Socket s = null;
+                        final Socket s;
                         try {
                             s = cur.accept();
-                            serveDoc(s);
                         } catch (Throwable e) {
-                            if (s != null) {
-                                try {
-                                    s.close();
-                                } catch (Throwable ignored) {
-                                }
-                            }
                             if (cur.isClosed()) break;
+                            continue;
+                        }
+                        java.util.concurrent.ExecutorService pool = segPool;
+                        if (pool == null) {
+                            try {
+                                s.close();
+                            } catch (Throwable ignored) {
+                            }
+                            continue;
+                        }
+                        try {
+                            pool.execute(new Runnable() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        serveDoc(s);
+                                    } catch (Throwable e) {
+                                        try {
+                                            s.close();
+                                        } catch (Throwable ignored) {
+                                        }
+                                    }
+                                }
+                            });
+                        } catch (Throwable e) {
+                            try {
+                                s.close();
+                            } catch (Throwable ignored) {
+                            }
                         }
                     }
                 }
             }, "gaze-m3u8");
             t.setDaemon(true);
             t.start();
-            dlog("m3u8 server 127.0.0.1:" + srvPort);
+            dlog("server 127.0.0.1:" + srvPort);
             return srvPort;
         } catch (Throwable e) {
-            dlog("m3u8 server fail " + e);
+            dlog("server fail " + e);
             return -1;
         }
     }
@@ -842,10 +963,19 @@ public class Gaze extends Spider {
         int q = path.indexOf('?');
         if (q >= 0) path = path.substring(0, q);
         String key = path.startsWith("/") ? path.substring(1) : path;
+        OutputStream os = s.getOutputStream();
+        if (key.startsWith("s/")) {
+            serveSeg(key.substring(2), os);
+            os.flush();
+            try {
+                s.close();
+            } catch (Throwable ignored) {
+            }
+            return;
+        }
         int dot = key.lastIndexOf(".m3u8");
         if (dot > 0) key = key.substring(0, dot);
         String body = DOCS.get(key);
-        OutputStream os = s.getOutputStream();
         if (body == null) {
             byte[] b = "not found".getBytes("UTF-8");
             os.write(("HTTP/1.1 404 Not Found\r\nContent-Length: " + b.length
@@ -867,6 +997,89 @@ public class Gaze extends Spider {
         }
     }
 
+    /** /s/{token}/{i}.ts：回源拉整段 → 剥 PNG 外壳和尾部 IEND → 按 TS 返回。 */
+    private static void serveSeg(String key, OutputStream os) throws Exception {
+        int slash = key.indexOf('/');
+        if (slash <= 0) {
+            writePlain(os, 404, "not found");
+            return;
+        }
+        String token = key.substring(0, slash);
+        String rest = key.substring(slash + 1);
+        int dot = rest.indexOf('.');
+        if (dot > 0) rest = rest.substring(0, dot);
+        int idx = parseInt(rest, -1);
+        String[] urls = SEGS.get(token);
+        if (urls == null || idx < 0 || idx >= urls.length) {
+            writePlain(os, 404, "no seg");
+            return;
+        }
+        Integer sk = SEG_SKIP.get(token);
+        byte[] data = fetchStrip(urls[idx], sk == null ? 0 : sk);
+        if (data == null || data.length == 0) {
+            writePlain(os, 502, "fetch fail");
+            return;
+        }
+        os.write(("HTTP/1.1 200 OK\r\nContent-Type: video/mp2t"
+                + "\r\nContent-Length: " + data.length
+                + "\r\nAccess-Control-Allow-Origin: *"
+                + "\r\nCache-Control: no-store"
+                + "\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
+        os.write(data);
+    }
+
+    private static void writePlain(OutputStream os, int code, String msg) throws Exception {
+        byte[] b = msg.getBytes("UTF-8");
+        os.write(("HTTP/1.1 " + code + " X\r\nContent-Type: text/plain"
+                + "\r\nContent-Length: " + b.length
+                + "\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
+        os.write(b);
+    }
+
+    /**
+     * 拉一整段并剥壳。
+     *   skip=0 表示裸 fMP4，原样返回。
+     *   skip>0 表示 PNG 外壳，跳过头 + 去掉尾部 IEND。
+     * 不转发 Range：剥壳后长度变了，Range 会错位；TS 分片本来就是整段消费。
+     */
+    private static byte[] fetchStrip(String url, int skip) {
+        java.net.HttpURLConnection c = null;
+        java.io.InputStream in = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(25000);
+            c.setRequestProperty("User-Agent", UA);
+            if (c.getResponseCode() / 100 != 2) return null;
+            int len = c.getContentLength();
+            java.io.ByteArrayOutputStream bos =
+                    new java.io.ByteArrayOutputStream(len > 0 ? len : 262144);
+            in = c.getInputStream();
+            byte[] buf = new byte[16384];
+            int r;
+            while ((r = in.read(buf)) > 0) bos.write(buf, 0, r);
+            byte[] all = bos.toByteArray();
+            int from = (skip > 0 && all.length > skip) ? skip : 0;
+            int to = all.length;
+            if (from > 0 && to - from > 12 && isIend(all, to - 12)) to -= 12;
+            if (from == 0 && to == all.length) return all;
+            byte[] out = new byte[to - from];
+            System.arraycopy(all, from, out, 0, out.length);
+            return out;
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Throwable ignored) {
+            }
+            try {
+                if (c != null) c.disconnect();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     // ===================================================================
     // 播放页里把 m3u8 明文取出来
     //   页面自己完成 gzip → base64 → AES-CBC → Brotli 全链（即 wasm 的 servility），
@@ -884,6 +1097,18 @@ public class Gaze extends Spider {
         }
         if (needLoad && !load(base + page, PAGE_READY_MS)) return null;
 
+        // 进来时页面可能已经在播某一集（detailContent 刚打开过同一个播放页），
+        // 此时 m3u8 早就生成好了。**不能清空**——清了再点「正在播的那一集」，
+        // 播放器认为没换集、不会重新加载，就会一直等不到新 blob。
+        int n0 = parseInt(ev("window.__gzCount?window.__gzCount():0", 1500), 0);
+        String pre = null;
+        if (n0 > 0) {
+            String p = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
+            if (p != null && p.length() > 200 && p.indexOf("#EXTINF") >= 0) pre = p;
+        }
+        dlog("grab start ep=" + ep + " needLoad=" + needLoad + " n0=" + n0
+                + " pre=" + (pre == null ? -1 : pre.length()));
+
         long deadline = System.currentTimeMillis() + PLAY_BUDGET_MS;
         boolean clicked = false;
         int round = 0;
@@ -896,25 +1121,35 @@ public class Gaze extends Spider {
                 // 太早点会「点了个空」，拿到的仍是默认那一集的 m3u8（静默错集）。
                 String eps = ev("window.__gzEps?window.__gzEps():'[]'", 2000);
                 if (eps != null && eps.length() > 4) {
-                    // 换集前必须清，否则 __gzM3u8 会返回上一集的播放列表
-                    ev("window.__gzClear?window.__gzClear():0", 800);
                     int target = ep < 0 ? 0 : ep;
                     String r = ev("window.__gzClick?window.__gzClick(" + target + "):'no-hook'", 2000);
                     if (r != null && r.indexOf("ok") >= 0) {
                         clicked = true;
-                        dlog("play click ep=" + target + " round=" + round);
+                        dlog("play click ep=" + target + " round=" + round + " n0=" + n0);
                     }
                 }
             } else {
                 String m = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
                 if (m != null && m.length() > 200 && m.indexOf("#EXTINF") >= 0) {
-                    dlog("m3u8 ok len=" + m.length() + " round=" + round);
-                    return m;
+                    int n = parseInt(ev("window.__gzCount?window.__gzCount():-1", 1500), -1);
+                    if (n > n0 || n < 0) {
+                        dlog("m3u8 new n=" + n + " len=" + m.length() + " round=" + round);
+                        return m;
+                    }
+                    // 条数没涨：播放器没重新加载，可能点的就是当前集，继续等一会儿
                 }
+                if (round % 6 == 0) dlog("grab diag " + ev("window.__gzDiag?window.__gzDiag():'no-diag'", 1500));
             }
             sleep(700);
         }
-        dlog("m3u8 timeout clicked=" + clicked);
+        // 超时兜底：只有第 1 集才敢复用「进来时已有的那条」——
+        // 页面默认播的就是第 1 集，所以它和 ep=0 是同一集。
+        // ep>0 时页面当前集未知，复用可能给错集，宁可退回网页模式。
+        if (pre != null && ep <= 0) {
+            dlog("m3u8 reuse pre len=" + pre.length());
+            return pre;
+        }
+        dlog("m3u8 timeout clicked=" + clicked + " n0=" + n0);
         return null;
     }
 
@@ -943,29 +1178,41 @@ public class Gaze extends Spider {
                 int[] stat = new int[2];
                 String fixed = rewriteM3u8(m3u8, stat);
                 String first = stat[0] > 0 ? firstUri(fixed) : null;
-                boolean plain = first != null && looksPlainMp4(first);
-                int port = plain ? ensureServer() : -1;
+                int[] probe = first == null ? null : probeSeg(first);
+                int kind = probe == null ? SEG_UNKNOWN : probe[0];
+                int port = kind != SEG_UNKNOWN ? ensureServer() : -1;
                 if (port > 0) {
                     String token = Long.toHexString(System.currentTimeMillis())
                             + Integer.toHexString(mid.hashCode());
-                    DOCS.put(token, fixed);
+                    String body;
+                    if (kind == SEG_FMP4) {
+                        // 裸 fMP4：直链，不过代理，最省事也最快
+                        body = fixed;
+                    } else {
+                        // TS（含 PNG 外壳）：分片改走本地剥壳代理
+                        int[] s2 = new int[2];
+                        body = rewriteToProxy(m3u8, token, port, s2);
+                        SEG_SKIP.put(token, probe[1]);
+                        dlog("seg proxy skip=" + probe[1] + " n=" + s2[0] + " miss=" + s2[1]);
+                    }
+                    DOCS.put(token, body);
                     // 只留最近 8 份，防止长时间使用把内存堆满
-                    if (DOCS.size() > 8) {
-                        int drop = DOCS.size() - 8;
-                        for (String k : DOCS.keySet()) {
-                            if (drop-- <= 0) break;
-                            if (!k.equals(token)) DOCS.remove(k);
-                        }
+                    for (String k : DOCS.keySet()) {
+                        if (DOCS.size() <= 8) break;
+                        if (k.equals(token)) continue;
+                        DOCS.remove(k);
+                        SEGS.remove(k);
+                        SEG_SKIP.remove(k);
                     }
                     out.put("parse", 0);
                     out.put("url", "http://127.0.0.1:" + port + "/" + token + ".m3u8");
                     out.put("playUrl", "");
                     out.put("header", new JSONObject());
-                    dlog("player direct seg=" + stat[0] + " miss=" + stat[1] + " first=" + first);
+                    dlog("player direct kind=" + kind + " seg=" + stat[0] + " miss=" + stat[1]);
                     return out.toString();
                 }
-                dlog("player fallback seg=" + stat[0] + " miss=" + stat[1]
-                        + " first=" + first + " plain=" + plain);
+                dlog("player fallback kind=" + kind + " seg=" + stat[0] + " miss=" + stat[1]
+                        + " first=" + first);
             }
         } catch (Throwable t) {
             dlog("player err " + t);
@@ -985,6 +1232,13 @@ public class Gaze extends Spider {
     @Override
     public void destroy() {
         DOCS.clear();
+        SEGS.clear();
+        SEG_SKIP.clear();
+        try {
+            if (segPool != null) segPool.shutdownNow();
+        } catch (Throwable ignored) {
+        }
+        segPool = null;
         try {
             if (srvSocket != null) srvSocket.close();
         } catch (Throwable ignored) {
