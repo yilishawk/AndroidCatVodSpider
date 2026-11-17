@@ -29,7 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v7
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v8
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
  * 【为什么必须用 WebView，而不是纯 HTTP】
@@ -72,6 +72,19 @@ import java.util.concurrent.TimeUnit;
  *     ⇒ 剥掉头 61 字节和尾 12 字节就是标准 TS，播放器直接吃。
  *   （v6 曾把这批误判成"加密"，是因为只搜了 ftyp/moof/styp，没往 TS 上想。）
  *
+ * 【v8：还有一条更短的路——整片直链】
+ *   站点自己的播放器会 POST /fetch_<随机>_murl（body: id=集&mid=片&bubble=64hex，
+ *   外加两个随机名的 proof 头 + 一个 %40%23%2A… 头），返回：
+ *     {"code":1,"url":"https://lf9-csp-sign.bytetos.com/....mp4?x-expires=..&x-signature=..&name=bgm.mp4"}
+ *   实测这个 "bgm.mp4" 是**伪装名**，它就是正片：
+ *     Content-Type video/mp4、Content-Length 319,488,448（304MB）、Accept-Ranges: bytes、
+ *     ftyp(0) + moov(32) → faststart，moov 在文件头，边下边播不用等；
+ *     moov/trak/mdia 里 hdlr=vide、stsd=avc1，mvhd duration 2725s（45 分钟）。
+ *   ⇒ 拿到这条链接就**完全不需要** AES/Brotli/wasm/分片剥壳，parse=0 直接丢给 ExoPlayer。
+ *   代价：x-expires 只给 1 小时（实测 04:08 生成、04:54 过期），所以每次播放都得现场取，
+ *        不能缓存；proof 头与 bubble 都是页面即时算的，本地复算不了（重放旧包 → 403 请求无效）。
+ *   ⇒ 做法：hook 页面自己的 fetch/XHR，只把 _murl 的响应里那条 url 抄下来。
+ *
  * 【v7 播放路径】
  *   页面仍负责最重的解密链（gzip/base64/AES-CBC/Brotli 都在页面里跑），
  *   本类只 hook URL.createObjectURL 把 m3u8 明文捞出来，然后：
@@ -110,6 +123,9 @@ public class Gaze extends Spider {
      *  正常路径下 detailContent 已经把页面留在播放页且 CAP 已过，这里只需点集 + 等解密，
      *  实测 3~8s；28s 是给慢机/重加载留的余量，同时别撞上壳子对 playerContent 的超时。 */
     private static final long PLAY_BUDGET_MS = 28000;
+
+    /** grabM3u8 的返回前缀：带它表示「整片直链」，不带就是 m3u8 明文。 */
+    private static final String MP4_PREFIX = "mp4:";
 
     private String base = DEFAULT_BASE;
     private Context appCtx;
@@ -164,14 +180,27 @@ public class Gaze extends Spider {
     private static final String CAP_JS =
             "(function(){" +
             " if(window.__gz) return;" +
-            " var g={lists:[],blobs:[],media:[]}; window.__gz=g;" +
+            " var g={lists:[],blobs:[],media:[],murls:[]}; window.__gz=g;" +
             " function pushList(t){ try{ if(t && t.indexOf('mlist')>=0) g.lists.push(t); }catch(e){} }" +
+            // _murl 接口回的是 {"code":1,"url":"https://lf9-csp-sign.bytetos.com/....mp4?x-signature=..."}
+            // 这是**整片直链**（faststart，moov 在前，支持 Range），比 m3u8 那条链子简单得多。
+            // 接口路径带随机前缀（如 fetch_189c_murl），所以只按后缀 _murl 匹配。
+            " function pushMurl(t){ try{" +
+            "  if(!t) return;" +
+            "  var i=t.indexOf('\"url\"'); if(i<0) return;" +
+            "  var a=t.indexOf('\"', i+5); if(a<0) return;" +
+            "  var b=t.indexOf('\"', a+1); if(b<0) return;" +
+            "  var u=t.slice(a+1,b).split('\\\\/').join('/');" +
+            "  if(u.indexOf('http')!==0) return;" +
+            "  g.murls.push(u); if(g.murls.length>4) g.murls.shift();" +
+            " }catch(e){} }" +
             " try{" +
             "  var of=window.fetch;" +
             "  if(of){ window.fetch=function(i,n){" +
             "    var u=(typeof i==='string')?i:((i&&i.url)||'');" +
             "    var p=of.apply(this,arguments);" +
-            "    try{ p.then(function(r){ if(u.indexOf('filter_movielist')>=0){ r.clone().text().then(pushList).catch(function(){}); } }).catch(function(){}); }catch(e){}" +
+            "    try{ p.then(function(r){ if(u.indexOf('filter_movielist')>=0){ r.clone().text().then(pushList).catch(function(){}); }" +
+            "     else if(u.indexOf('_murl')>=0){ r.clone().text().then(pushMurl).catch(function(){}); } }).catch(function(){}); }catch(e){}" +
             "    return p; };" +
             "  }" +
             " }catch(e){}" +
@@ -180,7 +209,8 @@ public class Gaze extends Spider {
             "  XMLHttpRequest.prototype.open=function(m,u){ this.__u=String(u); return oo.apply(this,arguments); };" +
             "  XMLHttpRequest.prototype.send=function(b){" +
             "    var s=this;" +
-            "    s.addEventListener('load',function(){ try{ if((s.__u||'').indexOf('filter_movielist')>=0) pushList(s.responseText||''); }catch(e){} });" +
+            "    s.addEventListener('load',function(){ try{ if((s.__u||'').indexOf('filter_movielist')>=0) pushList(s.responseText||'');" +
+            "     else if((s.__u||'').indexOf('_murl')>=0) pushMurl(s.responseText||''); }catch(e){} });" +
             "    return os.apply(this,arguments); };" +
             " }catch(e){}" +
             " try{" +
@@ -220,10 +250,12 @@ public class Gaze extends Spider {
             " window.__gzClear=function(){ g.blobs.length=0; return 1; };" +
             " window.__gzCount=function(){ return g.blobs.length; };" +
             " window.__gzM3u8=function(){ return g.blobs.length? g.blobs[g.blobs.length-1] : ''; };" +
+            " window.__gzMurl=function(){ return g.murls.length? g.murls[g.murls.length-1] : ''; };" +
+            " window.__gzMurlCount=function(){ return g.murls.length; };" +
             // 诊断用：一条字符串就能区分「hook 没抓到」和「抓到了但我清空了」
             " window.__gzDiag=function(){" +
             "  var v=document.querySelector('video');" +
-            "  return JSON.stringify({hook:1,n:g.blobs.length," +
+            "  return JSON.stringify({hook:1,n:g.blobs.length,m:g.murls.length," +
             "   v:v?{rs:v.readyState,t:Math.round(v.currentTime||0),src:(v.currentSrc||'').slice(0,40)}:null," +
             "   href:(location.href||'').slice(-48)}); };" +
             "})();";
@@ -267,6 +299,22 @@ public class Gaze extends Spider {
             @Override
             public void onPageFinished(WebView v, String url) {
                 inject(v);
+            }
+
+            /** 纯观察，不改请求：把页面自己发的关键请求记进日志。
+             *  _murl 的路径前缀是随机的（fetch_189c_murl），日志里看到才知道它长什么样。 */
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView v, android.webkit.WebResourceRequest r) {
+                try {
+                    String u = r.getUrl() == null ? "" : r.getUrl().toString();
+                    if (u.indexOf("_murl") >= 0 || u.indexOf("gaze_file_vl") >= 0
+                            || u.indexOf("play_source_group") >= 0) {
+                        dlog("net " + r.getMethod() + " " + u);
+                    }
+                } catch (Throwable ignored) {
+                }
+                return null;
             }
         });
         wv = w;
@@ -1106,8 +1154,22 @@ public class Gaze extends Spider {
             String p = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
             if (p != null && p.length() > 200 && p.indexOf("#EXTINF") >= 0) pre = p;
         }
+        // 整片直链（_murl 接口）优先级最高：不代理、不剥壳、不占内存，播放器自己 Range 拖动
+        int m0 = parseInt(ev("window.__gzMurlCount?window.__gzMurlCount():0", 1500), 0);
+        String mpre = null;
+        if (m0 > 0) {
+            String u = ev("window.__gzMurl?window.__gzMurl():''", 3000);
+            if (u != null && u.length() > 20 && u.indexOf("http") == 0) mpre = u;
+        }
         dlog("grab start ep=" + ep + " needLoad=" + needLoad + " n0=" + n0
-                + " pre=" + (pre == null ? -1 : pre.length()));
+                + " pre=" + (pre == null ? -1 : pre.length())
+                + " m0=" + m0 + " mpre=" + (mpre == null ? -1 : mpre.length()));
+
+        // 页面默认播第 1 集，所以 ep<=0 时进来已有的那条就是它，不用再点（省 3~8s）
+        if (ep <= 0 && mpre != null) {
+            dlog("murl pre hit ep=" + ep);
+            return MP4_PREFIX + mpre;
+        }
 
         long deadline = System.currentTimeMillis() + PLAY_BUDGET_MS;
         boolean clicked = false;
@@ -1129,6 +1191,15 @@ public class Gaze extends Spider {
                     }
                 }
             } else {
+                // 先看整片直链：新出现的才算（条数没涨说明是换集前那条）
+                String mu = ev("window.__gzMurl?window.__gzMurl():''", 3000);
+                if (mu != null && mu.length() > 20 && mu.indexOf("http") == 0) {
+                    int mc = parseInt(ev("window.__gzMurlCount?window.__gzMurlCount():-1", 1500), -1);
+                    if (mc > m0 || mc < 0) {
+                        dlog("murl new n=" + mc + " len=" + mu.length() + " round=" + round);
+                        return MP4_PREFIX + mu;
+                    }
+                }
                 String m = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
                 if (m != null && m.length() > 200 && m.indexOf("#EXTINF") >= 0) {
                     int n = parseInt(ev("window.__gzCount?window.__gzCount():-1", 1500), -1);
@@ -1145,11 +1216,15 @@ public class Gaze extends Spider {
         // 超时兜底：只有第 1 集才敢复用「进来时已有的那条」——
         // 页面默认播的就是第 1 集，所以它和 ep=0 是同一集。
         // ep>0 时页面当前集未知，复用可能给错集，宁可退回网页模式。
+        if (mpre != null && ep <= 0) {
+            dlog("murl reuse pre len=" + mpre.length());
+            return MP4_PREFIX + mpre;
+        }
         if (pre != null && ep <= 0) {
             dlog("m3u8 reuse pre len=" + pre.length());
             return pre;
         }
-        dlog("m3u8 timeout clicked=" + clicked + " n0=" + n0);
+        dlog("play url timeout clicked=" + clicked + " n0=" + n0 + " m0=" + m0);
         return null;
     }
 
@@ -1173,7 +1248,23 @@ public class Gaze extends Spider {
             mid = mid.substring(0, bar);
         }
         try {
-            String m3u8 = grabM3u8(mid, ep);
+            String got = grabM3u8(mid, ep);
+            // 最优：整片直链（_murl 接口给的签名 MP4，faststart + Range）
+            //   不代理、不剥壳、不吃内存，播放器自己拖进度条。
+            //   签名 1 小时过期，所以每次播放都现场取，不能缓存。
+            if (got != null && got.startsWith(MP4_PREFIX)) {
+                String direct = got.substring(MP4_PREFIX.length());
+                JSONObject hd = new JSONObject();
+                hd.put("User-Agent", UA);
+                hd.put("Referer", base + "/");
+                out.put("parse", 0);
+                out.put("url", direct);
+                out.put("playUrl", "");
+                out.put("header", hd);
+                dlog("player mp4 direct len=" + direct.length());
+                return out.toString();
+            }
+            String m3u8 = got;
             if (m3u8 != null) {
                 int[] stat = new int[2];
                 String fixed = rewriteM3u8(m3u8, stat);
