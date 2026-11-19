@@ -29,9 +29,18 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v10
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v11
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v11：退出播放后声音还在（2026-11-19 真机反馈）】
+ *   根因不是本地代理在跑，是 ensureWv() 里开了
+ *   setMediaPlaybackRequiresUserGesture(false) —— 播放页的 <video> 会在我们那个
+ *   不可见的 WebView 里自动播放并出声；而 spider.destroy() 只在切站点时调用，
+ *   「退出播放」根本不会触发它，所以声音一直响。
+ *   ⇒ 两层修：① 注入脚本把 HTMLMediaElement.play 包一层强制 muted（页面逻辑照常，
+ *     m3u8 blob 照常生成，只是不出声）；② playerContent 外层 finally 调 stopMedia()，
+ *     不管走直链 / 本地代理 / 网页兜底哪条路，返回前都 pause + 静音。
+ *
  * 【v10：列表全空的两个真凶（2026-11-19 现场二分定位）】
  *   ① 站点埋了个蜜罐：CAP 页里专门钓 window 上以 "__gz" 开头的全局。
  *      一旦发现，就把 cap-widget 从 DOM 里摘掉、正文换成「页面暂时不可用，请刷新后重试」，
@@ -455,6 +464,21 @@ public class Gaze extends Spider {
             "     }" +
             "    }catch(e){}" +
             "    return oc.apply(this,arguments); };" +
+            " }catch(e){}" +
+            // 【静音 —— 修「退出播放后声音还在」】
+            //   这个 WebView 是不挂到窗口上的，但 ensureWv() 里开了
+            //   setMediaPlaybackRequiresUserGesture(false)，播放页的 <video> 会自动播放并出声。
+            //   spider 的 destroy() 在「退出播放」时根本不会被调用，所以声音会一直响。
+            //   这里把 play() 包一层强制 muted：页面逻辑照常跑（m3u8 blob 照常生成、选集照常切），
+            //   但永远不出声；再用 play / volumechange 事件兜住页面自己把声音改回来的情况。
+            " try{" +
+            "  var mp=window.HTMLMediaElement&&HTMLMediaElement.prototype.play;" +
+            "  if(mp) HTMLMediaElement.prototype.play=function(){" +
+            "   try{ this.muted=true; this.volume=0; }catch(e){} return mp.apply(this,arguments); };" +
+            "  var mute=function(v){ try{ if(v&&v.muted!==true) v.muted=true; if(v&&v.volume!==0) v.volume=0; }catch(e){} };" +
+            "  document.addEventListener('play',function(e){ mute(e.target); },true);" +
+            "  document.addEventListener('volumechange',function(e){ mute(e.target); },true);" +
+            "  document.addEventListener('loadedmetadata',function(e){ mute(e.target); },true);" +
             " }catch(e){}" +
             " N.cap=function(){" +
             "  var w=document.querySelector('cap-widget'); if(!w||!w.shadowRoot) return 'no-widget';" +
@@ -1632,6 +1656,17 @@ public class Gaze extends Spider {
     // ===================================================================
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // 不管走哪条返回路径（直链 / 本地代理 / 网页兜底），出来前都把 WebView 里的媒体停掉：
+        // 抓 m3u8 时页面确实在播，不停就会一直出声，而 destroy() 在退出播放时不会被调用。
+        try {
+            return playerContent0(flag, id, vipFlags);
+        } finally {
+            stopMedia();
+        }
+    }
+
+    /** playerContent 的真身；外层统一负责把 WebView 里的媒体停掉。 */
+    private String playerContent0(String flag, String id, List<String> vipFlags) throws Exception {
         JSONObject out = new JSONObject();
         String mid = id == null ? "" : id;
         int ep = -1;
@@ -1708,6 +1743,29 @@ public class Gaze extends Spider {
         out.put("header", new JSONObject());
         dlog("player -> web parse " + page + " ep=" + ep);
         return out.toString();
+    }
+
+    // ===================================================================
+    // 停掉 WebView 里的媒体
+    //   播放页的 <video> 会在我们那个不可见 WebView 里自动播放（见 ensureWv 的
+    //   setMediaPlaybackRequiresUserGesture(false)）。spider.destroy() 只在切站点时调用，
+    //   退出播放不会调 —— 所以必须自己在 playerContent 返回前停一次。
+    //   只 pause + 静音，不删 src：页面 JS 还活着，下次点选集能正常重新加载。
+    // ===================================================================
+    private void stopMedia() {
+        final WebView w = wv;
+        if (w == null || main == null) return;
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    w.evaluateJavascript("(function(){try{var a=document.querySelectorAll('video,audio');"
+                            + "for(var i=0;i<a.length;i++){try{a[i].pause();a[i].muted=true;a[i].volume=0;}"
+                            + "catch(e){}}}catch(e){}})()", null);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
     }
 
     // ===================================================================
