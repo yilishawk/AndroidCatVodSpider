@@ -29,9 +29,25 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v8
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v10
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v10：列表全空的两个真凶（2026-11-19 现场二分定位）】
+ *   ① 站点埋了个蜜罐：CAP 页里专门钓 window 上以 "__gz" 开头的全局。
+ *      一旦发现，就把 cap-widget 从 DOM 里摘掉、正文换成「页面暂时不可用，请刷新后重试」，
+ *      于是验证永远过不去 → filter_movielist 永远不发出 → 分类列表全空。
+ *      证据（同一页面，只改注入内容）：
+ *        window.__gz={} → cap-widget 消失；window.__gz2={} → 同样消失；
+ *        window.__foo={} / window.hello123={} / window.gzs={} → 一切正常。
+ *      ⇒ 现在每次进程随机命名空间（NS），且只挂一个对象 window.<NS>。
+ *   ② cap.js 现在只认 isTrusted 的事件：
+ *        合成 dispatchEvent(mousedown/mouseup/click) → 页面**一个请求都不发**
+ *        （/event/cap/challenge 根本没出现），点了等于没点；
+ *        真实鼠标点击 → POST /event/cap/challenge → 99% → POST /event/cap/redeem → 过。
+ *      ⇒ 改成 JS 取勾选框中心坐标，Java 用 WebView.dispatchTouchEvent 发真实触摸
+ *        （应用层派发，isTrusted=true）。
+ *   顺带：CAP 冷启动要 13~14s，原来的 11s 预算必然超时，已放宽到 20s。
+ *
  * 【为什么必须用 WebView，而不是纯 HTTP】
  *   站点三道锁，全部实测（2026-11-16，本机 Chrome + CDP 抓包）：
  *   1) /filter、/play 等路径首次访问返回「访问验证」页（CAP PoW，hashwx.wasm）。
@@ -115,8 +131,11 @@ public class Gaze extends Spider {
 
     /** 等 onPageFinished 的上限；CF/慢网下等不到也继续（后面靠轮询）。 */
     private static final long PAGE_READY_MS = 12000;
-    /** 首页列表总预算：壳子对 homeContent 常有 10s 级超时，宁可早失败也别拖死。 */
-    private static final long LIST_BUDGET_MS = 11000;
+    /** 首页列表总预算。首页现在走纯 HTTP（不需要 WebView/CAP），这条预算只影响分类页。
+     *  分类页冷启动要过一次 CAP：实测 /event/cap/challenge 进度 0→99% 约 9s，
+     *  再过 /event/cap/redeem 并跳转，到 filter_movielist 大约 13~14s。
+     *  原来给 11s，冷启动必然超时 —— 这是「分类列表出不来」的第二个原因。 */
+    private static final long LIST_BUDGET_MS = 20000;
     /** 详情：CAP 通过后选集按钮渲染的等待上限。 */
     private static final long DETAIL_BUDGET_MS = 22000;
     /** 播放：从打开播放页到拿到 m3u8 明文的总预算（含 CAP、点集、解密、hls 起播）。
@@ -137,6 +156,199 @@ public class Gaze extends Spider {
      *  只留最近一个分类，切 tab 必然重新抓，避免拿到别的分类的旧数据。 */
     private String lastTid;
     private String lastRaw;
+
+    // ===================================================================
+    // 首页的纯 HTTP 通道
+    //   实测（2026-11-19，无 cookie、不跑 JS、不带 CAP）：
+    //     GET https://gaze.red/  → 200，243 KB 服务端渲染 HTML
+    //     每个条目是一个 <article>：
+    //       <article class="or Dt"> ... <div class="lG badge-pill badge-default">豆瓣 8.7</div>
+    //              <div class="lG badge-pill badge-danger">电视剧</div>
+    //              <img data-src="https://tc-cdn.processon.com/..." alt="铁拳教育">
+    //              <a href="play/6be8f9058d86abfc118d707883186ac2">
+    //              <h3 class="Mo"><span class="Y">铁拳教育</span></h3> ...
+    //   注意 href 是 "play/..."（**没有前导斜杠**），所以搜 "/play/" 是搜不到的。
+    //   实测一页 153 条、封面 153/153、豆瓣分 153/153。
+    //   ⇒ 首页/「全部」不再依赖 WebView + CAP，秒出；分类页拿不到时也用它兜底。
+    // ===================================================================
+    private JSONArray httpAll;
+    private long httpAllAt;
+
+    /** 取网页正文（纯 HTTP，不走 WebView）。失败返回 null。 */
+    private String httpGet(String url) {
+        java.net.HttpURLConnection c = null;
+        java.io.InputStream in = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c.setConnectTimeout(6000);
+            c.setReadTimeout(10000);
+            // 用桌面 UA：首页的 HTML 结构是按桌面版验证过的
+            c.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+            c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            c.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9");
+            c.setRequestProperty("Accept-Encoding", "identity"); // 自己不解压，省事
+            int code = c.getResponseCode();
+            if (code / 100 != 2) {
+                dlog("http " + code + " " + url);
+                return null;
+            }
+            in = c.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[8192];
+            int n;
+            while ((n = in.read(b)) > 0) bos.write(b, 0, n);
+            return new String(bos.toByteArray(), "UTF-8");
+        } catch (Throwable t) {
+            dlog("http err " + t);
+            return null;
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Throwable ignored) {
+            }
+            try {
+                if (c != null) c.disconnect();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 去掉标签取可见文本（只处理卡片里会出现的几个实体）。 */
+    private static String htmlStrip(String x) {
+        StringBuilder sb = new StringBuilder(x.length());
+        boolean tag = false;
+        for (int i = 0; i < x.length(); i++) {
+            char ch = x.charAt(i);
+            if (ch == '<') {
+                tag = true;
+            } else if (ch == '>') {
+                tag = false;
+            } else if (!tag) {
+                sb.append(ch);
+            }
+        }
+        return sb.toString()
+                .replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'")
+                .replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+                .replaceAll("\\s+", " ").trim();
+    }
+
+    /** 取 open（如 "<h3"）这个开标签到下一个 "</" 之间的可见文本。 */
+    private static String htmlTagText(String blk, String open) {
+        int i = blk.indexOf(open);
+        if (i < 0) return null;
+        int a = blk.indexOf('>', i);
+        if (a < 0) return null;
+        int z = blk.indexOf("</", a);
+        if (z < 0) return null;
+        return htmlStrip(blk.substring(a + 1, z));
+    }
+
+    /** 取 key（含结尾引号，如 "data-src=\""）后面的属性值。 */
+    private static String htmlAttr(String blk, String key) {
+        int i = blk.indexOf(key);
+        if (i < 0) return null;
+        int a = i + key.length();
+        int z = blk.indexOf('"', a);
+        if (z < 0) return null;
+        return blk.substring(a, z);
+    }
+
+    private static boolean isHex32(String s) {
+        if (s == null || s.length() != 32) return false;
+        for (int i = 0; i < 32; i++) {
+            char c = s.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+        }
+        return true;
+    }
+
+    /** 卡片里的播放页 id：href="play/{32hex}" 或 href="/play/{32hex}"。 */
+    private static String htmlMid(String blk) {
+        String[] keys = {"href=\"play/", "href=\"/play/"};
+        for (String k : keys) {
+            int i = blk.indexOf(k);
+            if (i < 0) continue;
+            int a = i + k.length();
+            if (a + 32 > blk.length()) continue;
+            String t = blk.substring(a, a + 32);
+            if (isHex32(t)) return t;
+        }
+        return null;
+    }
+
+    /** 首页 HTML → 卡片数组（字段与 parseList 对齐，另带 _cat 供分类过滤）。 */
+    private JSONArray parseHomeCards(String html) {
+        JSONArray out = new JSONArray();
+        if (html == null) return out;
+        java.util.HashSet<String> seen = new java.util.HashSet<String>();
+        int p = 0;
+        while (true) {
+            int a = html.indexOf("<article", p);
+            if (a < 0) break;
+            int z = html.indexOf("</article>", a);
+            if (z < 0) break;
+            p = z + 10;
+            String blk = html.substring(a, z);
+            String mid = htmlMid(blk);
+            if (mid == null || !seen.add(mid)) continue;
+            String title = htmlTagText(blk, "<h3");
+            if (title == null || title.isEmpty()) title = htmlAttr(blk, "alt=\"");
+            if (title == null || title.isEmpty()) continue;
+            String pic = htmlAttr(blk, "data-src=\"");
+            if (pic == null || pic.indexOf("colorful.svg") >= 0) pic = htmlAttr(blk, "src=\"");
+            try {
+                JSONObject v = new JSONObject();
+                v.put("vod_id", mid);
+                v.put("vod_name", title);
+                v.put("vod_pic", pic == null ? "" : pic);
+                String rem = htmlTagText(blk, "badge-default\">");
+                v.put("vod_remarks", rem == null ? "" : rem);
+                String cat = htmlTagText(blk, "badge-danger\">");
+                v.put("_cat", cat == null ? "" : cat); // 壳子忽略未知字段
+                out.put(v);
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    /** 首页卡片（5 分钟缓存）。失败时返回上一次的结果（可能为 null）。 */
+    private JSONArray homeCards(boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && httpAll != null && now - httpAllAt < 300000L) return httpAll;
+        String html = httpGet(base + "/");
+        JSONArray arr = html == null ? null : parseHomeCards(html);
+        if (arr == null || arr.length() == 0) {
+            dlog("home http miss len=" + (html == null ? -1 : html.length()));
+            return httpAll;
+        }
+        httpAll = arr;
+        httpAllAt = now;
+        dlog("home http cards=" + arr.length());
+        return arr;
+    }
+
+    /** tid → 首页卡片上的分类标签。 */
+    private static String catNameOf(String tid) {
+        if ("movie".equals(tid)) return "电影";
+        if ("tv".equals(tid)) return "电视剧";
+        if ("bangumi".equals(tid)) return "番剧";
+        if ("cartoon".equals(tid)) return "国漫";
+        return null;
+    }
+
+    private static JSONArray filterCat(JSONArray cards, String tid) {
+        JSONArray out = new JSONArray();
+        String want = catNameOf(tid);
+        if (want == null || cards == null) return out;
+        for (int i = 0; i < cards.length(); i++) {
+            JSONObject o = cards.optJSONObject(i);
+            if (o != null && want.equals(o.optString("_cat", ""))) out.put(o);
+        }
+        return out;
+    }
 
     // ===================================================================
     // init
@@ -168,19 +380,38 @@ public class Gaze extends Spider {
 
     // ===================================================================
     // 注入脚本
-    //   window.__gz        = {lists:[], blobs:[], media:[]}
-    //   window.__gzCap()   = 点 cap-widget 的勾选框（shadow DOM）
-    //   window.__gzList()  = 最近一次 filter_movielist 响应
-    //   window.__gzEps()   = 选集按钮 [{p,t}]
-    //   window.__gzClick(p)= 点第 p 集
-    //   window.__gzMeta()  = {t:标题, p:封面}
-    //   window.__gzClear() = 清掉已抓到的 m3u8（换集前必须清，否则拿到上一集的）
-    //   window.__gzM3u8()  = 最近一次解好密的 m3u8 明文（分片名仍是混淆串）
+    //   全部挂在 window.<NS> 这个对象上，不散落全局：
+    //     <NS>.cap()      点 cap-widget 的勾选框（shadow DOM），返回 clicked/no-widget/no-box
+    //     <NS>.list()     最近一次 filter_movielist 响应
+    //     <NS>.eps()      选集按钮 [{p,t}]
+    //     <NS>.click(p)   点第 p 集
+    //     <NS>.meta()     {t:标题, p:封面}
+    //     <NS>.count()    m3u8 blob 条数
+    //     <NS>.m3u8()     最近一次解好密的 m3u8 明文
+    //     <NS>.murl()     _murl 给的整片直链
+    //     <NS>.murlCount()直链条数
+    //     <NS>.diag()     诊断串
+    //
+    // ⚠ 为什么名字要随机（2026-11-19 实测）：
+    //   站点在 CAP 页里专门钓 window 上以 "__gz" 开头的全局 —— 一旦发现，就把
+    //   cap-widget 从 DOM 里摘掉、正文换成「页面暂时不可用，请刷新后重试」，
+    //   于是验证永远过不去、filter_movielist 永远不发出、分类列表全空。
+    //   二分证据（同一个页面，只改注入内容）：
+    //     window.__gz={}      → cap-widget 消失，正文「页面暂时不可用」
+    //     window.__gz2={}     → 同样消失
+    //     window.__foo={}     → 正常
+    //     window.hello123={}  → 正常
+    //     window.gzs={}       → 正常
+    //   所以不能再赌「换个固定名字就安全」，改成每次进程随机，只挂一个对象。
     // ===================================================================
-    private static final String CAP_JS =
+    private static final String NS = "g" + Long.toHexString(System.nanoTime() & 0xffffffL);
+
+    private static final String CAP_JS_T =
             "(function(){" +
-            " if(window.__gz) return;" +
-            " var g={lists:[],blobs:[],media:[],murls:[]}; window.__gz=g;" +
+            // 判据用 list 而不是对象本身：对象建好了但方法没挂全，也算没装好
+            " if(window.__NS__ && window.__NS__.list) return;" +
+            " var g={lists:[],blobs:[],media:[],murls:[]};" +
+            " var N=window.__NS__={};" +
             " function pushList(t){ try{ if(t && t.indexOf('mlist')>=0) g.lists.push(t); }catch(e){} }" +
             // _murl 接口回的是 {"code":1,"url":"https://lf9-csp-sign.bytetos.com/....mp4?x-signature=..."}
             // 这是**整片直链**（faststart，moov 在前，支持 Range），比 m3u8 那条链子简单得多。
@@ -225,40 +456,148 @@ public class Gaze extends Spider {
             "    }catch(e){}" +
             "    return oc.apply(this,arguments); };" +
             " }catch(e){}" +
-            " window.__gzCap=function(){" +
+            " N.cap=function(){" +
             "  var w=document.querySelector('cap-widget'); if(!w||!w.shadowRoot) return 'no-widget';" +
             "  var b=w.shadowRoot.querySelector('[part=checkbox]')||w.shadowRoot.querySelector('.captcha-trigger');" +
             "  if(!b) return 'no-box';" +
             "  ['mousedown','mouseup','click'].forEach(function(t){ try{ b.dispatchEvent(new MouseEvent(t,{bubbles:true,composed:true})); }catch(e){} });" +
             "  return 'clicked'; };" +
-            " window.__gzList=function(){ return g.lists.length? g.lists[g.lists.length-1] : ''; };" +
-            " window.__gzEps=function(){" +
+            // 勾选框中心点（CSS px）+ 视口尺寸，交给 Java 换算成 WebView 坐标后用真实触摸事件点。
+            // 为什么必须真实事件：2026-11-19 实测，cap.js 只认 isTrusted 的事件 ——
+            //   合成 dispatchEvent → 页面一个请求都不发（/event/cap/challenge 根本没出现）；
+            //   CDP 真实鼠标点击   → POST /event/cap/challenge → 99% → POST /event/cap/redeem → 过。
+            " N.rect=function(){" +
+            "  var w=document.querySelector('cap-widget'); if(!w||!w.shadowRoot) return '';" +
+            "  var b=w.shadowRoot.querySelector('[part=checkbox]')||w.shadowRoot.querySelector('.captcha-trigger');" +
+            "  if(!b) return '';" +
+            "  var r=b.getBoundingClientRect(); if(!r||r.width<=0||r.height<=0) return '';" +
+            "  return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth,h:innerHeight}); };" +
+            " N.list=function(){ return g.lists.length? g.lists[g.lists.length-1] : ''; };" +
+            " N.eps=function(){" +
             "  var n=document.querySelectorAll('#g8f256a3e34dd0c56 [data-path]');" +
             "  if(!n.length) n=document.querySelectorAll('[data-path]');" +
             "  var o=[]; for(var i=0;i<n.length;i++){ var e=n[i]; o.push({p:e.getAttribute('data-path'),t:(e.textContent||'').trim()}); }" +
             "  return JSON.stringify(o); };" +
-            " window.__gzClick=function(p){" +
+            " N.click=function(p){" +
             "  var n=document.querySelectorAll('#g8f256a3e34dd0c56 [data-path]');" +
             "  if(!n.length) n=document.querySelectorAll('[data-path]');" +
             "  for(var i=0;i<n.length;i++){ if(n[i].getAttribute('data-path')===String(p)){" +
             "    var e=n[i]; ['mousedown','mouseup','click'].forEach(function(t){ try{ e.dispatchEvent(new MouseEvent(t,{bubbles:true,composed:true})); }catch(x){} });" +
             "    try{ e.click(); }catch(x){} return 'ok'; } }" +
             "  return 'not-found'; };" +
-            " window.__gzMeta=function(){" +
+            " N.meta=function(){" +
             "  var m=document.querySelector('meta[property=\"og:image\"]');" +
             "  return JSON.stringify({t:document.title||'',p:m?m.content:''}); };" +
-            " window.__gzClear=function(){ g.blobs.length=0; return 1; };" +
-            " window.__gzCount=function(){ return g.blobs.length; };" +
-            " window.__gzM3u8=function(){ return g.blobs.length? g.blobs[g.blobs.length-1] : ''; };" +
-            " window.__gzMurl=function(){ return g.murls.length? g.murls[g.murls.length-1] : ''; };" +
-            " window.__gzMurlCount=function(){ return g.murls.length; };" +
+            " N.count=function(){ return g.blobs.length; };" +
+            " N.m3u8=function(){ return g.blobs.length? g.blobs[g.blobs.length-1] : ''; };" +
+            " N.murl=function(){ return g.murls.length? g.murls[g.murls.length-1] : ''; };" +
+            " N.murlCount=function(){ return g.murls.length; };" +
             // 诊断用：一条字符串就能区分「hook 没抓到」和「抓到了但我清空了」
-            " window.__gzDiag=function(){" +
+            " N.diag=function(){" +
             "  var v=document.querySelector('video');" +
             "  return JSON.stringify({hook:1,n:g.blobs.length,m:g.murls.length," +
             "   v:v?{rs:v.readyState,t:Math.round(v.currentTime||0),src:(v.currentSrc||'').slice(0,40)}:null," +
             "   href:(location.href||'').slice(-48)}); };" +
             "})();";
+
+    private static String capJs() {
+        return CAP_JS_T.replace("__NS__", NS);
+    }
+
+    /** 调注入脚本里的方法：g("cap()", 2000) → window.<NS>.cap()。没装好会返回 null。 */
+    private String g(String call, long timeoutMs) {
+        return ev("window." + NS + "." + call, timeoutMs);
+    }
+
+    /** 注入脚本是否可用（要求 list 已挂上）。 */
+    private boolean hookReady() {
+        return "1".equals(ev("(window." + NS + "&&window." + NS + ".list)?1:0", 1500));
+    }
+
+    // ===================================================================
+    // CAP 点击
+    //   站点 2026-11-19 起只认 isTrusted 的事件：
+    //     合成 dispatchEvent → 不发 /event/cap/challenge（点了等于没点）
+    //     真实鼠标/触摸事件   → /challenge → 99% → /redeem → 页面跳转，验证通过
+    //   ⇒ 先用 JS 拿勾选框中心（CSS px）+ 视口尺寸，再由 Java 换算成 WebView 坐标，
+    //     用 WebView.dispatchTouchEvent 发 ACTION_DOWN/UP —— 这条路径的事件是
+    //     应用层派发的，isTrusted=true，和用户手点等价。
+    //   JS 的合成点击只留作老版本 cap.js 的退路。
+    // ===================================================================
+    private String capTick() {
+        String rect = g("rect()", 1500);
+        if (rect != null && rect.length() > 8 && touchTap(rect)) return "touch";
+        String r = g("cap()", 2000);
+        return r == null ? "no-hook" : r;
+    }
+
+    /** 按 CSS 坐标点一下 WebView。rect 是 {x,y,w,h}：x/y 为 CSS px，w/h 为视口 CSS 尺寸。 */
+    private boolean touchTap(String rectJson) {
+        if (main == null) return false;
+        JSONObject r = jsonOf(rectJson);
+        if (r == null) return false;
+        final double cx = r.optDouble("x", -1), cy = r.optDouble("y", -1);
+        final double vw = r.optDouble("w", 0), vh = r.optDouble("h", 0);
+        if (cx < 0 || cy < 0 || vw <= 0 || vh <= 0) return false;
+        final CountDownLatch latch = new CountDownLatch(1);
+        final boolean[] ok = new boolean[1];
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (wv == null) return;
+                    // 坐标换算：CSS px → WebView 像素。优先用实际宽高比，
+                    // WebView 还没量出尺寸时退回 density。
+                    float sx, sy;
+                    if (wv.getWidth() > 0 && wv.getHeight() > 0) {
+                        sx = (float) (wv.getWidth() / vw);
+                        sy = (float) (wv.getHeight() / vh);
+                    } else {
+                        float d = wv.getResources().getDisplayMetrics().density;
+                        sx = d;
+                        sy = d;
+                    }
+                    final float x = (float) (cx * sx), y = (float) (cy * sy);
+                    long t = android.os.SystemClock.uptimeMillis();
+                    android.view.MotionEvent down = android.view.MotionEvent.obtain(
+                            t, t, android.view.MotionEvent.ACTION_DOWN, x, y, 0);
+                    down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                    wv.dispatchTouchEvent(down);
+                    down.recycle();
+                    // 按下和抬起之间留一点间隔，太快的 DOWN/UP 有些组件会当误触
+                    main.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                if (wv != null) {
+                                    long t2 = android.os.SystemClock.uptimeMillis();
+                                    android.view.MotionEvent up = android.view.MotionEvent.obtain(
+                                            t2, t2, android.view.MotionEvent.ACTION_UP, x, y, 0);
+                                    up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                                    wv.dispatchTouchEvent(up);
+                                    up.recycle();
+                                    ok[0] = true;
+                                }
+                            } catch (Throwable th) {
+                                dlog("touch up err " + th);
+                            } finally {
+                                latch.countDown();
+                            }
+                        }
+                    }, 80);
+                    return;
+                } catch (Throwable th) {
+                    dlog("touch err " + th);
+                }
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(3000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return ok[0];
+    }
 
     // ===================================================================
     // WebView 编排
@@ -284,6 +623,21 @@ public class Gaze extends Spider {
         try {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         } catch (Throwable ignored) {
+        }
+        // WebView 不挂到窗口上，也要给它一个真实尺寸：
+        //   1) 坐标换算要用 getWidth()/getHeight()；
+        //   2) dispatchTouchEvent 做命中测试也要有视口尺寸。
+        // 不 measure/layout 的话宽高是 0，换算只能退回 density，精度差。
+        try {
+            android.util.DisplayMetrics dm = appCtx.getResources().getDisplayMetrics();
+            int ww = dm.widthPixels > 0 ? dm.widthPixels : 1280;
+            int hh = dm.heightPixels > 0 ? dm.heightPixels : 720;
+            w.measure(android.view.View.MeasureSpec.makeMeasureSpec(ww, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(hh, android.view.View.MeasureSpec.EXACTLY));
+            w.layout(0, 0, ww, hh);
+            dlog("wv size=" + w.getWidth() + "x" + w.getHeight() + " screen=" + ww + "x" + hh);
+        } catch (Throwable t) {
+            dlog("wv layout err " + t);
         }
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -323,7 +677,7 @@ public class Gaze extends Spider {
 
     private static void inject(WebView v) {
         try {
-            v.evaluateJavascript(CAP_JS, null);
+            v.evaluateJavascript(capJs(), null);
         } catch (Throwable t) {
             dlog("inject err " + t);
         }
@@ -361,10 +715,9 @@ public class Gaze extends Spider {
 
     /** 确认注入脚本在（Chromium 偶发丢弃 evaluateJavascript），不在就补一次。 */
     private boolean ensureHook() {
-        String v = ev("window.__gz?1:0", 1500);
-        if ("1".equals(v)) return true;
-        ev(CAP_JS, 2500);
-        return "1".equals(ev("window.__gz?1:0", 1500));
+        if (hookReady()) return true;
+        ev(capJs(), 2500);
+        return hookReady();
     }
 
     /** 在主线程执行 js，返回其原始返回值（字符串会被 JSON 引号包住）。 */
@@ -432,26 +785,36 @@ public class Gaze extends Spider {
     // ===================================================================
     // 列表：/filter[?mform=..] 页 → 点 CAP → 页面自己发 filter_movielist → 抓响应
     //   query 形如 "?mform=1"；空串表示「全部」。
-    //   不同 query 是不同文档，window.__gz 会被重建，所以不会串到上一个分类的数据。
+    //   不同 query 是不同文档，注入对象会被重建，所以不会串到上一个分类的数据。
     // ===================================================================
     private String fetchList(String query) {
         String url = base + "/filter" + (query == null ? "" : query);
         if (!load(url, PAGE_READY_MS)) return null;
         long deadline = System.currentTimeMillis() + LIST_BUDGET_MS;
         int round = 0;
+        boolean reloaded = false;
         while (System.currentTimeMillis() < deadline) {
             round++;
             if (round == 1 || round % 3 == 0) ensureHook();
-            String cap = ev("window.__gzCap?window.__gzCap():'no-hook'", 2000);
-            String list = ev("window.__gzList?window.__gzList():''", 2500);
-            if (list != null && list.indexOf("mlist") >= 0) {
+            String cap = capTick();
+            String list = g("list()", 2500);
+            if (list == null) list = "";
+            if (list.indexOf("mlist") >= 0) {
                 dlog("list ok " + query + " round=" + round + " cap=" + cap + " len=" + list.length());
                 return list;
             }
             if (round == 1) dlog("list wait " + query + " cap=" + cap);
+            // cap-widget 没渲染出来（站点偶尔给「页面暂时不可用」）→ 重载一次，
+            // 否则后面十几秒都在点空气。只重载一次，别把预算耗在刷新上。
+            if (!reloaded && round >= 4 && "no-widget".equals(cap)) {
+                reloaded = true;
+                dlog("list reload " + query);
+                load(url, PAGE_READY_MS);
+                continue;
+            }
             sleep(900);
         }
-        dlog("list timeout " + query);
+        dlog("list timeout " + query + " round=" + round);
         return null;
     }
 
@@ -472,11 +835,17 @@ public class Gaze extends Spider {
         JSONObject out = new JSONObject();
         try {
             out.put("class", buildClasses());
-            String raw = fetchList("");
-            lastTid = "all";
-            lastRaw = raw;
-            out.put("list", parseList(raw));
-            dlog("home items=" + out.optJSONArray("list").length());
+            // 先走纯 HTTP：首页是服务端渲染的，不需要 CAP，也不受注入时序影响
+            JSONArray cards = homeCards(false);
+            if (cards == null || cards.length() == 0) {
+                dlog("home -> webview");
+                String raw = fetchList("");
+                lastTid = "all";
+                lastRaw = raw;
+                cards = parseList(raw);
+            }
+            out.put("list", cards);
+            dlog("home items=" + cards.length());
         } catch (Throwable t) {
             dlog("home err " + t);
             try {
@@ -504,20 +873,41 @@ public class Gaze extends Spider {
                 out.put("list", new JSONArray());
                 return out.toString();
             }
-            String raw;
-            if (t.equals(lastTid) && lastRaw != null) {
-                raw = lastRaw;
-                dlog("category hit cache tid=" + t);
-            } else {
-                raw = fetchList(mformOf(t));
-                lastTid = t;
-                lastRaw = raw;
-            }
-            JSONArray list = parseList(raw);
+            JSONArray list = null;
             int total = 0;
-            if (raw != null) {
-                JSONObject j = jsonOf(raw);
-                if (j != null) total = j.optInt("total", 0);
+            if ("all".equals(t)) {
+                JSONArray cards = homeCards(false);
+                if (cards != null && cards.length() > 0) {
+                    list = cards;
+                    total = cards.length();
+                }
+            }
+            if (list == null) {
+                String raw;
+                if (t.equals(lastTid) && lastRaw != null) {
+                    raw = lastRaw;
+                    dlog("category hit cache tid=" + t);
+                } else {
+                    raw = fetchList(mformOf(t));
+                    lastTid = t;
+                    lastRaw = raw;
+                }
+                list = parseList(raw);
+                if (raw != null) {
+                    JSONObject j = jsonOf(raw);
+                    if (j != null) total = j.optInt("total", 0);
+                }
+                if (list.length() == 0) {
+                    // WebView 这条路挂了（CAP 点不过 / 注入没进 / 站点改了）→
+                    // 用首页卡片按分类标签兜底，至少不是空列表。
+                    JSONArray cards = homeCards(false);
+                    JSONArray sub = filterCat(cards, t);
+                    if (sub.length() > 0) {
+                        list = sub;
+                        total = sub.length();
+                        dlog("category fallback http tid=" + t + " items=" + sub.length());
+                    }
+                }
             }
             out.put("page", 1);
             out.put("pagecount", 1);
@@ -634,14 +1024,14 @@ public class Gaze extends Spider {
             while (System.currentTimeMillis() < deadline) {
                 round++;
                 if (round == 1 || round % 3 == 0) ensureHook();
-                ev("window.__gzCap?window.__gzCap():'no-hook'", 2000);
-                String raw = ev("window.__gzEps?window.__gzEps():'[]'", 2500);
+                capTick();
+                String raw = g("eps()", 2500);
                 if (raw != null && raw.length() > 4) {
                     try {
                         JSONArray a = new JSONArray(raw);
                         if (a.length() > 0) {
                             eps = a;
-                            meta = ev("window.__gzMeta?window.__gzMeta():'{}'", 2000);
+                            meta = g("meta()", 2000);
                             dlog("detail eps=" + a.length() + " round=" + round);
                             break;
                         }
@@ -1140,7 +1530,7 @@ public class Gaze extends Spider {
         // detailContent 刚走过同一个播放页时，页面还在，省一次重新加载（也省一次 CAP）
         String path = ev("(location.pathname||'')", 1200);
         if (path != null && path.indexOf(page) >= 0) {
-            String raw = ev("window.__gzEps?window.__gzEps():'[]'", 1500);
+            String raw = g("eps()", 1500);
             if (raw != null && raw.length() > 4) needLoad = false;
         }
         if (needLoad && !load(base + page, PAGE_READY_MS)) return null;
@@ -1148,17 +1538,17 @@ public class Gaze extends Spider {
         // 进来时页面可能已经在播某一集（detailContent 刚打开过同一个播放页），
         // 此时 m3u8 早就生成好了。**不能清空**——清了再点「正在播的那一集」，
         // 播放器认为没换集、不会重新加载，就会一直等不到新 blob。
-        int n0 = parseInt(ev("window.__gzCount?window.__gzCount():0", 1500), 0);
+        int n0 = parseInt(g("count()", 1500), 0);
         String pre = null;
         if (n0 > 0) {
-            String p = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
+            String p = g("m3u8()", 6000);
             if (p != null && p.length() > 200 && p.indexOf("#EXTINF") >= 0) pre = p;
         }
         // 整片直链（_murl 接口）优先级最高：不代理、不剥壳、不占内存，播放器自己 Range 拖动
-        int m0 = parseInt(ev("window.__gzMurlCount?window.__gzMurlCount():0", 1500), 0);
+        int m0 = parseInt(g("murlCount()", 1500), 0);
         String mpre = null;
         if (m0 > 0) {
-            String u = ev("window.__gzMurl?window.__gzMurl():''", 3000);
+            String u = g("murl()", 3000);
             if (u != null && u.length() > 20 && u.indexOf("http") == 0) mpre = u;
         }
         dlog("grab start ep=" + ep + " needLoad=" + needLoad + " n0=" + n0
@@ -1177,14 +1567,14 @@ public class Gaze extends Spider {
         while (System.currentTimeMillis() < deadline) {
             round++;
             if (round == 1 || round % 4 == 0) ensureHook();
-            ev("window.__gzCap?window.__gzCap():'no-hook'", 2000);
+            capTick();
             if (!clicked) {
                 // 必须等选集按钮真的渲染出来再点：元素先出现、点击处理器后绑定，
                 // 太早点会「点了个空」，拿到的仍是默认那一集的 m3u8（静默错集）。
-                String eps = ev("window.__gzEps?window.__gzEps():'[]'", 2000);
+                String eps = g("eps()", 2000);
                 if (eps != null && eps.length() > 4) {
                     int target = ep < 0 ? 0 : ep;
-                    String r = ev("window.__gzClick?window.__gzClick(" + target + "):'no-hook'", 2000);
+                    String r = g("click(" + target + ")", 2000);
                     if (r != null && r.indexOf("ok") >= 0) {
                         clicked = true;
                         dlog("play click ep=" + target + " round=" + round + " n0=" + n0);
@@ -1192,24 +1582,27 @@ public class Gaze extends Spider {
                 }
             } else {
                 // 先看整片直链：新出现的才算（条数没涨说明是换集前那条）
-                String mu = ev("window.__gzMurl?window.__gzMurl():''", 3000);
+                String mu = g("murl()", 3000);
                 if (mu != null && mu.length() > 20 && mu.indexOf("http") == 0) {
-                    int mc = parseInt(ev("window.__gzMurlCount?window.__gzMurlCount():-1", 1500), -1);
+                    int mc = parseInt(g("murlCount()", 1500), -1);
                     if (mc > m0 || mc < 0) {
                         dlog("murl new n=" + mc + " len=" + mu.length() + " round=" + round);
                         return MP4_PREFIX + mu;
                     }
                 }
-                String m = ev("window.__gzM3u8?window.__gzM3u8():''", 6000);
+                String m = g("m3u8()", 6000);
                 if (m != null && m.length() > 200 && m.indexOf("#EXTINF") >= 0) {
-                    int n = parseInt(ev("window.__gzCount?window.__gzCount():-1", 1500), -1);
+                    int n = parseInt(g("count()", 1500), -1);
                     if (n > n0 || n < 0) {
                         dlog("m3u8 new n=" + n + " len=" + m.length() + " round=" + round);
                         return m;
                     }
                     // 条数没涨：播放器没重新加载，可能点的就是当前集，继续等一会儿
                 }
-                if (round % 6 == 0) dlog("grab diag " + ev("window.__gzDiag?window.__gzDiag():'no-diag'", 1500));
+                if (round % 6 == 0) {
+                    String diag = g("diag()", 1500);
+                    dlog("grab diag " + (diag == null ? "no-diag" : diag));
+                }
             }
             sleep(700);
         }
