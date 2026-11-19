@@ -353,7 +353,6 @@ public class HuaShiJie extends Spider {
         }
         Map<String, String> header = new HashMap<>();
         header.put("User-Agent", UA);
-        header.put("Referer", BASE + "/");
         return Result.get().parse(0).m3u8().url(url).header(header).string();
     }
 
