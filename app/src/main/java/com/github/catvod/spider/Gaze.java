@@ -432,7 +432,9 @@ public class Gaze extends Spider {
             "  var b=t.indexOf('\"', a+1); if(b<0) return;" +
             "  var u=t.slice(a+1,b).split('\\\\/').join('/');" +
             "  if(u.indexOf('http')!==0) return;" +
-            "  g.murls.push(u); if(g.murls.length>4) g.murls.shift();" +
+            // 每条都打上「当时所在页面」的 pathname。SPA 跳转时 window.<NS> 不会重建，
+            // 不打标签就会把上一部片子的直链当成这一部的（串台 + 签名过期播不了）。
+            "  g.murls.push({u:u,p:(location.pathname||'')}); if(g.murls.length>8) g.murls.shift();" +
             " }catch(e){} }" +
             " try{" +
             "  var of=window.fetch;" +
@@ -458,7 +460,7 @@ public class Gaze extends Spider {
             "  if(oc) window.URL.createObjectURL=function(o){" +
             "    try{" +
             "     if(o&&typeof o.size==='number'){" +
-            "      var keep=function(t){ try{ if(t&&t.indexOf('#EXTM3U')>=0){ g.blobs.push(t); if(g.blobs.length>4) g.blobs.shift(); } }catch(e){} };" +
+            "      var keep=function(t){ try{ if(t&&t.indexOf('#EXTM3U')>=0){ g.blobs.push({t:t,p:(location.pathname||'')}); if(g.blobs.length>8) g.blobs.shift(); } }catch(e){} };" +
             "      if(typeof o.text==='function'){ o.text().then(keep).catch(function(){}); }" +
             "      else if(window.FileReader){ var fr=new FileReader(); fr.onload=function(){ keep(String(fr.result||'')); }; fr.readAsText(o); }" +
             "     }" +
@@ -512,10 +514,18 @@ public class Gaze extends Spider {
             " N.meta=function(){" +
             "  var m=document.querySelector('meta[property=\"og:image\"]');" +
             "  return JSON.stringify({t:document.title||'',p:m?m.content:''}); };" +
-            " N.count=function(){ return g.blobs.length; };" +
-            " N.m3u8=function(){ return g.blobs.length? g.blobs[g.blobs.length-1] : ''; };" +
-            " N.murl=function(){ return g.murls.length? g.murls[g.murls.length-1] : ''; };" +
-            " N.murlCount=function(){ return g.murls.length; };" +
+            " var cur=function(){ return location.pathname||''; };" +
+            // 全部按「当前页面」过滤：SPA 跳转后 window.<NS> 不重建，旧数据还在数组里。
+            " N.count=function(){ var p=cur(),n=0; for(var i=0;i<g.blobs.length;i++) if(g.blobs[i].p===p) n++; return n; };" +
+            " N.m3u8=function(){ var p=cur(); for(var i=g.blobs.length-1;i>=0;i--) if(g.blobs[i].p===p) return g.blobs[i].t; return ''; };" +
+            " N.murl=function(){ var p=cur(); for(var i=g.murls.length-1;i>=0;i--) if(g.murls[i].p===p) return g.murls[i].u; return ''; };" +
+            " N.murlCount=function(){ var p=cur(),n=0; for(var i=0;i<g.murls.length;i++) if(g.murls[i].p===p) n++; return n; };" +
+            " N.path=function(){ return cur(); };" +
+            // 清掉上一部片子留下的 m3u8 / murl。
+            // 必须清：页面之间是 SPA 跳转时 window.<NS> 不会重建，g.murls 里还留着上一部的直链，
+            // grabM3u8 的 "ep<=0 直接复用 mpre" 分支就会把上一部（且可能已过签名期）的 URL 交出去
+            // —— 表现就是「点 B 播出来的是 A」以及「无法播放」。
+            " N.reset=function(){ g.blobs=[]; g.murls=[]; g.lists=[]; return 1; };" +
             // 诊断用：一条字符串就能区分「hook 没抓到」和「抓到了但我清空了」
             " N.diag=function(){" +
             "  var v=document.querySelector('video');" +
@@ -548,9 +558,17 @@ public class Gaze extends Spider {
     //     应用层派发的，isTrusted=true，和用户手点等价。
     //   JS 的合成点击只留作老版本 cap.js 的退路。
     // ===================================================================
+    /** 上次真实点击的时间。挑战要 9s 左右，期间每 700ms 点一次等于反复打断它。 */
+    private volatile long lastCapAt;
+
     private String capTick() {
         String rect = g("rect()", 1500);
-        if (rect != null && rect.length() > 8 && touchTap(rect)) return "touch";
+        if (rect != null && rect.length() > 8) {
+            long now = System.currentTimeMillis();
+            if (now - lastCapAt < 2500) return "wait"; // 挑战进行中，别打断
+            lastCapAt = now;
+            if (touchTap(rect)) return "touch";
+        }
         String r = g("cap()", 2000);
         return r == null ? "no-hook" : r;
     }
@@ -1041,6 +1059,16 @@ public class Gaze extends Spider {
                 out.put("list", list);
                 return out.toString();
             }
+            // 同上：load() 不保证页面真的切过去了，慢机 / SPA 下会读到上一部片子的选集和标题
+            if (!waitPath(mid, 6000)) {
+                dlog("detail path miss mid=" + mid);
+                if (!load(base + "/play/" + mid, PAGE_READY_MS) || !waitPath(mid, 6000)) {
+                    dlog("detail path fail mid=" + mid);
+                    out.put("list", list);
+                    return out.toString();
+                }
+            }
+            ensureHook();
             JSONArray eps = null;
             String meta = null;
             long deadline = System.currentTimeMillis() + DETAIL_BUDGET_MS;
@@ -1548,16 +1576,47 @@ public class Gaze extends Spider {
     //   最后交给 hls.js 的是一个 blob，所以 hook URL.createObjectURL 就能拿到明文。
     //   拿到的明文里分片名仍是混淆串，交给 rewriteM3u8 还原。
     // ===================================================================
+    /** 等 WebView 真的停在 /play/<mid> 上。load() 不等这个，慢机/SPA 下会串台。 */
+    private boolean waitPath(String mid, long ms) {
+        long end = System.currentTimeMillis() + ms;
+        while (System.currentTimeMillis() < end) {
+            String p = ev("(location.pathname||'')", 1200);
+            if (p != null && p.indexOf(mid) >= 0) return true;
+            sleep(300);
+        }
+        return false;
+    }
+
     private String grabM3u8(String mid, int ep) {
         String page = "/play/" + mid;
         boolean needLoad = true;
         // detailContent 刚走过同一个播放页时，页面还在，省一次重新加载（也省一次 CAP）
         String path = ev("(location.pathname||'')", 1200);
-        if (path != null && path.indexOf(page) >= 0) {
+        boolean pathOk = path != null && path.indexOf(mid) >= 0;
+        if (pathOk) {
             String raw = g("eps()", 1500);
             if (raw != null && raw.length() > 4) needLoad = false;
         }
-        if (needLoad && !load(base + page, PAGE_READY_MS)) return null;
+        if (!pathOk) {
+            // 当前页面不是这一部片子：先把上一部留下的 m3u8/murl 清掉。
+            // 不清的话，下面「ep<=0 直接复用 mpre」会把上一部的直链交出去
+            // —— 表现就是「点 B 播出来的是 A」，而且那条签名 1 小时就过期，还会「无法播放」。
+            ev("window." + NS + ".reset&&window." + NS + ".reset()", 1500);
+        }
+        if (needLoad) {
+            if (!load(base + page, PAGE_READY_MS)) return null;
+            // load() 只保证 loadUrl 提交了、给了 1.5s，并不保证页面真的切过去。
+            // 慢机 / SPA 时这里可能还是上一部片子的 DOM，直接取 eps/murl 就会串台。
+            if (!waitPath(mid, 6000)) {
+                dlog("grab path miss mid=" + mid + " now=" + ev("(location.pathname||'')", 1200));
+                if (!load(base + page, PAGE_READY_MS) || !waitPath(mid, 6000)) {
+                    dlog("grab path fail mid=" + mid);
+                    return null;
+                }
+            }
+            ev("window." + NS + ".reset&&window." + NS + ".reset()", 1500);
+            ensureHook();
+        }
 
         // 进来时页面可能已经在播某一集（detailContent 刚打开过同一个播放页），
         // 此时 m3u8 早就生成好了。**不能清空**——清了再点「正在播的那一集」，
@@ -1689,7 +1748,7 @@ public class Gaze extends Spider {
                 out.put("url", direct);
                 out.put("playUrl", "");
                 out.put("header", hd);
-                dlog("player mp4 direct len=" + direct.length());
+                dlog("player mp4 direct mid=" + mid + " len=" + direct.length());
                 return out.toString();
             }
             String m3u8 = got;
@@ -1727,7 +1786,7 @@ public class Gaze extends Spider {
                     out.put("url", "http://127.0.0.1:" + port + "/" + token + ".m3u8");
                     out.put("playUrl", "");
                     out.put("header", new JSONObject());
-                    dlog("player direct kind=" + kind + " seg=" + stat[0] + " miss=" + stat[1]);
+                    dlog("player direct mid=" + mid + " kind=" + kind + " seg=" + stat[0] + " miss=" + stat[1]);
                     return out.toString();
                 }
                 dlog("player fallback kind=" + kind + " seg=" + stat[0] + " miss=" + stat[1]
