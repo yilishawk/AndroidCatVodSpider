@@ -1743,7 +1743,6 @@ public class Gaze extends Spider {
                 String direct = got.substring(MP4_PREFIX.length());
                 JSONObject hd = new JSONObject();
                 hd.put("User-Agent", UA);
-                hd.put("Referer", base + "/");
                 out.put("parse", 0);
                 out.put("url", direct);
                 out.put("playUrl", "");
