@@ -29,9 +29,24 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v11
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v13
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v13：把「很多片播不了」的成功率问题按根因修一遍（2026-11-21）】
+ *   ① load() 名义上等 onPageFinished，实际只 sleep 1.5s。
+ *      慢机上页面还没起来，后面的 capTick 全是 no-widget，28s 预算被白白烧掉。
+ *      ⇒ 改成轮询 pageFinishedAt（由 WebViewClient.onPageFinished 打点，且只认目标 URL），
+ *        真等页面加载完再往下走。
+ *   ② CAP 组件压根没渲染出来时，原逻辑只会在原地空转。
+ *      ⇒ detailContent / grabM3u8 各加一次「no-widget 且选集也没出来 → 重载页面」。
+ *   ③ 选集按钮的合成 click 万一被页面忽略，原逻辑只会一直等到超时。
+ *      ⇒ 新增 N.rectOf(path) 返回按钮坐标，点完 9s 没新数据就用真实触摸补一次
+ *        （和过 CAP 同一套 dispatchTouchEvent）。
+ *   ④ grabM3u8 失败直接回退网页模式（parse=1）—— 网页模式在壳子里同样过不了 CAP，
+ *      必然播不了。⇒ 失败后先重试一次，仍失败才回退。
+ *   ⑤ 直链推给壳子时**不再带 Referer**，只给 UA：bytetos 签名 URL 不依赖 Referer，
+ *      带上反而可能撞某些 CDN 节点的 Referer 白名单。
+ *
  * 【v11：退出播放后声音还在（2026-11-19 真机反馈）】
  *   根因不是本地代理在跑，是 ensureWv() 里开了
  *   setMediaPlaybackRequiresUserGesture(false) —— 播放页的 <video> 会在我们那个
@@ -160,6 +175,11 @@ public class Gaze extends Spider {
     private Handler main;
     private WebView wv;
     private final Object lock = new Object();
+
+    /** onPageFinished 的时刻。load() 靠它判断页面到底加载完没有。 */
+    private volatile long pageFinishedAt;
+    /** 目标 URL，用来过滤上一次页面迟到的 onPageFinished。 */
+    private volatile String pageWant;
 
     /** 单条缓存：同一个 tid 连续被调（壳子常连着问 page=1、page=2）时不重复加载页面。
      *  只留最近一个分类，切 tab 必然重新抓，避免拿到别的分类的旧数据。 */
@@ -511,6 +531,17 @@ public class Gaze extends Spider {
             "    var e=n[i]; ['mousedown','mouseup','click'].forEach(function(t){ try{ e.dispatchEvent(new MouseEvent(t,{bubbles:true,composed:true})); }catch(x){} });" +
             "    try{ e.click(); }catch(x){} return 'ok'; } }" +
             "  return 'not-found'; };" +
+            // 选集按钮的中心坐标（CSS px）+ 视口尺寸。
+            // 合成 click 万一被页面忽略（有些站也校验 isTrusted），Java 可以拿这个坐标
+            // 用 WebView.dispatchTouchEvent 补一次真实触摸 —— 和过 CAP 用的是同一套。
+            " N.rectOf=function(p){" +
+            "  var n=document.querySelectorAll('#g8f256a3e34dd0c56 [data-path]');" +
+            "  if(!n.length) n=document.querySelectorAll('[data-path]');" +
+            "  for(var i=0;i<n.length;i++){ if(n[i].getAttribute('data-path')===String(p)){" +
+            "    var e=n[i]; try{ e.scrollIntoView({block:'center'}); }catch(x){}" +
+            "    var r=e.getBoundingClientRect(); if(!r||r.width<=0||r.height<=0) return '';" +
+            "    return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth,h:innerHeight}); } }" +
+            "  return ''; };" +
             " N.meta=function(){" +
             "  var m=document.querySelector('meta[property=\"og:image\"]');" +
             "  return JSON.stringify({t:document.title||'',p:m?m.content:''}); };" +
@@ -694,6 +725,12 @@ public class Gaze extends Spider {
 
             @Override
             public void onPageFinished(WebView v, String url) {
+                // 只认「目标 URL」的 finished：重定向/SPA 时会收到别的页面的回调，
+                // 认错了就等于没等，后面又是老问题。
+                String want = pageWant;
+                if (want == null || (url != null && url.indexOf(want) >= 0)) {
+                    pageFinishedAt = System.currentTimeMillis();
+                }
                 inject(v);
             }
 
@@ -725,11 +762,17 @@ public class Gaze extends Spider {
         }
     }
 
-    /** 加载 url，并等 onPageFinished（最多 waitMs；等不到也返回 true，后面靠轮询）。 */
+    /** 加载 url，并**真的等 onPageFinished**（最多 waitMs）。
+     *  之前只 sleep 1.5s 就返回：慢机上页面还没起来，后面的 capTick 全是 no-widget，
+     *  CAP 预算被白白烧掉 —— 这是「很多片播不了」的一个主要原因。
+     *  超时也返回 true，交给调用方（waitPath / capTick 轮询）继续判断。 */
     private boolean load(final String url, long waitMs) {
         if (main == null) return false;
-        final CountDownLatch done = new CountDownLatch(1);
+        final long t0 = System.currentTimeMillis();
+        pageWant = url;
+        pageFinishedAt = 0;
         final boolean[] ok = new boolean[1];
+        final CountDownLatch posted = new CountDownLatch(1);
         main.post(new Runnable() {
             @Override
             public void run() {
@@ -740,18 +783,23 @@ public class Gaze extends Spider {
                 } catch (Throwable t) {
                     dlog("load err " + t);
                 } finally {
-                    done.countDown();
+                    posted.countDown();
                 }
             }
         });
         try {
-            done.await(5000, TimeUnit.MILLISECONDS);
+            posted.await(5000, TimeUnit.MILLISECONDS);
         } catch (InterruptedException ignored) {
         }
         if (!ok[0]) return false;
-        // 给新文档一点时间起来；随后由调用方轮询（CAP 点击 / 列表 / 选集）
-        sleep(Math.min(waitMs, 1500));
-        dlog("load " + url);
+        long end = t0 + waitMs;
+        while (System.currentTimeMillis() < end && pageFinishedAt < t0) {
+            sleep(200);
+        }
+        boolean fin = pageFinishedAt >= t0;
+        // onPageFinished 之后 DOM/JS 还要跑一下（CAP 组件是前端渲染出来的）
+        sleep(fin ? 700 : 1200);
+        dlog("load " + url + " fin=" + fin + " " + (System.currentTimeMillis() - t0) + "ms");
         return true;
     }
 
@@ -1072,12 +1120,22 @@ public class Gaze extends Spider {
             JSONArray eps = null;
             String meta = null;
             long deadline = System.currentTimeMillis() + DETAIL_BUDGET_MS;
+            boolean reloaded = false;
             int round = 0;
             while (System.currentTimeMillis() < deadline) {
                 round++;
                 if (round == 1 || round % 3 == 0) ensureHook();
-                capTick();
+                String cap = capTick();
                 String raw = g("eps()", 2500);
+                // CAP 组件没渲染出来、选集也没出来 → 原地等没用，重载一次
+                if (!reloaded && round >= 5 && "no-widget".equals(cap)
+                        && (raw == null || raw.length() <= 4)) {
+                    reloaded = true;
+                    dlog("detail reload no-widget mid=" + mid + " round=" + round);
+                    load(base + "/play/" + mid, PAGE_READY_MS);
+                    ensureHook();
+                    continue;
+                }
                 if (raw != null && raw.length() > 4) {
                     try {
                         JSONArray a = new JSONArray(raw);
@@ -1646,24 +1704,46 @@ public class Gaze extends Spider {
 
         long deadline = System.currentTimeMillis() + PLAY_BUDGET_MS;
         boolean clicked = false;
+        boolean reloaded = false;
+        boolean retapped = false;
+        long clickedAt = 0;
+        int target = ep < 0 ? 0 : ep;
         int round = 0;
         while (System.currentTimeMillis() < deadline) {
             round++;
             if (round == 1 || round % 4 == 0) ensureHook();
-            capTick();
+            String cap = capTick();
+            String eps = null;
+            if (!clicked) eps = g("eps()", 2000);
+            // CAP 组件压根没渲染出来（不是"点了没过"，是 DOM 里没有），而且选集也没出来：
+            // 这时候在原地空转 28s 没意义，重载一次页面。CAP 已过时 eps 会有值，不会误重载。
+            if (!clicked && !reloaded && round >= 5 && "no-widget".equals(cap)
+                    && (eps == null || eps.length() <= 4)) {
+                reloaded = true;
+                dlog("play reload no-widget mid=" + mid + " round=" + round);
+                if (!load(base + page, PAGE_READY_MS)) return null;
+                ensureHook();
+                continue;
+            }
             if (!clicked) {
                 // 必须等选集按钮真的渲染出来再点：元素先出现、点击处理器后绑定，
                 // 太早点会「点了个空」，拿到的仍是默认那一集的 m3u8（静默错集）。
-                String eps = g("eps()", 2000);
                 if (eps != null && eps.length() > 4) {
-                    int target = ep < 0 ? 0 : ep;
                     String r = g("click(" + target + ")", 2000);
                     if (r != null && r.indexOf("ok") >= 0) {
                         clicked = true;
+                        clickedAt = System.currentTimeMillis();
                         dlog("play click ep=" + target + " round=" + round + " n0=" + n0);
                     }
                 }
             } else {
+                // 点完 9s 还没新数据：合成 click 可能被页面忽略，用真实触摸补一次
+                if (!retapped && System.currentTimeMillis() - clickedAt > 9000) {
+                    retapped = true;
+                    String rc = g("rectOf(" + target + ")", 2000);
+                    dlog("play retap ep=" + target + " rect=" + (rc == null ? "null" : String.valueOf(rc.length())));
+                    if (rc != null && rc.length() > 8) touchTap(rc);
+                }
                 // 先看整片直链：新出现的才算（条数没涨说明是换集前那条）
                 String mu = g("murl()", 3000);
                 if (mu != null && mu.length() > 20 && mu.indexOf("http") == 0) {
@@ -1735,12 +1815,21 @@ public class Gaze extends Spider {
             mid = mid.substring(0, bar);
         }
         try {
+            long tGrab = System.currentTimeMillis();
             String got = grabM3u8(mid, ep);
+            if (got == null) {
+                // 第一次失败：多半是 CAP 没过 / 页面没起来。
+                // 重试一次，比直接回退网页模式强 —— 网页模式在壳子里同样过不了 CAP，必然播不了。
+                dlog("player retry mid=" + mid + " first=" + (System.currentTimeMillis() - tGrab) + "ms");
+                got = grabM3u8(mid, ep);
+            }
             // 最优：整片直链（_murl 接口给的签名 MP4，faststart + Range）
             //   不代理、不剥壳、不吃内存，播放器自己拖进度条。
             //   签名 1 小时过期，所以每次播放都现场取，不能缓存。
             if (got != null && got.startsWith(MP4_PREFIX)) {
                 String direct = got.substring(MP4_PREFIX.length());
+                // 只给 UA，**不带 Referer**：bytetos 的签名 URL 不依赖 Referer，
+                // 带上反而可能被某些 CDN 节点的 Referer 白名单拦掉（真机反馈「播不了」）。
                 JSONObject hd = new JSONObject();
                 hd.put("User-Agent", UA);
                 out.put("parse", 0);
