@@ -29,7 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v14
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v15
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
  * 【v13：把「很多片播不了」的成功率问题按根因修一遍（2026-11-21）】
@@ -181,10 +181,16 @@ public class Gaze extends Spider {
     /** 目标 URL，用来过滤上一次页面迟到的 onPageFinished。 */
     private volatile String pageWant;
 
-    /** 单条缓存：同一个 tid 连续被调（壳子常连着问 page=1、page=2）时不重复加载页面。
-     *  只留最近一个分类，切 tab 必然重新抓，避免拿到别的分类的旧数据。 */
-    private String lastTid;
-    private String lastRaw;
+    /** 分类列表缓存：key = tid + 筛选串。壳子常连着问同一个分类，重复抓就要重过 CAP（13s+），
+     *  这就是「分类加载太慢」的主因。按 key 分开缓存，切 tab / 切筛选互不污染，5 分钟有效。 */
+    private static class ListCache {
+        final String raw;
+        final long at;
+        ListCache(String raw, long at) { this.raw = raw; this.at = at; }
+    }
+    private final java.util.concurrent.ConcurrentHashMap<String, ListCache> listCaches =
+            new java.util.concurrent.ConcurrentHashMap<String, ListCache>();
+    private static final long LIST_CACHE_MS = 300000L;
 
     // ===================================================================
     // 首页的纯 HTTP 通道
@@ -926,13 +932,13 @@ public class Gaze extends Spider {
         JSONObject out = new JSONObject();
         try {
             out.put("class", buildClasses());
+            out.put("filters", buildFilters());
             // 先走纯 HTTP：首页是服务端渲染的，不需要 CAP，也不受注入时序影响
             JSONArray cards = homeCards(false);
             if (cards == null || cards.length() == 0) {
                 dlog("home -> webview");
                 String raw = fetchList("");
-                lastTid = "all";
-                lastRaw = raw;
+                if (raw != null) listCaches.put("all|", new ListCache(raw, System.currentTimeMillis()));
                 cards = parseList(raw);
             }
             out.put("list", cards);
@@ -964,9 +970,12 @@ public class Gaze extends Spider {
                 out.put("list", new JSONArray());
                 return out.toString();
             }
+            String fq = filterQuery(extend);
+            String cacheKey = t + "|" + fq;
             JSONArray list = null;
             int total = 0;
-            if ("all".equals(t)) {
+            // 只有「全部 + 无筛选」才走首页 SSR 卡片（秒开）；带筛选必须用 filter 页的数据
+            if ("all".equals(t) && fq.isEmpty()) {
                 JSONArray cards = homeCards(false);
                 if (cards != null && cards.length() > 0) {
                     list = cards;
@@ -975,13 +984,19 @@ public class Gaze extends Spider {
             }
             if (list == null) {
                 String raw;
-                if (t.equals(lastTid) && lastRaw != null) {
-                    raw = lastRaw;
-                    dlog("category hit cache tid=" + t);
+                ListCache c = listCaches.get(cacheKey);
+                if (c != null && c.raw != null
+                        && System.currentTimeMillis() - c.at < LIST_CACHE_MS) {
+                    raw = c.raw;
+                    dlog("category hit cache key=" + cacheKey
+                            + " age=" + ((System.currentTimeMillis() - c.at) / 1000) + "s");
                 } else {
-                    raw = fetchList(mformOf(t));
-                    lastTid = t;
-                    lastRaw = raw;
+                    long tFetch = System.currentTimeMillis();
+                    raw = fetchList(mformOf(t) + fq);
+                    if (raw != null) listCaches.put(cacheKey,
+                            new ListCache(raw, System.currentTimeMillis()));
+                    dlog("category fetch key=" + cacheKey
+                            + " " + (System.currentTimeMillis() - tFetch) + "ms");
                 }
                 list = parseList(raw);
                 if (raw != null) {
@@ -1049,6 +1064,106 @@ public class Gaze extends Spider {
             cls.put(c);
         }
         return cls;
+    }
+
+    // ===================================================================
+    // 筛选（2026-11-23 过 CAP 实测）
+    //   /filter_movielist 的 body：
+    //     mform=2&mcountry=all&genre_arr=all&page=1&sort=updatetime&album=all&title=&years=all
+    //   URL 上实测生效的参数：mform / mcountry / genre / years / sort
+    //   （注意 URL 叫 genre，body 里叫 genre_arr；album/title 从 URL 传不进去，只有 UI 输入）
+    //   页面按 URL 参数生成 body，proof header 也跟着 body 算，所以拼 URL 不需要碰 proof。
+    // ===================================================================
+    private static final String[][] FILTER_AREAS = {
+            {"1","中国大陆"},{"2","中国台湾"},{"3","中国香港"},{"4","韩国"},{"5","俄罗斯"},
+            {"6","美国"},{"7","日本"},{"8","印度"},{"9","英国"},{"10","德国"},
+            {"11","法国"},{"12","意大利"},{"13","泰国"},{"14","爱沙尼亚"},{"15","哈萨克斯坦"},
+            {"16","西班牙"},{"17","黎巴嫩"},{"18","巴西"},{"19","澳大利亚"},{"20","丹麦"},
+            {"21","瑞典"},{"22","以色列"},{"23","荷兰"},{"24","伊朗"},{"25","墨西哥"},
+            {"26","奥地利"},{"27","智利"},{"28","马来西亚"},{"29","哥伦比亚"},{"30","挪威"},
+            {"31","爱尔兰"},{"32","罗马尼亚"},{"33","比利时"},{"34","瑞士"},{"35","加拿大"},
+            {"36","波兰"}
+    };
+    private static final String[][] FILTER_GENRES = {
+            {"1","剧情"},{"2","动作"},{"3","喜剧"},{"4","爱情"},{"5","科幻"},{"6","悬疑"},
+            {"7","惊悚"},{"8","恐怖"},{"9","犯罪"},{"10","音乐"},{"11","冒险"},{"12","历史"},
+            {"13","战争"},{"14","奇幻"},{"15","黑帮"},{"16","文艺"},{"17","传记"},{"18","运动"},
+            {"19","同性"},{"20","情色"}
+    };
+
+    private static JSONArray filterValues(String[][] pairs, boolean withAll) {
+        JSONArray a = new JSONArray();
+        if (withAll) {
+            JSONObject o = new JSONObject();
+            try { o.put("v", "all"); o.put("n", "全部"); } catch (Exception ignored) { }
+            a.put(o);
+        }
+        for (String[] p : pairs) {
+            JSONObject o = new JSONObject();
+            try { o.put("v", p[0]); o.put("n", p[1]); } catch (Exception ignored) { }
+            a.put(o);
+        }
+        return a;
+    }
+
+    private JSONObject buildFilters() {
+        JSONArray groups = new JSONArray();
+        try {
+            JSONObject sort = new JSONObject();
+            sort.put("key", "sort");
+            sort.put("name", "排序");
+            String[][] so = {{"updatetime","最近更新"},{"grade","评分排序"},{"name","名称排序"}};
+            JSONArray sv = new JSONArray();
+            for (String[] p : so) {
+                JSONObject o = new JSONObject(); o.put("v", p[0]); o.put("n", p[1]); sv.put(o);
+            }
+            sort.put("value", sv);
+            groups.put(sort);
+
+            JSONObject year = new JSONObject();
+            year.put("key", "years");
+            year.put("name", "年份");
+            JSONArray yv = new JSONArray();
+            JSONObject ya = new JSONObject(); ya.put("v", "all"); ya.put("n", "全部"); yv.put(ya);
+            for (int y = 2026; y >= 1980; y--) {
+                JSONObject o = new JSONObject(); o.put("v", String.valueOf(y)); o.put("n", String.valueOf(y)); yv.put(o);
+            }
+            year.put("value", yv);
+            groups.put(year);
+
+            JSONObject area = new JSONObject();
+            area.put("key", "mcountry");
+            area.put("name", "地区");
+            area.put("value", filterValues(FILTER_AREAS, true));
+            groups.put(area);
+
+            JSONObject genre = new JSONObject();
+            genre.put("key", "genre");
+            genre.put("name", "类型");
+            genre.put("value", filterValues(FILTER_GENRES, true));
+            groups.put(genre);
+        } catch (Exception ignored) {
+        }
+        JSONObject f = new JSONObject();
+        String[] tids = {"all", "movie", "tv", "bangumi", "cartoon"};
+        for (String t : tids) {
+            try { f.put(t, groups); } catch (Exception ignored) { }
+        }
+        return f;
+    }
+
+    /** 壳子传来的筛选值 → /filter 的 query。值都来自上面固定的枚举，无需 URL 编码。 */
+    private static String filterQuery(HashMap<String, String> extend) {
+        if (extend == null || extend.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        String[] keys = {"mcountry", "genre", "years", "sort"};
+        for (String k : keys) {
+            String v = extend.get(k);
+            if (v == null || v.isEmpty() || "all".equals(v)) continue;
+            if ("sort".equals(k) && "updatetime".equals(v)) continue;
+            sb.append('&').append(k).append('=').append(v);
+        }
+        return sb.toString();
     }
 
     private JSONArray parseList(String raw) {
@@ -1894,34 +2009,46 @@ public class Gaze extends Spider {
         try {
             long tGrab = System.currentTimeMillis();
             String got = grabM3u8(mid, ep);
+
+            // 【v15：同一个片子有时能播有时不能的根因】
+            //   v14 拿到过期签名只是 got=null 然后掉进网页兜底 —— 页面里那条已经旧了，
+            //   不重新加载就永远拿到同一条旧的。表现就是「第一次播不了、再点一次又好了」。
+            //   ⇒ 过期就重载播放页重新取，最多两次；仍过期才真的拒掉。
+            for (int fresh = 0; fresh < 2 && got != null && got.startsWith(MP4_PREFIX)
+                    && !isUsableMurl(got.substring(MP4_PREFIX.length())); fresh++) {
+                String stale = got.substring(MP4_PREFIX.length());
+                dlog("player stale reload mid=" + mid + " " + murlExpiryState(stale)
+                        + " try=" + (fresh + 1));
+                load(base + "/play/" + mid, PAGE_READY_MS);
+                got = grabM3u8(mid, ep);
+            }
             if (got == null) {
-                // 第一次失败：多半是 CAP 没过 / 页面没起来。
+                // 没拿到：多半是 CAP 没过 / 页面没起来。
                 // 重试一次，比直接回退网页模式强 —— 网页模式在壳子里同样过不了 CAP，必然播不了。
                 dlog("player retry mid=" + mid + " first=" + (System.currentTimeMillis() - tGrab) + "ms");
                 got = grabM3u8(mid, ep);
             }
             // 最优：整片直链（_murl 接口给的签名 MP4，faststart + Range）
             //   不代理、不剥壳、不吃内存，播放器自己拖进度条。
-            //   签名 1 小时过期，所以每次播放都现场取，不能缓存。
+            //   签名有时效，所以每次播放都现场取，不能缓存。
             if (got != null && got.startsWith(MP4_PREFIX)) {
                 String direct = got.substring(MP4_PREFIX.length());
                 if (!isUsableMurl(direct)) {
+                    // 重载两次仍是过期/无效签名，才真的放弃，不把坏 URL 交给播放器。
                     dlog("player reject stale/invalid mp4 " + murlExpiryState(direct));
                     got = null;
-                }
-                if (got == null) {
-                    // 让下方的网页兜底逻辑继续处理，不把已过期签名交给播放器。
                 } else {
-                // 只给 UA，**不带 Referer**：bytetos 的签名 URL 不依赖 Referer，
-                // 带上反而可能被某些 CDN 节点的 Referer 白名单拦掉（真机反馈「播不了」）。
-                JSONObject hd = new JSONObject();
-                hd.put("User-Agent", UA);
-                out.put("parse", 0);
-                out.put("url", direct);
-                out.put("playUrl", "");
-                out.put("header", hd);
-                dlog("player mp4 direct mid=" + mid + " len=" + direct.length());
-                return out.toString();
+                    // 只给 UA，**不带 Referer**：bytetos 的签名 URL 不依赖 Referer，
+                    // 带上反而可能被某些 CDN 节点的 Referer 白名单拦掉（真机反馈「播不了」）。
+                    JSONObject hd = new JSONObject();
+                    hd.put("User-Agent", UA);
+                    out.put("parse", 0);
+                    out.put("url", direct);
+                    out.put("playUrl", "");
+                    out.put("header", hd);
+                    dlog("player mp4 direct mid=" + mid + " len=" + direct.length()
+                            + " " + murlExpiryState(direct));
+                    return out.toString();
                 }
             }
             String m3u8 = got;
