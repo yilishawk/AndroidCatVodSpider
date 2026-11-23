@@ -382,7 +382,7 @@ public class Czzyv extends Spider {
     public String searchContent(String key, boolean quick) {
         if (TextUtils.isEmpty(key)) return Result.string(new ArrayList<>());
         try {
-            String url = HOST + "/boss1O1?q=" + URLEncoder.encode(key, "UTF-8");
+            String url = HOST + "/nimasile?q=" + URLEncoder.encode(key, "UTF-8");
             logger("搜索请求: " + url);
             String html = get(url);
             if (TextUtils.isEmpty(html)) {
