@@ -29,9 +29,23 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v16-probe
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v17
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v17：修真机 log-33 暴露的「解析太慢 / 串台」——单 WebView 并发抢占（2026-11-25）】
+ *   v16-probe 真机探针证明：电影也发 _murl、8/9 直链成功，vu/m3u8 解密链根本没走
+ *   （u8/epin/fg 全 0）。所以不是 vu 链问题，不需要逆 wasm。
+ *   真根因（日志铁证）：单例 WebView 被并发导航——
+ *     · 26fd 等待解析期间，VU-PROBE 的 path 变成 /play/b23f31e → /play/360bb6d
+ *       → /filter → /play/4403d，是别的请求把同一个 WebView 导航走了；
+ *     · player call→result 耗时 16~81s，用户 9~10s 就退出，直链晚到 6~46s；
+ *     · 26fd 与 4e6c 拿到同一个 URL（c71ec8b1...），murl pre hit 复用了残留。
+ *   代码根因：playerContent 是 synchronized（锁 this），但 detailContent / fetchList
+ *   无锁，三者都调 load() 操作同一个单例 wv ⇒ 并发时互相覆盖页面。
+ *   ⇒ v17 让 detailContent / fetchList 也 synchronized（同一把 this 锁），
+ *     三者串行，杜绝并发导航。ev() 内部的 lock 是另一把（main 线程），不会死锁。
+ *   串台 / 慢都是并发抢占的派生症状，加锁后一起消除；若仍串台再加 path 标签校验。
+ *
  * 【v16-probe：纯诊断版，不改任何播放逻辑（2026-11-25）】
  *   根因已定位：电影走 vu/fMP4+MSE 链（play_source_group → gaze_file_vu/..._info
  *   → wasm 解密 → m3u8 → appendBuffer），不发 _murl、不产生 m3u8 文本 blob；
@@ -959,7 +973,9 @@ public class Gaze extends Spider {
     //   query 形如 "?mform=1"；空串表示「全部」。
     //   不同 query 是不同文档，注入对象会被重建，所以不会串到上一个分类的数据。
     // ===================================================================
-    private String fetchList(String query) {
+    // v17：必须和 detailContent / playerContent 用同一把 this 锁。
+    // 单例 WebView 被并发导航是「解析慢 / 串台」的根因（见类头 v17 说明）。
+    private synchronized String fetchList(String query) {
         String url = base + "/filter" + (query == null ? "" : query);
         if (!load(url, PAGE_READY_MS)) return null;
         long deadline = System.currentTimeMillis() + LIST_BUDGET_MS;
@@ -1285,7 +1301,8 @@ public class Gaze extends Spider {
     // detailContent：/play/{mid} → 点 CAP → 等选集按钮 → 读 [data-path]
     // ===================================================================
     @Override
-    public String detailContent(List<String> ids) throws Exception {
+    // v17：加锁，与 playerContent / fetchList 串行，防止并发导航抢占同一个 WebView
+    public synchronized String detailContent(List<String> ids) throws Exception {
         JSONObject out = new JSONObject();
         JSONArray list = new JSONArray();
         try {
