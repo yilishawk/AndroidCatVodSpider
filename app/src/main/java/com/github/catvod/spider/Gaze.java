@@ -29,9 +29,21 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v15
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v16-probe
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v16-probe：纯诊断版，不改任何播放逻辑（2026-11-25）】
+ *   根因已定位：电影走 vu/fMP4+MSE 链（play_source_group → gaze_file_vu/..._info
+ *   → wasm 解密 → m3u8 → appendBuffer），不发 _murl、不产生 m3u8 文本 blob；
+ *   v15 只认 _murl + createObjectURL 文本 blob，所以电影全空转到超时。
+ *   vu 解密链依赖 wasm + 运行时守卫，Java 复刻代价大且易碎。
+ *   本版只在注入脚本里加探针，回答三个问题，再决定 v17 怎么改：
+ *     ① Android WebView 里 GazeHlsSupported 是多少（决定走 gazeManifest 还是 epi 分支）
+ *     ② GazeBinary.utf8() 是否被调、能否抓到 #EXTM3U 明文
+ *     ③ epi()/decodeFragmentURL()/appendBuffer 是否被调用、video.src 是什么
+ *   探针数据通过 grabM3u8 里的 "VU-PROBE {...}" 日志输出。
+ *   抓到后请把含 VU-PROBE 的整段日志发回。
+ *
  * 【v13：把「很多片播不了」的成功率问题按根因修一遍（2026-11-21）】
  *   ① load() 名义上等 onPageFinished，实际只 sleep 1.5s。
  *      慢机上页面还没起来，后面的 capTick 全是 no-widget，28s 预算被白白烧掉。
@@ -447,6 +459,69 @@ public class Gaze extends Spider {
             " if(window.__NS__ && window.__NS__.list) return;" +
             " var g={lists:[],blobs:[],media:[],murls:[]};" +
             " var N=window.__NS__={};" +
+            // ===== v16-probe：vu 链诊断（纯观察，不改页面行为）=====
+            // 抓 GazeBinary.utf8 的 #EXTM3U 输出 / epi 输出 / appendBuffer / video.src，
+            // 记在 g.vu，由 Java 侧定期读走打日志。全部 try/catch 包住，失败不影响原逻辑。
+            " g.vu={v:1};" +
+            " try{" +
+            "  var V=g.vu;" +
+            "  V.hls=(typeof window.GazeHlsSupported);" +   // boolean / undefined → 决定分支
+            "  var gbHook=function(v){" +
+            "   try{" +
+            "    V.gb=1;" +
+            "    if(v.utf8 && !v.utf8.__pg){" +
+            "     var o=v.utf8; v.utf8=function(){" +
+            "      var r=o.apply(this,arguments);" +
+            "      try{ if(typeof r==='string' && r.indexOf('#EXTM3U')>=0){" +
+            "        V.u8=1; V.u8len=(r.length); V.u8head=(r.slice(0,220));" +
+            "      }}catch(e){}" +
+            "      return r; };" +
+            "     v.utf8.__pg=1;" +
+            "    }" +
+            "    if(v.decodeFragmentURL && !v.decodeFragmentURL.__pg){" +
+            "     var d=v.decodeFragmentURL; v.decodeFragmentURL=function(){" +
+            "      V.fg=(V.fg||0)+1;" +
+            "      if(!V.fgs) V.fgs=(String(arguments[0]||'').slice(0,40)+'>'+String(d.apply(this,arguments)).slice(0,90));" +
+            "      return d.apply(this,arguments); };" +
+            "     v.decodeFragmentURL.__pg=1;" +
+            "    }" +
+            "   }catch(e){}" +
+            "  };" +
+            // GazeBinary 用 defineProperty(value,writable:false) 挂的：拦截不到 setter，
+            // 只能定时轮询，一旦发现就直接包它上面的方法。
+            "  var t=setInterval(function(){" +
+            "   try{ if(window.GazeBinary) gbHook(window.GazeBinary); }catch(e){}" +
+            "   try{ if(typeof window.GazeBinary!=='undefined') V.gbt=1; }catch(e){}" +
+            "   try{ V.epi=(typeof window.epi); }catch(e){}" +
+            "   try{ V.dim=(typeof window.DimGive); }catch(e){}" +
+            "   try{ if(typeof window.epi==='function' && !window.epi.__pg){" +
+            "     var e0=window.epi; window.epi=function(){" +
+            "      var r=e0.apply(this,arguments);" +
+            "      try{ V.epin=(V.epin||0)+1; V.epilen=String(r||'').length; V.epihead=String(r||'').slice(0,120); }catch(ex){}" +
+            "      return r; }; window.epi.__pg=1;" +
+            "   }}catch(e){}" +
+            "   try{ if(typeof window.DimGive==='function' && !window.DimGive.__pg){" +
+            "     var d0=window.DimGive; window.DimGive=function(){" +
+            "      var r=d0.apply(this,arguments); V.dimn=(V.dimn||0)+1; return r; }; window.DimGive.__pg=1;" +
+            "   }}catch(e){}" +
+            "  },400);" +
+            "  setTimeout(function(){try{clearInterval(t);}catch(e){}},90000);" +
+            // appendBuffer：统计次数 + 首片魔数
+            "  try{ var AB=SourceBuffer.prototype.appendBuffer;" +
+            "   SourceBuffer.prototype.appendBuffer=function(b){" +
+            "    V.ab=(V.ab||0)+1;" +
+            "    try{ if(!V.abh){ var u=new Uint8Array(b),h=''; for(var i=0;i<Math.min(12,u.length);i++) h+=('0'+u[i].toString(16)).slice(-2); V.abh=h+'/'+b.byteLength; } }catch(e){}" +
+            "    return AB.apply(this,arguments); };" +
+            "  }catch(e){}" +
+            // video.src / currentSrc
+            "  try{ var vd=document.querySelector('video'); if(vd) V.vsrc=(vd.currentSrc||vd.src||'').slice(0,70); }catch(e){}" +
+            " }catch(e){ g.vu.err=String(e); }" +
+            " N.vu=function(){" +
+            "  try{ var v=document.querySelector('video'); if(v) g.vu.vsrc=(v.currentSrc||v.src||'').slice(0,70); }catch(e){}" +
+            "  try{ g.vu.path=(location.pathname||'').slice(-44); }catch(e){}" +
+            "  return JSON.stringify(g.vu);" +
+            " };" +
+            // ===== end v16-probe =====
             " function pushList(t){ try{ if(t && t.indexOf('mlist')>=0) g.lists.push(t); }catch(e){} }" +
             // _murl 接口回的是 {"code":1,"url":"https://lf9-csp-sign.bytetos.com/....mp4?x-signature=..."}
             // 这是**整片直链**（faststart，moov 在前，支持 Range），比 m3u8 那条链子简单得多。
@@ -1883,6 +1958,7 @@ public class Gaze extends Spider {
         long clickedAt = 0;
         int target = ep < 0 ? 0 : ep;
         int round = 0;
+        String lastVu = null; // v16-probe
         while (System.currentTimeMillis() < deadline) {
             round++;
             if (round == 1 || round % 4 == 0) ensureHook();
@@ -1955,6 +2031,12 @@ public class Gaze extends Spider {
                     String diag = g("diag()", 1500);
                     dlog("grab diag " + (diag == null ? "no-diag" : diag));
                 }
+            }
+            // v16-probe：每轮都读一次 vu 探针（很便宜），变化时打日志，确认 WebView 走哪条分支
+            String vu = g("vu()", 1200);
+            if (vu != null && vu.length() > 4 && !vu.equals(lastVu)) {
+                lastVu = vu;
+                dlog("VU-PROBE " + vu);
             }
             sleep(700);
         }
