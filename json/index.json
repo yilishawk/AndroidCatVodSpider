@@ -1,5 +1,5 @@
 {
-  "spider": "http://gh.halonice.com/https://raw.githubusercontent.com/yilishawk/AndroidCatVodSpider/refs/heads/multiThread/jar/custom_spider.jar;md5;8f365d30c8a288bf1300882781f8e808",
+  "spider": "http://gh.halonice.com/https://raw.githubusercontent.com/yilishawk/AndroidCatVodSpider/refs/heads/multiThread/jar/custom_spider.jar;md5;3edee271c26d97ad1c3afbf7bcdcafd1",
   "lives": [
     {
       "name": "电视直播",
