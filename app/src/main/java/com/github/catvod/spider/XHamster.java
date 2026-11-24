@@ -27,7 +27,6 @@ public class XHamster extends Spider {
     private String siteUrl = "https://zh.xhit.live";
     private boolean unlocked = false;
 
-    // 主分类（每组第一个）
     private static final String[] MAIN_CLASSES = {
             "亚洲人$asian",
             "家庭自制$homemade",
@@ -42,23 +41,19 @@ public class XHamster extends Spider {
             "丛林$jungle"
     };
 
-    // 每组剩余项作为筛选（key = 主分类 type_id）
     private static final Map<String, String[]> FILTER_MAP = new LinkedHashMap<>();
 
     static {
-        // 人种（亚洲人 之后）
         FILTER_MAP.put("asian", new String[]{
                 "18岁$18-year-old", "俄罗斯人$russian", "大奶子$big-tits", "内射$creampie",
                 "素人$amateur", "卡通$cartoon", "人母$mom", "人妻$milf", "美国人$american", "成人动漫$hentai"
         });
-        // 生产（家庭自制 之后）
         FILTER_MAP.put("homemade", new String[]{
                 "3D$3d", "Show$show", "互动$interactive", "合集$compilation", "唯美$softcore",
                 "复古$vintage", "字幕$caption", "幕后花絮$behind-the-scenes", "怀旧$retro",
                 "搞笑$funny", "故事$story", "无剧情$gonzo", "无码$uncensored", "日本AV$jav",
                 "特写$close-up", "直播$webcam", "第一人称视角$pov", "色情MV$pmv", "色情明星$pornstar", "色情艺术$erotica"
         });
-        // 玩法（69式 之后）
         FILTER_MAP.put("69", new String[]{
                 "肛交$anal", "下流话$dirty-talk", "乳交$titty-fucking", "乳射$cum-on-tits", "亲吻$kissing",
                 "传教士体位$missionary", "刮毛$shaving", "前列腺按摩$prostate-massage", "前戏$foreplay",
@@ -89,17 +84,14 @@ public class XHamster extends Spider {
                 "顺从$submissive", "食物$food", "高潮控制$orgasm-control", "高跟鞋踩油门$pedal-pumping",
                 "鸡巴睾丸摧残$cbt", "双性恋$bisexual", "女同$lesbian"
         });
-        // 年龄
         FILTER_MAP.put("cougar", new String[]{
                 "奶奶$granny", "宝贝$babe", "成熟$mature", "老少配$old-young", "老熟女$gilf",
                 "老男人$old-man", "青年$teen"
         });
-        // 种族
         FILTER_MAP.put("interracial", new String[]{
                 "印度$desi", "姆赞西$mzansi", "拉丁美女$latina", "欧洲人$european", "犹太人$jewish",
                 "阿拉伯人$arab", "非洲人$african", "黄种男和白人女$amwf", "黑人$black"
         });
-        // 身体
         FILTER_MAP.put("bbc", new String[]{
                 "下垂的乳房$saggy-tits", "乳头$nipples", "侏儒$midget", "假奶子$fake-tits", "可爱$cute",
                 "坚挺的乳头$puffy-nipples", "大乳头$big-nipples", "大屁股$big-ass", "大屁股白人美女$pawg",
@@ -112,18 +104,15 @@ public class XHamster extends Spider {
                 "裸体$nude", "超级肥胖的白人女性$ssbbw", "身体穿孔$piercing", "阴户$pussy", "阴蒂$clit",
                 "雌雄同体$hermaphrodite", "骨感$skinny"
         });
-        // 人数
         FILTER_MAP.put("threesome", new String[]{
                 "4P$foursome", "单人表演$solo", "多对一群交$gangbang", "情侣$couple",
                 "群交$group-sex", "群交派对$orgy"
         });
-        // 性玩具
         FILTER_MAP.put("sybian", new String[]{
                 "假阳具$dildo", "双头假阳具$double-dildo", "堵嘴球$ball-gagged", "性爱机器$fucking-machine",
                 "成人玩具$sex-toy", "振动棒$vibrator", "灌肠$enema", "穿戴式假阳具$strapon",
                 "肛塞$butt-plug", "肛门拉珠$anal-beads", "蒙眼$blindfolded", "阴道抽插$pussy-pump", "震动棒$hitachi"
         });
-        // 衣服
         FILTER_MAP.put("thong", new String[]{
                 "乳胶服$latex", "内裤$panties", "制服$uniform", "学生制服$school-uniform", "尼龙袜$nylon",
                 "性感内衣$lingerie", "手套$gloves", "打底裤$leggings", "比基尼$bikini", "渔网装$fishnet",
@@ -131,7 +120,6 @@ public class XHamster extends Spider {
                 "胸罩$bra", "蒙面$masked", "袜子$socks", "连裤袜$pantyhose", "连身鱼网装$bodystocking",
                 "长筒丝袜$stockings", "高跟鞋$high-heels"
         });
-        // 幻想
         FILTER_MAP.put("public-nudity", new String[]{
                 "ASMR$asmr", "Cook$cook", "万圣节$halloween", "三陪$escort", "上午$morning",
                 "中世纪$medieval", "临时保姆$babysitter", "书呆子$nerd", "修女$nun", "偷窥癖$voyeur",
@@ -155,7 +143,6 @@ public class XHamster extends Spider {
                 "运动$sport", "邻居$neighbor", "采访$interview", "重口味$hardcore", "陌生人$stranger",
                 "面试$audition", "骚$naughty", "黑人聚居区$ghetto"
         });
-        // 地点
         FILTER_MAP.put("jungle", new String[]{
                 "健身$fitness", "健身房$gym", "公交车$bus", "农场$farm", "出租车$taxi", "办公室$office",
                 "医院$hospital", "厕所$toilet", "厨房$kitchen", "大学$college", "户外$outdoor",
@@ -214,7 +201,6 @@ public class XHamster extends Spider {
             String[] sp = s.split("\\$");
             classes.add(new Class(sp[1], sp[0]));
         }
-        // 构建筛选
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         if (filter) {
             for (Map.Entry<String, String[]> entry : FILTER_MAP.entrySet()) {
@@ -236,7 +222,6 @@ public class XHamster extends Spider {
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         if (!unlocked) return Result.get().vod(new ArrayList<Vod>()).page(Integer.parseInt(pg), 0, 0, 0).string();
         int page = Integer.parseInt(pg);
-        // 如果选了筛选，就用筛选的 type_id 作为分类
         String realTid = tid;
         if (extend != null && extend.containsKey("tag") && !TextUtils.isEmpty(extend.get("tag"))) {
             realTid = extend.get("tag");
@@ -253,23 +238,37 @@ public class XHamster extends Spider {
     public String detailContent(List<String> ids) throws Exception {
         if (!unlocked) return Result.get().vod(new Vod()).string();
         String id = ids.get(0);
-        String url = id.startsWith("http") ? id : siteUrl + "/videos/" + id;
-        String html = OkHttp.string(url, getHeader());
+        String pageUrl = id.startsWith("http") ? id : siteUrl + "/videos/" + id;
+        String html = OkHttp.string(pageUrl, getHeader());
+
         Vod vod = new Vod();
         vod.setVodId(id);
+
         Matcher mTitle = Pattern.compile("<title[^>]*>([^<]+)</title>").matcher(html);
         if (mTitle.find()) {
-            String t = mTitle.group(1).replace(" — xHamster", "").replace("| xHamster", "").trim();
+            String t = mTitle.group(1)
+                    .replace(" — xHamster", "")
+                    .replace("| xHamster", "")
+                    .trim();
             vod.setVodName(t);
         }
+
         Matcher mPic = Pattern.compile("\"imageURL\"\\s*:\\s*\"(https:[^\"]+)\"").matcher(html);
         if (mPic.find()) {
             vod.setVodPic(mPic.group(1).replace("\\u002F", "/"));
         }
-        String playUrl = extractM3u8(html);
-        if (TextUtils.isEmpty(playUrl)) playUrl = url;
-        vod.setVodPlayFrom("xhamster");
-        vod.setVodPlayUrl(playUrl);
+
+        // 优先提取真实 m3u8
+        String m3u8 = extractM3u8(html);
+        if (!TextUtils.isEmpty(m3u8)) {
+            // 成功 → parse=0
+            vod.setVodPlayFrom("xhamster");
+            vod.setVodPlayUrl(m3u8);
+        } else {
+            // 失败保底 → 把页面链接推给壳子，parse=1
+            vod.setVodPlayFrom("xhamster");
+            vod.setVodPlayUrl(pageUrl);
+        }
         return Result.get().vod(vod).string();
     }
 
@@ -285,9 +284,18 @@ public class XHamster extends Spider {
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         if (!unlocked) return Result.get().url("").string();
+
         Map<String, String> header = getHeader();
         header.put("Referer", siteUrl + "/");
-        return Result.get().url(id).header(header).string();
+
+        // 判断是 m3u8 还是页面链接
+        if (id.contains(".m3u8") || id.contains("video-nss.xhcdn.com")) {
+            // 真实直链 → parse=0
+            return Result.get().url(id).parse(0).header(header).string();
+        } else {
+            // 保底页面链接 → parse=1
+            return Result.get().url(id).parse(1).header(header).string();
+        }
     }
 
     private List<Vod> parseVideoList(String html) {
@@ -310,8 +318,9 @@ public class XHamster extends Spider {
                 String thumb = item.optString("thumbURL");
                 int duration = item.optInt("duration", 0);
                 if (TextUtils.isEmpty(pageURL) || TextUtils.isEmpty(title)) continue;
-                String vodId = pageURL.contains("/videos/") ?
-                        pageURL.substring(pageURL.lastIndexOf("/videos/") + 8) : pageURL;
+                String vodId = pageURL.contains("/videos/")
+                        ? pageURL.substring(pageURL.lastIndexOf("/videos/") + 8)
+                        : pageURL;
                 Vod vod = new Vod();
                 vod.setVodId(vodId);
                 vod.setVodName(title);
@@ -328,10 +337,18 @@ public class XHamster extends Spider {
 
     private String extractM3u8(String html) {
         if (TextUtils.isEmpty(html)) return "";
-        Matcher m1 = Pattern.compile("href=\"(https://video-nss\\.xhcdn\\.com/[^\"]+?\\.m3u8)\"").matcher(html);
+        // 1. 优先匹配 preload 里的链接（你给的例子）
+        Matcher m1 = Pattern.compile(
+                "href=\"(https://video-nss\\.xhcdn\\.com/[^\"]+?\\.m3u8)\""
+        ).matcher(html);
         if (m1.find()) return m1.group(1);
-        Matcher m2 = Pattern.compile("(https://video-nss\\.xhcdn\\.com/[^\"'\\s]+?\\.m3u8)").matcher(html);
+
+        // 2. 通用匹配
+        Matcher m2 = Pattern.compile(
+                "(https://video-nss\\.xhcdn\\.com/[^\"'\\s]+?\\.m3u8)"
+        ).matcher(html);
         if (m2.find()) return m2.group(1);
+
         return "";
     }
 
