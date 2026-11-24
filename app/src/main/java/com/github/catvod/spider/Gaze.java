@@ -29,9 +29,20 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v17
+ * Gaze（gaze.red / gaze.host）CatVod Spider —— WebView 中继版 v18
  * 目标工程：yilishawk/AndroidCatVodSpider（multiThread 分支）
  * ===========================================================================
+ * 【v18：列表 / 播放拆成两个独立 WebView（2026-11-25）】
+ *   v17 用一把 this 锁串行 detail/fetchList/player，虽杜绝了并发导航抢占，
+ *   但列表请求排在播放器（16~81s）后面等锁 → 列表超时「加载失败」（真机反馈）。
+ *   根子是「一把锁管所有 WebView 操作」的设计：列表和播放本就不该共用实例。
+ *   ⇒ 拆成 listSlot / playSlot 两个 Slot，各持有独立 WebView + 页面状态 + 锁：
+ *     · listSlot：fetchList 专用（列表不用再等播放）
+ *     · playSlot：detailContent / playerContent 共用（仍串行，防播放内部抢占）
+ *     · 两者并行、互不阻塞；cookie 应用级共享，第二个 WebView 基本免 CAP
+ *     · 底层 load/ev/g/touchTap 用 ThreadLocal(cur()) 定位当前 Slot，签名不变
+ *     · onPageFinished 用创建时捕获的 slot 写页面状态（主线程回调读不到 ThreadLocal）
+ *
  * 【v17：修真机 log-33 暴露的「解析太慢 / 串台」——单 WebView 并发抢占（2026-11-25）】
  *   v16-probe 真机探针证明：电影也发 _murl、8/9 直链成功，vu/m3u8 解密链根本没走
  *   （u8/epin/fg 全 0）。所以不是 vu 链问题，不需要逆 wasm。
@@ -199,13 +210,35 @@ public class Gaze extends Spider {
     private String base = DEFAULT_BASE;
     private Context appCtx;
     private Handler main;
-    private WebView wv;
-    private final Object lock = new Object();
 
-    /** onPageFinished 的时刻。load() 靠它判断页面到底加载完没有。 */
-    private volatile long pageFinishedAt;
-    /** 目标 URL，用来过滤上一次页面迟到的 onPageFinished。 */
-    private volatile String pageWant;
+    // ===================================================================
+    // 【v18：列表与播放分离成两个独立 WebView】
+    //   v17 用一把 this 锁把 detail/fetchList/player 串行，杜绝了并发导航抢占，
+    //   但代价是：播放器解析要 16~81s，列表请求排在队尾等锁 → 列表超时「加载失败」。
+    //   根子是「一把锁管所有 WebView 操作」这个设计：两个用途本就不该共用实例。
+    //   ⇒ 拆成 LIST / PLAY 两个 Slot，各持有自己的 WebView 和页面状态；
+    //     底层 load/ev/g 用 ThreadLocal 判断当前 Slot，签名不变。
+    //     cookie 是应用级共享（CookieManager），第二个 WebView 首次也基本免 CAP。
+    //   锁降为 Slot 级：listSlot 一次只服务一个列表请求，playSlot 一次只服务一个
+    //   detail/player；两者互不阻塞。
+    // ===================================================================
+    private static class Slot {
+        final String name;
+        final Object lock = new Object();
+        WebView wv;
+        volatile long pageFinishedAt;
+        volatile String pageWant;
+        volatile long lastCapAt;
+        Slot(String name) { this.name = name; }
+    }
+    private final Slot listSlot = new Slot("list");
+    private final Slot playSlot = new Slot("play");
+    private static final ThreadLocal<Slot> CUR = new ThreadLocal<Slot>();
+    /** 当前线程的 Slot；底层方法没设置过时默认 PLAY（保持旧行为）。 */
+    private Slot cur() {
+        Slot s = CUR.get();
+        return s != null ? s : playSlot;
+    }
 
     /** 分类列表缓存：key = tid + 筛选串。壳子常连着问同一个分类，重复抓就要重过 CAP（13s+），
      *  这就是「分类加载太慢」的主因。按 key 分开缓存，切 tab / 切筛选互不污染，5 分钟有效。 */
@@ -685,15 +718,13 @@ public class Gaze extends Spider {
     //     应用层派发的，isTrusted=true，和用户手点等价。
     //   JS 的合成点击只留作老版本 cap.js 的退路。
     // ===================================================================
-    /** 上次真实点击的时间。挑战要 9s 左右，期间每 700ms 点一次等于反复打断它。 */
-    private volatile long lastCapAt;
-
     private String capTick() {
+        Slot s = cur();
         String rect = g("rect()", 1500);
         if (rect != null && rect.length() > 8) {
             long now = System.currentTimeMillis();
-            if (now - lastCapAt < 2500) return "wait"; // 挑战进行中，别打断
-            lastCapAt = now;
+            if (now - s.lastCapAt < 2500) return "wait"; // 挑战进行中，别打断
+            s.lastCapAt = now;
             if (touchTap(rect)) return "touch";
         }
         String r = g("cap()", 2000);
@@ -710,19 +741,20 @@ public class Gaze extends Spider {
         if (cx < 0 || cy < 0 || vw <= 0 || vh <= 0) return false;
         final CountDownLatch latch = new CountDownLatch(1);
         final boolean[] ok = new boolean[1];
+        final WebView target = cur().wv; // 在 spider 线程取好；Runnable 在主线程跑，不能读 ThreadLocal
+        if (target == null) return false;
         main.post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    if (wv == null) return;
                     // 坐标换算：CSS px → WebView 像素。优先用实际宽高比，
                     // WebView 还没量出尺寸时退回 density。
                     float sx, sy;
-                    if (wv.getWidth() > 0 && wv.getHeight() > 0) {
-                        sx = (float) (wv.getWidth() / vw);
-                        sy = (float) (wv.getHeight() / vh);
+                    if (target.getWidth() > 0 && target.getHeight() > 0) {
+                        sx = (float) (target.getWidth() / vw);
+                        sy = (float) (target.getHeight() / vh);
                     } else {
-                        float d = wv.getResources().getDisplayMetrics().density;
+                        float d = target.getResources().getDisplayMetrics().density;
                         sx = d;
                         sy = d;
                     }
@@ -731,22 +763,20 @@ public class Gaze extends Spider {
                     android.view.MotionEvent down = android.view.MotionEvent.obtain(
                             t, t, android.view.MotionEvent.ACTION_DOWN, x, y, 0);
                     down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-                    wv.dispatchTouchEvent(down);
+                    target.dispatchTouchEvent(down);
                     down.recycle();
                     // 按下和抬起之间留一点间隔，太快的 DOWN/UP 有些组件会当误触
                     main.postDelayed(new Runnable() {
                         @Override
                         public void run() {
                             try {
-                                if (wv != null) {
-                                    long t2 = android.os.SystemClock.uptimeMillis();
-                                    android.view.MotionEvent up = android.view.MotionEvent.obtain(
-                                            t2, t2, android.view.MotionEvent.ACTION_UP, x, y, 0);
-                                    up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-                                    wv.dispatchTouchEvent(up);
-                                    up.recycle();
-                                    ok[0] = true;
-                                }
+                                long t2 = android.os.SystemClock.uptimeMillis();
+                                android.view.MotionEvent up = android.view.MotionEvent.obtain(
+                                        t2, t2, android.view.MotionEvent.ACTION_UP, x, y, 0);
+                                up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                                target.dispatchTouchEvent(up);
+                                up.recycle();
+                                ok[0] = true;
                             } catch (Throwable th) {
                                 dlog("touch up err " + th);
                             } finally {
@@ -773,24 +803,25 @@ public class Gaze extends Spider {
     //   所有 WebView 操作都在主线程；所有 await 都发生在调用方（spider）线程。
     // ===================================================================
     private WebView ensureWv() {
-        if (wv != null) return wv;
+        final Slot s = cur();
+        if (s.wv != null) return s.wv;
         try {
             CookieManager.getInstance().setAcceptCookie(true);
         } catch (Throwable ignored) {
         }
         WebView w = new WebView(appCtx);
-        WebSettings s = w.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setDatabaseEnabled(true);
-        s.setUserAgentString(UA);
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        WebSettings settings = w.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setUserAgentString(UA);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         try {
-            s.setMediaPlaybackRequiresUserGesture(false);
+            settings.setMediaPlaybackRequiresUserGesture(false);
         } catch (Throwable ignored) {
         }
         try {
-            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         } catch (Throwable ignored) {
         }
         // WebView 不挂到窗口上，也要给它一个真实尺寸：
@@ -823,9 +854,10 @@ public class Gaze extends Spider {
             public void onPageFinished(WebView v, String url) {
                 // 只认「目标 URL」的 finished：重定向/SPA 时会收到别的页面的回调，
                 // 认错了就等于没等，后面又是老问题。
-                String want = pageWant;
+                // 写创建本 client 的那个 slot 的状态（主线程回调，不能读 ThreadLocal）。
+                String want = s.pageWant;
                 if (want == null || (url != null && url.indexOf(want) >= 0)) {
-                    pageFinishedAt = System.currentTimeMillis();
+                    s.pageFinishedAt = System.currentTimeMillis();
                 }
                 inject(v);
             }
@@ -846,8 +878,9 @@ public class Gaze extends Spider {
                 return null;
             }
         });
-        wv = w;
-        return wv;
+        s.wv = w;
+        dlog("wv[" + s.name + "] created");
+        return s.wv;
     }
 
     private static void inject(WebView v) {
@@ -864,16 +897,22 @@ public class Gaze extends Spider {
      *  超时也返回 true，交给调用方（waitPath / capTick 轮询）继续判断。 */
     private boolean load(final String url, long waitMs) {
         if (main == null) return false;
+        final Slot s = cur();
         final long t0 = System.currentTimeMillis();
-        pageWant = url;
-        pageFinishedAt = 0;
+        s.pageWant = url;
+        s.pageFinishedAt = 0;
         final boolean[] ok = new boolean[1];
         final CountDownLatch posted = new CountDownLatch(1);
         main.post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    WebView w = ensureWv();
+                    // 用 s.wv（本 slot 的 WebView），不再走 ensureWv() 的 ThreadLocal
+                    WebView w = s.wv;
+                    if (w == null) {
+                        CUR.set(s);
+                        try { w = ensureWv(); } finally { CUR.remove(); }
+                    }
                     w.loadUrl(url);
                     ok[0] = true;
                 } catch (Throwable t) {
@@ -889,10 +928,10 @@ public class Gaze extends Spider {
         }
         if (!ok[0]) return false;
         long end = t0 + waitMs;
-        while (System.currentTimeMillis() < end && pageFinishedAt < t0) {
+        while (System.currentTimeMillis() < end && s.pageFinishedAt < t0) {
             sleep(200);
         }
-        boolean fin = pageFinishedAt >= t0;
+        boolean fin = s.pageFinishedAt >= t0;
         // onPageFinished 之后 DOM/JS 还要跑一下（CAP 组件是前端渲染出来的）
         sleep(fin ? 700 : 1200);
         dlog("load " + url + " fin=" + fin + " " + (System.currentTimeMillis() - t0) + "ms");
@@ -909,18 +948,20 @@ public class Gaze extends Spider {
     /** 在主线程执行 js，返回其原始返回值（字符串会被 JSON 引号包住）。 */
     private String ev(final String js, long timeoutMs) {
         if (main == null) return null;
+        final Slot s = cur();
         final String[] out = new String[1];
         final CountDownLatch latch = new CountDownLatch(1);
         main.post(new Runnable() {
             @Override
             public void run() {
-                synchronized (lock) {
+                synchronized (s.lock) {
                     try {
-                        if (wv == null) {
+                        WebView w = s.wv;
+                        if (w == null) {
                             latch.countDown();
                             return;
                         }
-                        wv.evaluateJavascript(js, new android.webkit.ValueCallback<String>() {
+                        w.evaluateJavascript(js, new android.webkit.ValueCallback<String>() {
                             @Override
                             public void onReceiveValue(String v) {
                                 out[0] = v;
@@ -973,9 +1014,20 @@ public class Gaze extends Spider {
     //   query 形如 "?mform=1"；空串表示「全部」。
     //   不同 query 是不同文档，注入对象会被重建，所以不会串到上一个分类的数据。
     // ===================================================================
-    // v17：必须和 detailContent / playerContent 用同一把 this 锁。
-    // 单例 WebView 被并发导航是「解析慢 / 串台」的根因（见类头 v17 说明）。
-    private synchronized String fetchList(String query) {
+    // v18：用独立的 listSlot，与 playSlot 并行——列表不再排在播放器后面等锁。
+    private String fetchList(String query) {
+        synchronized (listSlot) {
+            Slot prev = CUR.get();
+            CUR.set(listSlot);
+            try {
+                return fetchList0(query);
+            } finally {
+                restoreCur(prev);
+            }
+        }
+    }
+
+    private String fetchList0(String query) {
         String url = base + "/filter" + (query == null ? "" : query);
         if (!load(url, PAGE_READY_MS)) return null;
         long deadline = System.currentTimeMillis() + LIST_BUDGET_MS;
@@ -1301,8 +1353,20 @@ public class Gaze extends Spider {
     // detailContent：/play/{mid} → 点 CAP → 等选集按钮 → 读 [data-path]
     // ===================================================================
     @Override
-    // v17：加锁，与 playerContent / fetchList 串行，防止并发导航抢占同一个 WebView
-    public synchronized String detailContent(List<String> ids) throws Exception {
+    // v18：只锁 playSlot（和 playerContent 共用），与列表的 listSlot 并行。
+    public String detailContent(List<String> ids) throws Exception {
+        synchronized (playSlot) {
+            Slot prev = CUR.get();
+            CUR.set(playSlot);
+            try {
+                return detailContent0(ids);
+            } finally {
+                restoreCur(prev);
+            }
+        }
+    }
+
+    private String detailContent0(List<String> ids) throws Exception {
         JSONObject out = new JSONObject();
         JSONArray list = new JSONArray();
         try {
@@ -2085,14 +2149,26 @@ public class Gaze extends Spider {
     //   所以 parse=0 时 url 放直链、playUrl 必须留空。
     // ===================================================================
     @Override
-    public synchronized String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        // 不管走哪条返回路径（直链 / 本地代理 / 网页兜底），出来前都把 WebView 里的媒体停掉：
-        // 抓 m3u8 时页面确实在播，不停就会一直出声，而 destroy() 在退出播放时不会被调用。
-        try {
-            return playerContent0(flag, id, vipFlags);
-        } finally {
-            stopMedia();
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        // v18：只锁 playSlot，与 listSlot 的列表请求并行、互不阻塞。
+        synchronized (playSlot) {
+            Slot prev = CUR.get();
+            CUR.set(playSlot);
+            // 不管走哪条返回路径（直链 / 本地代理 / 网页兜底），出来前都把 WebView 里的媒体停掉：
+            // 抓 m3u8 时页面确实在播，不停就会一直出声，而 destroy() 在退出播放时不会被调用。
+            try {
+                return playerContent0(flag, id, vipFlags);
+            } finally {
+                stopMedia();
+                restoreCur(prev);
+            }
         }
+    }
+
+    /** 恢复调用前的 ThreadLocal 上下文（嵌套调用时用）。 */
+    private static void restoreCur(Slot prev) {
+        if (prev == null) CUR.remove();
+        else CUR.set(prev);
     }
 
     /** playerContent 的真身；外层统一负责把 WebView 里的媒体停掉。 */
@@ -2211,7 +2287,7 @@ public class Gaze extends Spider {
     //   只 pause + 静音，不删 src：页面 JS 还活着，下次点选集能正常重新加载。
     // ===================================================================
     private void stopMedia() {
-        final WebView w = wv;
+        final WebView w = cur().wv;
         if (w == null || main == null) return;
         main.post(new Runnable() {
             @Override
@@ -2249,13 +2325,16 @@ public class Gaze extends Spider {
         main.post(new Runnable() {
             @Override
             public void run() {
-                synchronized (lock) {
-                    if (wv != null) {
-                        try {
-                            wv.destroy();
-                        } catch (Throwable ignored) {
+                Slot[] slots = { listSlot, playSlot };
+                for (Slot s : slots) {
+                    synchronized (s.lock) {
+                        if (s.wv != null) {
+                            try {
+                                s.wv.destroy();
+                            } catch (Throwable ignored) {
+                            }
+                            s.wv = null;
                         }
-                        wv = null;
                     }
                 }
             }
